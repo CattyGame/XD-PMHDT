@@ -58,7 +58,7 @@ services:
       retries: 10
       start_period: 30s
     restart: unless-stopped
-  
+
   analysis-api:
     build:
       context: .
@@ -87,7 +87,17 @@ services:
     networks:
       - aura_network
     restart: unless-stopped
-  
+
+  ai-core:
+    build:
+      context: src/ai-core
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks:
+      - aura_network
+    restart: unless-stopped
+
 
 networks:
   aura_network:
