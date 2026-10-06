@@ -32,7 +32,9 @@
   "paths": {
     "/health": {
       "get": {
-        "tags": ["Health"],
+        "tags": [
+          "Health"
+        ],
         "summary": "Kiểm tra trạng thái hoạt động của AI Service",
         "operationId": "checkHealth",
         "responses": {
@@ -59,7 +61,9 @@
     },
     "/api/v1/analyze": {
       "post": {
-        "tags": ["Analysis"],
+        "tags": [
+          "Analysis"
+        ],
         "summary": "Phân tích ảnh võng mạc (JSON payload Base64)",
         "description": "Nhận ảnh dưới dạng Base64 cùng thông tin bệnh nhân, thực hiện phân vùng mạch máu và trích xuất chỉ số.",
         "operationId": "analyzeRetinaBase64",
@@ -166,35 +170,74 @@
     "schemas": {
       "HealthResponse": {
         "type": "object",
-        "required": ["status", "version", "service", "model_loaded"],
+        "required": [
+          "status",
+          "version",
+          "service",
+          "model_loaded"
+        ],
         "properties": {
-          "status": { "type": "string", "example": "healthy" },
-          "version": { "type": "string", "example": "1.0.0" },
-          "service": { "type": "string", "example": "aura-ai-service" },
-          "device": { "type": "string", "example": "cpu" },
-          "model_loaded": { "type": "boolean", "example": true },
-          "uptime_seconds": { "type": "number", "format": "float", "example": 124.8 }
+          "status": {
+            "type": "string",
+            "example": "healthy"
+          },
+          "version": {
+            "type": "string",
+            "example": "1.0.0"
+          },
+          "service": {
+            "type": "string",
+            "example": "aura-ai-service"
+          },
+          "device": {
+            "type": "string",
+            "example": "cpu"
+          },
+          "model_loaded": {
+            "type": "boolean",
+            "example": true
+          },
+          "uptime_seconds": {
+            "type": "number",
+            "format": "float",
+            "example": 124.8
+          }
         }
       },
       "EyeSide": {
         "type": "string",
-        "enum": ["left", "right", "unknown"],
+        "enum": [
+          "left",
+          "right",
+          "unknown"
+        ],
         "example": "right"
       },
       "AnalysisMode": {
         "type": "string",
-        "enum": ["retina_vessels", "iris_biometrics", "hybrid"],
+        "enum": [
+          "retina_vessels",
+          "iris_biometrics",
+          "hybrid"
+        ],
         "default": "retina_vessels",
         "example": "retina_vessels"
       },
       "RiskLevel": {
         "type": "string",
-        "enum": ["LOW", "MODERATE", "HIGH"],
+        "enum": [
+          "LOW",
+          "MODERATE",
+          "HIGH"
+        ],
         "example": "LOW"
       },
       "AnalysisRequest": {
         "type": "object",
-        "required": ["request_id", "image_base64"],
+        "required": [
+          "request_id",
+          "image_base64"
+        ],
         "properties": {
           "request_id": {
             "type": "string",
@@ -227,17 +270,43 @@
             "type": "boolean",
             "default": true,
             "description": "Trả về ảnh phủ viền mạch lên ảnh gốc (Overlay Visual)"
+          },
+          "modality": {
+            "type": "string",
+            "enum": [
+              "FUNDUS",
+              "OCT"
+            ],
+            "default": "FUNDUS",
+            "description": "Định dạng ảnh y tế (FUNDUS được hỗ trợ, OCT trả 422)",
+            "example": "FUNDUS"
           }
         }
       },
       "ImageInfo": {
         "type": "object",
-        "required": ["width", "height", "channels", "eye_side"],
+        "required": [
+          "width",
+          "height",
+          "channels",
+          "eye_side"
+        ],
         "properties": {
-          "width": { "type": "integer", "example": 512 },
-          "height": { "type": "integer", "example": 512 },
-          "channels": { "type": "integer", "example": 3 },
-          "eye_side": { "$ref": "#/components/schemas/EyeSide" }
+          "width": {
+            "type": "integer",
+            "example": 512
+          },
+          "height": {
+            "type": "integer",
+            "example": 512
+          },
+          "channels": {
+            "type": "integer",
+            "example": 3
+          },
+          "eye_side": {
+            "$ref": "#/components/schemas/EyeSide"
+          }
         }
       },
       "VesselMetrics": {
@@ -297,7 +366,9 @@
             "description": "Điểm rủi ro tổng hợp chuẩn hóa (0.0: rất thấp, 1.0: rất cao)",
             "example": 0.35
           },
-          "risk_level": { "$ref": "#/components/schemas/RiskLevel" },
+          "risk_level": {
+            "$ref": "#/components/schemas/RiskLevel"
+          },
           "confidence_score": {
             "type": "number",
             "format": "float",
@@ -306,7 +377,9 @@
           },
           "indicators": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Danh sách các nhận định chi tiết dựa trên từng thông số",
             "example": [
               "Mật độ mạch máu bình thường",
@@ -323,7 +396,10 @@
       "SegmentationResult": {
         "type": "object",
         "properties": {
-          "mask_format": { "type": "string", "example": "png_base64" },
+          "mask_format": {
+            "type": "string",
+            "example": "png_base64"
+          },
           "mask_base64": {
             "type": "string",
             "nullable": true,
@@ -348,25 +424,91 @@
           "risk_assessment"
         ],
         "properties": {
-          "request_id": { "type": "string", "example": "req_aura_20261005_001" },
-          "patient_id": { "type": "string", "nullable": true, "example": "PAT-88231" },
-          "timestamp": { "type": "string", "format": "date-time", "example": "2026-10-05T17:59:00Z" },
-          "status": { "type": "string", "enum": ["SUCCESS", "WARNING", "FAILED"], "example": "SUCCESS" },
-          "processing_time_ms": { "type": "number", "format": "float", "example": 142.5 },
-          "image_info": { "$ref": "#/components/schemas/ImageInfo" },
-          "metrics": { "$ref": "#/components/schemas/VesselMetrics" },
-          "risk_assessment": { "$ref": "#/components/schemas/RiskAssessment" },
-          "segmentation": { "$ref": "#/components/schemas/SegmentationResult" }
+          "request_id": {
+            "type": "string",
+            "example": "req_aura_20261005_001"
+          },
+          "patient_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "PAT-88231"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-05T17:59:00Z"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "SUCCESS",
+              "WARNING",
+              "FAILED"
+            ],
+            "example": "SUCCESS"
+          },
+          "processing_time_ms": {
+            "type": "number",
+            "format": "float",
+            "example": 142.5
+          },
+          "image_info": {
+            "$ref": "#/components/schemas/ImageInfo"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/VesselMetrics"
+          },
+          "risk_assessment": {
+            "$ref": "#/components/schemas/RiskAssessment"
+          },
+          "segmentation": {
+            "$ref": "#/components/schemas/SegmentationResult"
+          },
+          "is_mock": {
+            "type": "boolean",
+            "default": true,
+            "description": "Cờ xác nhận kết quả là Mock Engine tuần 1",
+            "example": true
+          },
+          "model_version": {
+            "type": "string",
+            "default": "mock-v0.1",
+            "description": "Phiên bản mô hình suy luận",
+            "example": "mock-v0.1"
+          },
+          "limitations": {
+            "type": "string",
+            "description": "Giới hạn kỹ thuật của phiên bản hiện tại",
+            "example": "Kết quả mô phỏng (Mock Engine) phục vụ tích hợp giao diện M5 và Backend M2."
+          }
         }
       },
       "ErrorResponse": {
         "type": "object",
-        "required": ["error_code", "message", "timestamp"],
+        "required": [
+          "error_code",
+          "message",
+          "timestamp"
+        ],
         "properties": {
-          "error_code": { "type": "string", "example": "INVALID_IMAGE_PAYLOAD" },
-          "message": { "type": "string", "example": "Không thể giải mã dữ liệu ảnh Base64 được gửi lên." },
-          "details": { "type": "object", "nullable": true, "additionalProperties": true },
-          "timestamp": { "type": "string", "format": "date-time", "example": "2026-10-05T17:59:00Z" }
+          "error_code": {
+            "type": "string",
+            "example": "INVALID_IMAGE_PAYLOAD"
+          },
+          "message": {
+            "type": "string",
+            "example": "Không thể giải mã dữ liệu ảnh Base64 được gửi lên."
+          },
+          "details": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-05T17:59:00Z"
+          }
         }
       }
     }

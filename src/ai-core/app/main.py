@@ -109,10 +109,18 @@ def analyze_retina(request: AnalysisRequest):
     Nhận chuỗi ảnh Base64 và thông tin yêu cầu, trả về kết quả phân vùng và chỉ số hình học.
     """
     try:
+        # Check blank image
         if not request.image_base64 or len(request.image_base64.strip()) == 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Chuỗi image_base64 không được để trống.",
+            )
+
+        # OCT modality check (Task requirement: OCT returns 422 unsupported_modality)
+        if request.modality and request.modality.upper() == "OCT":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="unsupported_modality: Định dạng ảnh OCT chưa được hỗ trợ trong phiên bản hiện tại (chỉ hỗ trợ Fundus).",
             )
 
         result = process_mock_analysis(request)

@@ -1,7 +1,7 @@
 """
 Mock inference engine for AURA AI Service (Module M4).
 Provides realistic mock responses with valid segmentation masks and heuristic risk scores.
-Used for contract verification, Frontend M5 and Gateway M1 integration testing.
+Strictly complies with task requirements: isMock=true, modelVersion=mock-v0.1, limitations.
 """
 import time
 import base64
@@ -30,6 +30,7 @@ SAMPLE_OVERLAY_PNG_BASE64 = (
     "GBgYgBwDAyNMMVge5AAc7vj//z8jTBzMAOUiGAB2tBDYn7bX+wAAAABJRU5ErkJggg=="
 )
 
+
 def inspect_image(base64_str: str) -> Tuple[int, int, int]:
     """
     Attempts to read image dimensions from base64 string.
@@ -45,10 +46,11 @@ def inspect_image(base64_str: str) -> Tuple[int, int, int]:
     except Exception:
         return 512, 512, 3
 
+
 def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
     """
     Simulates AI vessel segmentation and risk heuristic calculation.
-    Returns a complete, fully populated AnalysisResponse.
+    Returns a complete, fully populated AnalysisResponse conforming to week 1 contract.
     """
     start_time = time.perf_counter()
 
@@ -58,7 +60,8 @@ def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
         width=width,
         height=height,
         channels=channels,
-        eye_side=request.eye_side
+        eye_side=request.eye_side,
+        modality=request.modality
     )
 
     # 2. Mock vessel geometric metrics (Retina vessel geometry standards)
@@ -82,7 +85,7 @@ def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
         ],
         disclaimer=(
             "Kết quả ước lượng dựa trên phân tích hình thái học võng mạc (Heuristic). "
-            "Không thay thế chẩn đoán y khoa chính thức từ bác sĩ chuyên khoa."
+            "Mang tính chất tham khảo kỹ thuật, không thay thế chẩn đoán y khoa chính thức từ bác sĩ chuyên khoa."
         )
     )
 
@@ -96,7 +99,7 @@ def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
         )
 
     # 5. Measure latency
-    elapsed_ms = round((time.perf_counter() - start_time) * 1000 + 45.0, 2)  # Simulate ~45ms inference time
+    elapsed_ms = round((time.perf_counter() - start_time) * 1000 + 45.0, 2)
     timestamp = datetime.now(timezone.utc).isoformat()
 
     return AnalysisResponse(
@@ -104,6 +107,9 @@ def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
         patient_id=request.patient_id,
         timestamp=timestamp,
         status=AnalysisStatus.SUCCESS,
+        is_mock=True,
+        model_version="mock-v0.1",
+        limitations="Kết quả mô phỏng (Mock Engine) phục vụ tích hợp giao diện M5 và Backend M2.",
         processing_time_ms=elapsed_ms,
         image_info=image_info,
         metrics=metrics,
