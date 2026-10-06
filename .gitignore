@@ -1,4 +1,5 @@
-﻿.env
+﻿# Secrets and local environment
+.env
 .env.*
 !.env.example
 *.pem
@@ -6,28 +7,28 @@
 *service-account*.json
 *firebase-adminsdk*.json
 
+# .NET
 bin/
 obj/
 .vs/
 TestResults/
 
+# React / Node.js
 node_modules/
 dist/
 coverage/
 
+# Python
 .venv/
-venv/
 __pycache__/
-*.py[cod]
 .pytest_cache/
+*.pyc
 
+# AI datasets and model weights
 datasets/
 *.pt
 *.pth
 
+# Operating system
 .DS_Store
 Thumbs.db
-
-.env
-.env.*
-!.env.example
