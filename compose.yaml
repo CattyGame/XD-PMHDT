@@ -58,6 +58,36 @@ services:
       retries: 10
       start_period: 30s
     restart: unless-stopped
+  
+  analysis-api:
+    build:
+      context: .
+      dockerfile: src/services/AURA.Analysis.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: "8080"
+    ports:
+      - "127.0.0.1:5001:8080"
+    networks:
+      - aura_network
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: src/gateway/AURA.ApiGateway/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ReverseProxy__Clusters__analysis-cluster__Destinations__analysis-api__Address: "http://analysis-api:8080/"
+    ports:
+      - "127.0.0.1:5000:8080"
+    depends_on:
+      - analysis-api
+    networks:
+      - aura_network
+    restart: unless-stopped
+  
 
 networks:
   aura_network:
@@ -67,3 +97,4 @@ volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
+
