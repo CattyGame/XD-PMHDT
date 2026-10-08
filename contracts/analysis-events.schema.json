@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura.local/contracts/analysis-events.schema.json",
+  "title": "AURA Analysis Events và Job Message v0.4 (đề xuất)",
+  "description": "Envelope event phân tích và message job. Nguyên tắc: (1) message chỉ chứa định danh/tham chiếu, KHÔNG chứa ảnh, Base64, object key hay dữ liệu bệnh nhân không cần thiết; (2) giao hàng at-least-once, consumer idempotent theo eventId/messageId; (3) Analysis ghi dữ liệu và outbox trong cùng transaction, outbox publisher phát sau; (4) Worker chỉ ACK sau khi kết quả hoặc trạng thái lỗi đã lưu bền vững; retry có giới hạn, backoff, dead-letter queue (số liệu Pending); (5) Billing nhận analysis.completed để capture credit và analysis.failed để release; Analysis không sửa bảng credit; Notification nhận completed/failed/reviewed.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "eventType",
+    "schemaVersion",
+    "occurredAt",
+    "tenantId",
+    "correlationId",
+    "analysisId",
+    "data"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "eventType": {
+      "enum": [
+        "analysis.requested",
+        "analysis.completed",
+        "analysis.failed",
+        "analysis.reviewed"
+      ]
+    },
+    "schemaVersion": {
+      "const": "0.4"
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "tenantId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "correlationId": {
+      "type": "string"
+    },
+    "analysisId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "data": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "analysis.requested"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "patientId",
+              "batchId"
+            ],
+            "properties": {
+              "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "batchId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "analysis.completed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "patientId",
+              "riskLevel",
+              "modelVersion",
+              "isMock",
+              "configVersion",
+              "thresholdVersion"
+            ],
+            "properties": {
+              "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "riskLevel": {
+                "enum": [
+                  "LOW",
+                  "MODERATE",
+                  "HIGH"
+                ]
+              },
+              "modelVersion": {
+                "type": "string"
+              },
+              "isMock": {
+                "type": "boolean"
+              },
+              "configVersion": {
+                "type": "string"
+              },
+              "thresholdVersion": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "analysis.failed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "patientId",
+              "errorCode",
+              "retryable"
+            ],
+            "properties": {
+              "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "errorCode": {
+                "enum": [
+                  "ERR_AI_FAILED",
+                  "ERR_TIMEOUT",
+                  "ERR_NETWORK",
+                  "ERR_IMAGE_LOW_QUALITY"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "analysis.reviewed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "patientId",
+              "reviewStatus",
+              "version"
+            ],
+            "properties": {
+              "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "reviewStatus": {
+                "enum": [
+                  "REVIEWED",
+                  "CORRECTED"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  ]
+}

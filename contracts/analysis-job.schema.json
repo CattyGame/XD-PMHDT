@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Job message: analysis.job.run (v0.4, đề xuất)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "messageId",
+    "messageType",
+    "schemaVersion",
+    "occurredAt",
+    "tenantId",
+    "correlationId",
+    "jobId",
+    "analysisId",
+    "batchId",
+    "imageFileId",
+    "attempt"
+  ],
+  "properties": {
+    "messageId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "messageType": {
+      "const": "analysis.job.run"
+    },
+    "schemaVersion": {
+      "const": "0.4"
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "tenantId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "correlationId": {
+      "type": "string"
+    },
+    "jobId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "analysisId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "batchId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "imageFileId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Worker tự lấy ảnh từ private storage sau khi kiểm tra; không đính kèm ảnh"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

@@ -98,11 +98,11 @@ jobs:
 
   docker-smoke:
     name: Docker and Gateway checks
-    needs: dotnet
+    needs: [dotnet, python]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    steps:
+    steps:http://localhost:5000
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -112,7 +112,7 @@ jobs:
       - name: Build and start applications
         run: |
           docker compose --env-file .env.example up \
-            -d --build analysis-api api-gateway
+            -d --build analysis-api api-gateway ai-core
 
       - name: Check health routing and OpenAPI
         shell: bash
@@ -142,6 +142,85 @@ jobs:
 
           request http://127.0.0.1:5001/swagger/v1/swagger.json \
             | jq -e '.paths["/api/v1/platform/ping"].get != null'
+
+      - name: Check AI Core container and mock API
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl --fail --silent --show-error \
+            --retry 30 --retry-delay 2 \
+            --retry-all-errors --max-time 5 \
+            http://127.0.0.1:8000/health \
+            | jq -e '.status == "ok" and .model_loaded == false'
+
+          curl --fail --silent --show-error \
+            http://127.0.0.1:8000/openapi.json \
+            | jq -e '.paths["/api/v1/analyze"].post != null'
+
+          python3 - <<'PY'
+          import base64
+          import json
+          import struct
+          import urllib.error
+          import urllib.request
+          import zlib
+
+          def chunk(kind, data):
+              crc = zlib.crc32(kind + data) & 0xffffffff
+              return (
+                  struct.pack(">I", len(data))
+                  + kind
+                  + data
+                  + struct.pack(">I", crc)
+              )
+
+          # Synthetic 1x1 PNG; contains no patient data.
+          png = (
+              b"\x89PNG\r\n\x1a\n"
+              + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+              + chunk(b"IDAT", zlib.compress(b"\x00\x00\x80\x00"))
+              + chunk(b"IEND", b"")
+          )
+
+          payload = {
+              "request_id": "ci-ai-smoke",
+              "modality": "FUNDUS",
+              "image_base64": base64.b64encode(png).decode("ascii"),
+              "include_mask": False,
+              "include_overlay": False,
+          }
+
+          def post(data):
+              request = urllib.request.Request(
+                  "http://127.0.0.1:8000/api/v1/analyze",
+                  data=json.dumps(data).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              return urllib.request.urlopen(request, timeout=20)
+
+          with post(payload) as response:
+              result = json.load(response)
+
+          assert result["request_id"] == payload["request_id"]
+          assert result["status"] == "SUCCESS"
+          assert result["is_mock"] is True
+          assert result["model_version"] == "mock-v0.1"
+          assert result["limitations"]
+
+          payload["modality"] = "OCT"
+
+          try:
+              with post(payload):
+                  pass
+          except urllib.error.HTTPError as error:
+              assert error.code == 422, error.code
+          else:
+              raise AssertionError("OCT must return HTTP 422")
+
+          print("AI Core container, mock response and OCT rejection passed.")
+          PY
 
       - name: Check failure and recovery
         shell: bash
@@ -173,7 +252,7 @@ jobs:
         if: failure()
         run: |
           docker compose --env-file .env.example logs \
-            --no-color --tail 150 analysis-api api-gateway
+            --no-color --tail 150 analysis-api api-gateway ai-core
 
       - name: Stop applications
         if: always()

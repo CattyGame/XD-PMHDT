@@ -1,0 +1,49 @@
+{
+  "analysisId": "3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001",
+  "batchId": "b0000000-0000-4000-8000-000000000001",
+  "patientId": "9b2e5c10-1111-4a2b-8c3d-000000000001",
+  "processingStatus": "AI_COMPLETED",
+  "reviewStatus": "REVIEW_PENDING",
+  "createdAt": "2026-10-08T03:15:00Z",
+  "updatedAt": "2026-10-08T03:15:14Z",
+  "result": {
+    "riskLevel": "MODERATE",
+    "riskScore": 0.57,
+    "confidenceScore": 0.88,
+    "metrics": {
+      "vesselDensity": 0.1428,
+      "tortuosityIndex": 1.185,
+      "avRatio": 0.672,
+      "fractalDimension": 1.482,
+      "branchingPoints": 64
+    },
+    "indicators": [
+      "Chỉ số xoắn mạch tăng nhẹ"
+    ],
+    "isMock": true,
+    "modelVersion": "aura-retina-0.1.0",
+    "thresholdVersion": "thr-0.1",
+    "disclaimer": "Kết quả sàng lọc hỗ trợ quyết định lâm sàng, không phải chẩn đoán.",
+    "annotations": [
+      {
+        "fileId": "f0000000-0000-4000-8000-000000000002",
+        "kind": "overlay"
+      },
+      {
+        "fileId": "f0000000-0000-4000-8000-000000000003",
+        "kind": "heatmap"
+      }
+    ],
+    "configVersion": "cfg-0.1"
+  },
+  "ownerId": "9b2e5c10-1111-4a2b-8c3d-000000000001",
+  "image": {
+    "fileId": "f0000000-0000-4000-8000-000000000001",
+    "kind": "original"
+  },
+  "job": {
+    "jobId": "a0000000-0000-4000-8000-000000000001",
+    "status": "SUCCESS",
+    "retryCount": 0
+  }
+}
