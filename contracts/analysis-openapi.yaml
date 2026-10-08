@@ -87,6 +87,8 @@ paths:
           $ref: '#/components/responses/UnsupportedMedia'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '404':
+          $ref: '#/components/responses/NotFound'
       x-roles:
       - PATIENT
       - DOCTOR (cho bệnh nhân được phân công)
@@ -1050,7 +1052,8 @@ components:
               correlationId: c0ffee00-0000-4000-8000-000000000003
               retryable: false
     NotFound:
-      description: Không tồn tại hoặc ngoài phạm vi quyền (không phân biệt)
+      description: 'Không tồn tại, khác tenant, không phải của mình hoặc không được phân công (cùng một
+        phản hồi, không phân biệt). Với tạo yêu cầu: patientId ngoài phạm vi.'
       content:
         application/json:
           schema:
