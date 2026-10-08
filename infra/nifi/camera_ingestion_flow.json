@@ -1,0 +1,270 @@
+{
+  "encodingVersion": {
+    "majorVersion": 2,
+    "minorVersion": 0
+  },
+  "snippet": {
+    "processGroups": [
+      {
+        "name": "AURA-Camera-Ingestion",
+        "comments": "PoC Apache NiFi Pipeline - Camera Ingestion with Deduplication, Gateway Forwarding, Retry, and Quarantine (SCRUM-63 & SCRUM-290)",
+        "position": {
+          "x": 300.0,
+          "y": 100.0
+        },
+        "processors": [
+          {
+            "name": "ListenHTTP-CameraSimulator",
+            "type": "org.apache.nifi.processors.standard.ListenHTTP",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "position": {
+              "x": 300.0,
+              "y": 100.0
+            },
+            "properties": {
+              "Base Path": "ingest/camera",
+              "Listening Port": "8081",
+              "Max Data to Receive per Second": "50 MB",
+              "Authorized DN Pattern": ".*"
+            },
+            "comments": "Receives simulated camera payloads (JSON metadata + Fundus image base64) on internal port 8081"
+          },
+          {
+            "name": "EvaluateJsonPath-Metadata",
+            "type": "org.apache.nifi.processors.standard.EvaluateJsonPath",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "position": {
+              "x": 300.0,
+              "y": 300.0
+            },
+            "properties": {
+              "Destination": "flowfile-attribute",
+              "Return Type": "auto-detect",
+              "camera.request_id": "$.request_id",
+              "camera.patient_id": "$.patient_id",
+              "camera.modality": "$.modality",
+              "camera.eye_side": "$.eye_side",
+              "camera.device_id": "$.device_id"
+            },
+            "comments": "Extracts routing attributes from JSON payload"
+          },
+          {
+            "name": "RouteOnAttribute-Validation",
+            "type": "org.apache.nifi.processors.standard.RouteOnAttribute",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "position": {
+              "x": 300.0,
+              "y": 500.0
+            },
+            "properties": {
+              "Routing Strategy": "Route to Property name",
+              "ValidFundus": "${camera.modality:toUpper():equals('FUNDUS'):and(${camera.request_id:isEmpty():not()})}",
+              "UnsupportedModality": "${camera.modality:toUpper():equals('OCT')}",
+              "InvalidPayload": "true"
+            },
+            "comments": "Validates modality (FUNDUS only) and ensures request_id is present"
+          },
+          {
+            "name": "DetectDuplicate-RequestId",
+            "type": "org.apache.nifi.processors.standard.DetectDuplicate",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "position": {
+              "x": 300.0,
+              "y": 700.0
+            },
+            "properties": {
+              "FlowFile Description": "${camera.request_id}",
+              "Age Off Duration": "24 hours"
+            },
+            "comments": "Prevents accidental duplicate uploads with same request_id"
+          },
+          {
+            "name": "InvokeHTTP-ForwardToGateway",
+            "type": "org.apache.nifi.processors.standard.InvokeHTTP",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "position": {
+              "x": 300.0,
+              "y": 900.0
+            },
+            "properties": {
+              "HTTP Method": "POST",
+              "Remote URL": "http://api-gateway:8080/api/v1/analyses",
+              "Content-Type": "application/json",
+              "Read Timeout": "15 secs",
+              "Connection Timeout": "5 secs",
+              "Include Date Header": "True",
+              "Attributes to Send as HTTP Headers": "X-Correlation-Id|Idempotency-Key"
+            },
+            "comments": "Forwards validated payload to API Gateway Analysis Ingestion endpoint"
+          },
+          {
+            "name": "RetryFlowFile-GatewayBackoff",
+            "type": "org.apache.nifi.processors.standard.RetryFlowFile",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "position": {
+              "x": 700.0,
+              "y": 900.0
+            },
+            "properties": {
+              "Maximum Retries": "3",
+              "Retry Attribute": "retry.count"
+            },
+            "comments": "Handles transient 503/429 Gateway busy responses with exponential retry"
+          },
+          {
+            "name": "LogAttribute-Quarantine",
+            "type": "org.apache.nifi.processors.standard.LogAttribute",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "position": {
+              "x": 700.0,
+              "y": 500.0
+            },
+            "properties": {
+              "Log Level": "warn",
+              "Log Payload": "false",
+              "Attributes to Log": "camera.request_id,camera.modality,camera.device_id,route.reason"
+            },
+            "comments": "Quarantines invalid payloads (OCT, missing request_id, or corrupted data)"
+          },
+          {
+            "name": "LogAttribute-SuccessAuditing",
+            "type": "org.apache.nifi.processors.standard.LogAttribute",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "position": {
+              "x": 300.0,
+              "y": 1100.0
+            },
+            "properties": {
+              "Log Level": "info",
+              "Log Payload": "false",
+              "Attributes to Log": "camera.request_id,camera.patient_id,camera.device_id,http.status.code"
+            },
+            "comments": "Audits successfully ingested and forwarded camera flowfiles"
+          }
+        ],
+        "connections": [
+          {
+            "name": "ListenHTTP-to-EvaluateJsonPath",
+            "source": { "name": "ListenHTTP-CameraSimulator" },
+            "destination": { "name": "EvaluateJsonPath-Metadata" },
+            "selectedRelationships": ["success"],
+            "backPressureObjectThreshold": 100,
+            "backPressureDataSizeThreshold": "10 MB"
+          },
+          {
+            "name": "EvaluateJsonPath-to-RouteOnAttribute",
+            "source": { "name": "EvaluateJsonPath-Metadata" },
+            "destination": { "name": "RouteOnAttribute-Validation" },
+            "selectedRelationships": ["matched"],
+            "backPressureObjectThreshold": 100,
+            "backPressureDataSizeThreshold": "10 MB"
+          },
+          {
+            "name": "RouteOnAttribute-to-Quarantine-UnsupportedModality",
+            "source": { "name": "RouteOnAttribute-Validation" },
+            "destination": { "name": "LogAttribute-Quarantine" },
+            "selectedRelationships": ["UnsupportedModality"],
+            "backPressureObjectThreshold": 50,
+            "backPressureDataSizeThreshold": "5 MB"
+          },
+          {
+            "name": "RouteOnAttribute-to-Quarantine-InvalidPayload",
+            "source": { "name": "RouteOnAttribute-Validation" },
+            "destination": { "name": "LogAttribute-Quarantine" },
+            "selectedRelationships": ["InvalidPayload"],
+            "backPressureObjectThreshold": 50,
+            "backPressureDataSizeThreshold": "5 MB"
+          },
+          {
+            "name": "RouteOnAttribute-to-DetectDuplicate",
+            "source": { "name": "RouteOnAttribute-Validation" },
+            "destination": { "name": "DetectDuplicate-RequestId" },
+            "selectedRelationships": ["ValidFundus"],
+            "backPressureObjectThreshold": 100,
+            "backPressureDataSizeThreshold": "10 MB"
+          },
+          {
+            "name": "DetectDuplicate-to-InvokeHTTP",
+            "source": { "name": "DetectDuplicate-RequestId" },
+            "destination": { "name": "InvokeHTTP-ForwardToGateway" },
+            "selectedRelationships": ["non-duplicate"],
+            "backPressureObjectThreshold": 100,
+            "backPressureDataSizeThreshold": "10 MB"
+          },
+          {
+            "name": "DetectDuplicate-to-Quarantine",
+            "source": { "name": "DetectDuplicate-RequestId" },
+            "destination": { "name": "LogAttribute-Quarantine" },
+            "selectedRelationships": ["duplicate"],
+            "backPressureObjectThreshold": 50,
+            "backPressureDataSizeThreshold": "5 MB"
+          },
+          {
+            "name": "InvokeHTTP-to-SuccessLog",
+            "source": { "name": "InvokeHTTP-ForwardToGateway" },
+            "destination": { "name": "LogAttribute-SuccessAuditing" },
+            "selectedRelationships": ["Response"],
+            "backPressureObjectThreshold": 100,
+            "backPressureDataSizeThreshold": "10 MB"
+          },
+          {
+            "name": "InvokeHTTP-to-Retry",
+            "source": { "name": "InvokeHTTP-ForwardToGateway" },
+            "destination": { "name": "RetryFlowFile-GatewayBackoff" },
+            "selectedRelationships": ["Retry"],
+            "backPressureObjectThreshold": 50,
+            "backPressureDataSizeThreshold": "5 MB"
+          },
+          {
+            "name": "Retry-to-InvokeHTTP",
+            "source": { "name": "RetryFlowFile-GatewayBackoff" },
+            "destination": { "name": "InvokeHTTP-ForwardToGateway" },
+            "selectedRelationships": ["retry"],
+            "backPressureObjectThreshold": 50,
+            "backPressureDataSizeThreshold": "5 MB"
+          },
+          {
+            "name": "Retry-to-Quarantine-Exceeded",
+            "source": { "name": "RetryFlowFile-GatewayBackoff" },
+            "destination": { "name": "LogAttribute-Quarantine" },
+            "selectedRelationships": ["retries_exceeded"],
+            "backPressureObjectThreshold": 50,
+            "backPressureDataSizeThreshold": "5 MB"
+          }
+        ]
+      }
+    ]
+  }
+}
