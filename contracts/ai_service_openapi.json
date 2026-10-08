@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "AURA AI Analysis Service API",
-    "description": "Hợp đồng giao tiếp API (Module M4 - Computer Vision & AI Service) cho hệ sinh thái AURA.\nCung cấp các endpoint phục vụ suy luận phân vùng mạch máu võng mạc, trích xuất đặc trưng hình học\nvà tính toán chỉ số nguy cơ tim mạch/đột quỵ theo thuật toán Heuristic.",
+    "description": "Hợp đồng giao tiếp API (Module M4 - Computer Vision & AI Service) cho hệ thống AURA. Cung cấp các endpoint phục vụ suy luận phân vùng mạch máu võng mạc, trích xuất đặc trưng hình học và tính toán chỉ số nguy cơ tim mạch/đột quỵ theo thuật toán Heuristic.\n",
     "version": "1.0.0",
     "contact": {
       "name": "Dao Duy Quan (M4 Lead)",
@@ -15,8 +15,8 @@
       "description": "Local development / Docker container"
     },
     {
-      "url": "http://ai-service:8000",
-      "description": "Internal Docker network (Gateway M1 -> AI M4)"
+      "url": "http://ai-core:8000",
+      "description": "Internal Docker network (Analysis Worker -> AI Core)"
     }
   ],
   "tags": [
@@ -174,20 +174,22 @@
           "status",
           "version",
           "service",
-          "model_loaded"
+          "device",
+          "model_loaded",
+          "uptime_seconds"
         ],
         "properties": {
           "status": {
             "type": "string",
-            "example": "healthy"
+            "example": "ok"
           },
           "version": {
             "type": "string",
-            "example": "1.0.0"
+            "example": "0.1.0"
           },
           "service": {
             "type": "string",
-            "example": "aura-ai-service"
+            "example": "AURA.AiCore"
           },
           "device": {
             "type": "string",
@@ -195,7 +197,7 @@
           },
           "model_loaded": {
             "type": "boolean",
-            "example": true
+            "example": false
           },
           "uptime_seconds": {
             "type": "number",
@@ -216,12 +218,11 @@
       "AnalysisMode": {
         "type": "string",
         "enum": [
-          "retina_vessels",
-          "iris_biometrics",
-          "hybrid"
+          "retina_vessels"
         ],
         "default": "retina_vessels",
-        "example": "retina_vessels"
+        "example": "retina_vessels",
+        "description": "Chế độ phân tích (phiên bản v0.1 chỉ hỗ trợ retina_vessels)"
       },
       "RiskLevel": {
         "type": "string",
@@ -256,10 +257,16 @@
           "mode": {
             "$ref": "#/components/schemas/AnalysisMode"
           },
+          "modality": {
+            "type": "string",
+            "default": "FUNDUS",
+            "example": "FUNDUS",
+            "description": "Loại ảnh y tế: FUNDUS (OCT chưa được hỗ trợ, sẽ trả về lỗi 422)"
+          },
           "image_base64": {
             "type": "string",
-            "description": "Chuỗi ảnh mã hóa Base64 (PNG, JPEG, WebP)",
-            "example": "iVBORw0KGgoAAAANSUhEUgAA..."
+            "description": "Chuỗi ảnh mã hóa Base64 (PNG, JPEG, WebP hợp lệ)",
+            "example": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
           },
           "include_mask": {
             "type": "boolean",
@@ -270,16 +277,6 @@
             "type": "boolean",
             "default": true,
             "description": "Trả về ảnh phủ viền mạch lên ảnh gốc (Overlay Visual)"
-          },
-          "modality": {
-            "type": "string",
-            "enum": [
-              "FUNDUS",
-              "OCT"
-            ],
-            "default": "FUNDUS",
-            "description": "Định dạng ảnh y tế (FUNDUS được hỗ trợ, OCT trả 422)",
-            "example": "FUNDUS"
           }
         }
       },
@@ -418,6 +415,10 @@
           "request_id",
           "timestamp",
           "status",
+          "is_mock",
+          "model_version",
+          "threshold_version",
+          "config_version",
           "processing_time_ms",
           "image_info",
           "metrics",
@@ -447,6 +448,31 @@
             ],
             "example": "SUCCESS"
           },
+          "is_mock": {
+            "type": "boolean",
+            "example": true,
+            "description": "Cờ xác nhận kết quả là Mock Engine tuần 1"
+          },
+          "model_version": {
+            "type": "string",
+            "example": "mock-v0.1",
+            "description": "Phiên bản mô hình suy luận"
+          },
+          "threshold_version": {
+            "type": "string",
+            "example": "v0.1",
+            "description": "Phiên bản ngưỡng đánh giá rủi ro"
+          },
+          "config_version": {
+            "type": "string",
+            "example": "v0.1",
+            "description": "Phiên bản cấu hình thuật toán"
+          },
+          "limitations": {
+            "type": "string",
+            "example": "Kết quả mô phỏng (Mock Engine) phục vụ tích hợp giao diện M5 và Backend M2.",
+            "description": "Giới hạn kỹ thuật của phiên bản hiện tại"
+          },
           "processing_time_ms": {
             "type": "number",
             "format": "float",
@@ -463,23 +489,6 @@
           },
           "segmentation": {
             "$ref": "#/components/schemas/SegmentationResult"
-          },
-          "is_mock": {
-            "type": "boolean",
-            "default": true,
-            "description": "Cờ xác nhận kết quả là Mock Engine tuần 1",
-            "example": true
-          },
-          "model_version": {
-            "type": "string",
-            "default": "mock-v0.1",
-            "description": "Phiên bản mô hình suy luận",
-            "example": "mock-v0.1"
-          },
-          "limitations": {
-            "type": "string",
-            "description": "Giới hạn kỹ thuật của phiên bản hiện tại",
-            "example": "Kết quả mô phỏng (Mock Engine) phục vụ tích hợp giao diện M5 và Backend M2."
           }
         }
       },

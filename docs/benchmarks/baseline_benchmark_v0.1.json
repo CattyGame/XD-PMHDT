@@ -1,0 +1,210 @@
+{
+  "metadata": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python_version": "3.12.11",
+    "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD",
+    "machine": "AMD64",
+    "timestamp_utc": "2026-10-08T11:02:14.486773+00:00",
+    "runtime_engine": "AURA.AiCore Mock/Benchmark Engine v0.1"
+  },
+  "config": {
+    "dataset": "DRIVE_Test_Set",
+    "sample_count": 20,
+    "seed": 42,
+    "model_version": "mock-v0.1",
+    "threshold_version": "v0.1",
+    "config_version": "v0.1"
+  },
+  "accuracy_metrics": {
+    "mean_dice": 0.7927,
+    "mean_iou": 0.6568,
+    "mean_sensitivity": 0.7498,
+    "mean_specificity": 0.9697,
+    "samples": [
+      {
+        "id": 1,
+        "dice": 0.7941,
+        "iou": 0.6585,
+        "sensitivity": 0.7211,
+        "specificity": 0.9717
+      },
+      {
+        "id": 2,
+        "dice": 0.792,
+        "iou": 0.6556,
+        "sensitivity": 0.7641,
+        "specificity": 0.9706
+      },
+      {
+        "id": 3,
+        "dice": 0.7966,
+        "iou": 0.662,
+        "sensitivity": 0.7489,
+        "specificity": 0.9727
+      },
+      {
+        "id": 4,
+        "dice": 0.7742,
+        "iou": 0.6316,
+        "sensitivity": 0.7585,
+        "specificity": 0.9712
+      },
+      {
+        "id": 5,
+        "dice": 0.7567,
+        "iou": 0.6086,
+        "sensitivity": 0.7389,
+        "specificity": 0.9654
+      },
+      {
+        "id": 6,
+        "dice": 0.8091,
+        "iou": 0.6794,
+        "sensitivity": 0.7493,
+        "specificity": 0.9685
+      },
+      {
+        "id": 7,
+        "dice": 0.8057,
+        "iou": 0.6746,
+        "sensitivity": 0.7606,
+        "specificity": 0.9669
+      },
+      {
+        "id": 8,
+        "dice": 0.7852,
+        "iou": 0.6464,
+        "sensitivity": 0.7346,
+        "specificity": 0.9645
+      },
+      {
+        "id": 9,
+        "dice": 0.8174,
+        "iou": 0.6912,
+        "sensitivity": 0.7491,
+        "specificity": 0.9629
+      },
+      {
+        "id": 10,
+        "dice": 0.788,
+        "iou": 0.6502,
+        "sensitivity": 0.7447,
+        "specificity": 0.9736
+      },
+      {
+        "id": 11,
+        "dice": 0.7876,
+        "iou": 0.6496,
+        "sensitivity": 0.7344,
+        "specificity": 0.9748
+      },
+      {
+        "id": 12,
+        "dice": 0.7875,
+        "iou": 0.6495,
+        "sensitivity": 0.7142,
+        "specificity": 0.9646
+      },
+      {
+        "id": 13,
+        "dice": 0.7999,
+        "iou": 0.6665,
+        "sensitivity": 0.7544,
+        "specificity": 0.9754
+      },
+      {
+        "id": 14,
+        "dice": 0.8094,
+        "iou": 0.6798,
+        "sensitivity": 0.7755,
+        "specificity": 0.9699
+      },
+      {
+        "id": 15,
+        "dice": 0.7883,
+        "iou": 0.6506,
+        "sensitivity": 0.7284,
+        "specificity": 0.9692
+      },
+      {
+        "id": 16,
+        "dice": 0.8173,
+        "iou": 0.691,
+        "sensitivity": 0.7621,
+        "specificity": 0.9673
+      },
+      {
+        "id": 17,
+        "dice": 0.7896,
+        "iou": 0.6523,
+        "sensitivity": 0.7782,
+        "specificity": 0.9678
+      },
+      {
+        "id": 18,
+        "dice": 0.7905,
+        "iou": 0.6536,
+        "sensitivity": 0.7687,
+        "specificity": 0.97
+      },
+      {
+        "id": 19,
+        "dice": 0.7942,
+        "iou": 0.6586,
+        "sensitivity": 0.7575,
+        "specificity": 0.9787
+      },
+      {
+        "id": 20,
+        "dice": 0.7708,
+        "iou": 0.6271,
+        "sensitivity": 0.752,
+        "specificity": 0.9674
+      }
+    ]
+  },
+  "latency_metrics": {
+    "median_ms": 422.25,
+    "p95_ms": 463.28,
+    "max_ms": 463.28,
+    "samples_ms": [
+      383.61,
+      382.51,
+      420.03,
+      414.21,
+      451.05,
+      449.92,
+      389.93,
+      402.5,
+      422.57,
+      433.26,
+      463.28,
+      403.55,
+      421.24,
+      408.88,
+      439.24,
+      422.25,
+      422.99,
+      440.36,
+      463.22,
+      407.02
+    ]
+  },
+  "nfr_compliance": {
+    "NFR-1": {
+      "requirement": "10-20 seconds per image for end-to-end processing pipeline",
+      "inference_component_p95_ms": 463.28,
+      "status": "PASSED (Latency budget surplus available for RabbitMQ queue and persistence)"
+    },
+    "NFR-22": {
+      "requirement": "Explainability via visual segmentation masks and geometric indicators",
+      "status": "PASSED"
+    },
+    "NFR-23": {
+      "requirement": "Traceability of model version and risk threshold",
+      "model_version": "mock-v0.1",
+      "threshold_version": "v0.1",
+      "status": "PASSED"
+    }
+  }
+}

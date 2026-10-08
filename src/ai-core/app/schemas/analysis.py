@@ -61,6 +61,8 @@ class AnalysisResponse(BaseModel):
     status: AnalysisStatus = AnalysisStatus.SUCCESS
     is_mock: bool = Field(True, description="Cờ xác nhận kết quả là Mock Engine tuần 1")
     model_version: str = Field("mock-v0.1", description="Phiên bản mô hình suy luận")
+    threshold_version: str = Field("v0.1", description="Phiên bản ngưỡng đánh giá rủi ro")
+    config_version: str = Field("v0.1", description="Phiên bản cấu hình thuật toán")
     limitations: str = Field(
         "Kết quả mô phỏng (Mock Engine) phục vụ tích hợp giao diện M5 và Backend M2.",
         description="Giới hạn kỹ thuật của phiên bản hiện tại"

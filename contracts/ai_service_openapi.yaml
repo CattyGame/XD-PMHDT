@@ -13,8 +13,8 @@ info:
 servers:
   - url: http://localhost:8000
     description: Local development / Docker container
-  - url: http://ai-service:8000
-    description: Internal Docker network (Gateway M1 -> AI M4)
+  - url: http://ai-core:8000
+    description: Internal Docker network (Analysis Worker -> AI Core)
 
 tags:
   - name: Health
@@ -128,23 +128,25 @@ components:
         - status
         - version
         - service
+        - device
         - model_loaded
+        - uptime_seconds
       properties:
         status:
           type: string
-          example: "healthy"
+          example: "ok"
         version:
           type: string
-          example: "1.0.0"
+          example: "0.1.0"
         service:
           type: string
-          example: "aura-ai-service"
+          example: "AURA.AiCore"
         device:
           type: string
           example: "cpu"
         model_loaded:
           type: boolean
-          example: true
+          example: false
         uptime_seconds:
           type: number
           format: float
@@ -157,9 +159,10 @@ components:
 
     AnalysisMode:
       type: string
-      enum: [retina_vessels, iris_biometrics, hybrid]
+      enum: [retina_vessels]
       default: retina_vessels
       example: "retina_vessels"
+      description: "Chế độ phân tích (phiên bản v0.1 chỉ hỗ trợ retina_vessels)"
 
     RiskLevel:
       type: string
@@ -185,10 +188,15 @@ components:
           $ref: '#/components/schemas/EyeSide'
         mode:
           $ref: '#/components/schemas/AnalysisMode'
+        modality:
+          type: string
+          default: "FUNDUS"
+          example: "FUNDUS"
+          description: "Loại ảnh y tế: FUNDUS (OCT chưa được hỗ trợ, sẽ trả về lỗi 422)"
         image_base64:
           type: string
-          description: Chuỗi ảnh mã hóa Base64 (PNG, JPEG, WebP)
-          example: "iVBORw0KGgoAAAANSUhEUgAA..."
+          description: Chuỗi ảnh mã hóa Base64 (PNG, JPEG, WebP hợp lệ)
+          example: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
         include_mask:
           type: boolean
           default: true
@@ -264,14 +272,14 @@ components:
         risk_score:
           type: number
           format: float
-          description: Điểm rủi ro tổng hợp chuẩn hóa (0.0: rất thấp, 1.0: rất cao)
+          description: "Điểm rủi ro tổng hợp chuẩn hóa (0.0: rất thấp, 1.0: rất cao)"
           example: 0.35
         risk_level:
           $ref: '#/components/schemas/RiskLevel'
         confidence_score:
           type: number
           format: float
-          description: Độ tin cậy của thuật toán phân vùng và ước lượng (0.0 -> 1.0)
+          description: "Độ tin cậy của thuật toán phân vùng và ước lượng (0.0 -> 1.0)"
           example: 0.88
         indicators:
           type: array
@@ -307,6 +315,10 @@ components:
         - request_id
         - timestamp
         - status
+        - is_mock
+        - model_version
+        - threshold_version
+        - config_version
         - processing_time_ms
         - image_info
         - metrics
@@ -327,6 +339,26 @@ components:
           type: string
           enum: [SUCCESS, WARNING, FAILED]
           example: "SUCCESS"
+        is_mock:
+          type: boolean
+          example: true
+          description: Cờ xác nhận kết quả là Mock Engine tuần 1
+        model_version:
+          type: string
+          example: "mock-v0.1"
+          description: Phiên bản mô hình suy luận
+        threshold_version:
+          type: string
+          example: "v0.1"
+          description: Phiên bản ngưỡng đánh giá rủi ro
+        config_version:
+          type: string
+          example: "v0.1"
+          description: Phiên bản cấu hình thuật toán
+        limitations:
+          type: string
+          example: "Kết quả mô phỏng (Mock Engine) phục vụ tích hợp giao diện M5 và Backend M2."
+          description: Giới hạn kỹ thuật của phiên bản hiện tại
         processing_time_ms:
           type: number
           format: float

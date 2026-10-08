@@ -1,6 +1,8 @@
 """
 Unit test for the mock inference service and endpoints (Module M4 - SCRUM-62).
+Validates strict rejection of invalid base64, non-image payloads, OCT modality, and unsupported modes.
 """
+import base64
 import sys
 import os
 
@@ -9,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.schemas.common import EyeSide, AnalysisMode, RiskLevel, AnalysisStatus
 from app.schemas.analysis import AnalysisRequest
-from app.services.mock_service import process_mock_analysis
+from app.services.mock_service import process_mock_analysis, SAMPLE_VALID_PNG_BASE64
 
 client = TestClient(app)
 
@@ -21,7 +23,7 @@ def test_mock_analysis_generation():
         eye_side=EyeSide.LEFT,
         mode=AnalysisMode.RETINA_VESSELS,
         modality="FUNDUS",
-        image_base64="sample_test_base64",
+        image_base64=SAMPLE_VALID_PNG_BASE64,
         include_mask=True,
         include_overlay=True,
     )
@@ -32,6 +34,8 @@ def test_mock_analysis_generation():
     assert resp.status == AnalysisStatus.SUCCESS
     assert resp.is_mock is True
     assert resp.model_version == "mock-v0.1"
+    assert resp.threshold_version == "v0.1"
+    assert resp.config_version == "v0.1"
     assert "Mock Engine" in resp.limitations
     assert resp.processing_time_ms > 0
     assert resp.image_info.eye_side == EyeSide.LEFT
@@ -57,8 +61,9 @@ def test_mock_analysis_generation():
 def test_analyze_endpoint_success():
     payload = {
         "request_id": "req_api_001",
-        "image_base64": "sample_valid_base64",
-        "modality": "FUNDUS"
+        "image_base64": SAMPLE_VALID_PNG_BASE64,
+        "modality": "FUNDUS",
+        "mode": "retina_vessels",
     }
     response = client.post("/api/v1/analyze", json=payload)
     assert response.status_code == 200
@@ -66,23 +71,91 @@ def test_analyze_endpoint_success():
     assert data["status"] == "SUCCESS"
     assert data["is_mock"] is True
     assert data["model_version"] == "mock-v0.1"
+    assert data["threshold_version"] == "v0.1"
+    assert data["config_version"] == "v0.1"
 
 
 def test_oct_modality_returns_422():
     payload = {
         "request_id": "req_api_oct",
-        "image_base64": "sample_valid_base64",
-        "modality": "OCT"
+        "image_base64": SAMPLE_VALID_PNG_BASE64,
+        "modality": "OCT",
     }
     response = client.post("/api/v1/analyze", json=payload)
     assert response.status_code == 422
-    assert "unsupported_modality" in response.text
+    data = response.json()
+    assert data["error_code"] == "UNSUPPORTED_MODALITY"
+    assert "OCT" in data["message"]
+
+
+def test_invalid_modality_returns_422():
+    payload = {
+        "request_id": "req_api_mri",
+        "image_base64": SAMPLE_VALID_PNG_BASE64,
+        "modality": "MRI",
+    }
+    response = client.post("/api/v1/analyze", json=payload)
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error_code"] == "INVALID_MODALITY"
+
+
+def test_unsupported_mode_returns_422():
+    payload = {
+        "request_id": "req_api_iris",
+        "image_base64": SAMPLE_VALID_PNG_BASE64,
+        "modality": "FUNDUS",
+        "mode": "iris_biometrics",
+    }
+    response = client.post("/api/v1/analyze", json=payload)
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error_code"] == "UNSUPPORTED_MODE"
 
 
 def test_blank_image_returns_400():
     payload = {
         "request_id": "req_api_blank",
-        "image_base64": ""
+        "image_base64": "",
     }
     response = client.post("/api/v1/analyze", json=payload)
     assert response.status_code == 400
+    data = response.json()
+    assert data["error_code"] == "INVALID_IMAGE_PAYLOAD"
+
+
+def test_corrupted_base64_returns_400():
+    payload = {
+        "request_id": "req_api_corrupt",
+        "image_base64": "!!!not_valid_base64_data???",
+    }
+    response = client.post("/api/v1/analyze", json=payload)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error_code"] == "INVALID_IMAGE_PAYLOAD"
+
+
+def test_non_image_bytes_returns_400():
+    # Valid Base64 encoding of non-image plain text string
+    fake_b64 = base64.b64encode(b"This is a plain text file, not an image.").decode("utf-8")
+    payload = {
+        "request_id": "req_api_non_image",
+        "image_base64": fake_b64,
+    }
+    response = client.post("/api/v1/analyze", json=payload)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error_code"] == "INVALID_IMAGE_PAYLOAD"
+
+
+def test_health_endpoint_conforms_to_contract():
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["service"] == "AURA.AiCore"
+    assert data["model_loaded"] is False
+    assert data["version"] == "0.1.0"
+    assert data["device"] == "cpu"
+    assert "uptime_seconds" in data
+    assert isinstance(data["uptime_seconds"], (int, float))
