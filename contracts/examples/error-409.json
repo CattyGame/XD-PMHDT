@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "IDEMPOTENCY_KEY_REUSED",
+    "message": "Idempotency-Key đã dùng với nội dung khác.",
+    "correlationId": "c0ffee00-0000-4000-8000-000000000001",
+    "retryable": false
+  }
+}
