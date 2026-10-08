@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aura.local/contracts/analysis-events.schema.json",
-  "title": "AURA Analysis Events v0.2 (đề xuất)",
-  "description": "Envelope chung cho event phân tích. Consumer phải idempotent theo eventId (at-least-once). Payload không chứa dữ liệu bệnh nhân/ảnh, chỉ ID.",
+  "title": "AURA Analysis Events và Job Message v0.4 (đề xuất)",
+  "description": "Envelope event phân tích và message job. Nguyên tắc: (1) message chỉ chứa định danh/tham chiếu, KHÔNG chứa ảnh, Base64, object key hay dữ liệu bệnh nhân không cần thiết; (2) giao hàng at-least-once, consumer idempotent theo eventId/messageId; (3) Analysis ghi dữ liệu và outbox trong cùng transaction, outbox publisher phát sau; (4) Worker chỉ ACK sau khi kết quả hoặc trạng thái lỗi đã lưu bền vững; retry có giới hạn, backoff, dead-letter queue (số liệu Pending); (5) Billing nhận analysis.completed để capture credit và analysis.failed để release; Analysis không sửa bảng credit; Notification nhận completed/failed/reviewed.",
   "type": "object",
   "required": [
     "eventId",
@@ -28,7 +28,7 @@
       ]
     },
     "schemaVersion": {
-      "const": "0.2"
+      "const": "0.4"
     },
     "occurredAt": {
       "type": "string",
@@ -65,10 +65,15 @@
           "data": {
             "type": "object",
             "required": [
-              "patientId"
+              "patientId",
+              "batchId"
             ],
             "properties": {
               "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "batchId": {
                 "type": "string",
                 "format": "uuid"
               }
@@ -94,7 +99,9 @@
               "patientId",
               "riskLevel",
               "modelVersion",
-              "qualityWarning"
+              "isMock",
+              "configVersion",
+              "thresholdVersion"
             ],
             "properties": {
               "patientId": {
@@ -111,8 +118,14 @@
               "modelVersion": {
                 "type": "string"
               },
-              "qualityWarning": {
+              "isMock": {
                 "type": "boolean"
+              },
+              "configVersion": {
+                "type": "string"
+              },
+              "thresholdVersion": {
+                "type": "string"
               }
             },
             "additionalProperties": false
@@ -134,7 +147,7 @@
             "type": "object",
             "required": [
               "patientId",
-              "failureCode",
+              "errorCode",
               "retryable"
             ],
             "properties": {
@@ -142,16 +155,16 @@
                 "type": "string",
                 "format": "uuid"
               },
-              "failureCode": {
-                "enum": [
-                  "AI_UNAVAILABLE",
-                  "AI_TIMEOUT",
-                  "INVALID_IMAGE",
-                  "INTERNAL_ERROR"
-                ]
-              },
               "retryable": {
                 "type": "boolean"
+              },
+              "errorCode": {
+                "enum": [
+                  "ERR_AI_FAILED",
+                  "ERR_TIMEOUT",
+                  "ERR_NETWORK",
+                  "ERR_IMAGE_LOW_QUALITY"
+                ]
               }
             },
             "additionalProperties": false
@@ -173,7 +186,7 @@
             "type": "object",
             "required": [
               "patientId",
-              "isApproved",
+              "reviewStatus",
               "version"
             ],
             "properties": {
@@ -185,8 +198,11 @@
                 "type": "integer",
                 "minimum": 1
               },
-              "isApproved": {
-                "type": "boolean"
+              "reviewStatus": {
+                "enum": [
+                  "REVIEWED",
+                  "CORRECTED"
+                ]
               }
             },
             "additionalProperties": false
