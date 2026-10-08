@@ -1,9 +1,9 @@
 # BIÊN BẢN REVIEW AI VÀ KẾ HOẠCH QUẢN TRỊ RỦI RO v0.1 (MODULE M4)
-> **Dự án**: AURA — Hệ thống Hỗ trợ Đánh giá Nguy cơ Đột quỵ & Tim mạch qua Ảnh Mạch máu Võng mạc  
-> **Mã công việc Jira**: **SCRUM-291** (ID Kế hoạch: `W1-M4-08`)  
-> **Người thực hiện**: Đào Duy Quân (M4 — AI Engineer & NiFi)  
-> **Người duyệt đề xuất**: Thanh Dat (M3 — QA Lead), Nguyễn Trương Hậu (M1 — Tech Lead)  
-> **Yêu cầu liên quan**: FR-3, FR-4, NFR-1, NFR-21, NFR-22, NFR-23  
+> **Dự án**: AURA — Hệ thống Hỗ trợ Đánh giá Nguy cơ Đột quỵ & Tim mạch qua Ảnh Mạch máu Võng mạc
+> **Mã công việc Jira**: **SCRUM-291** (ID Kế hoạch: `W1-M4-08`)
+> **Người thực hiện**: Đào Duy Quân (M4 — AI Engineer & NiFi)
+> **Người duyệt đề xuất**: Thanh Dat (M3 — QA Lead), Nguyễn Trương Hậu (M1 — Tech Lead)
+> **Yêu cầu liên quan**: FR-3, FR-4, NFR-1, NFR-21, NFR-22, NFR-23
 > **Phiên bản tài liệu**: 1.0.0 (Sprint 1 Baseline)
 
 ---
