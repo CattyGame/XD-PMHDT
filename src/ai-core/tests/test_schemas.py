@@ -76,6 +76,9 @@ def test_analysis_request_and_response():
     assert resp.request_id == "req_test_001"
     assert resp.metrics.vessel_density == 0.155
     assert resp.risk_assessment.risk_level == RiskLevel.LOW
+    assert resp.threshold_version == "v0.1"
+    assert resp.config_version == "v0.1"
+    assert resp.is_mock is True
 
 
 def test_json_contract_file():

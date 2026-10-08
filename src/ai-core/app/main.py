@@ -4,7 +4,7 @@ Integrates platform endpoints (health, ping) and AI analysis endpoints.
 """
 from datetime import datetime, timezone
 import time
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,8 +12,9 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 
+from .schemas.common import AnalysisMode
 from .schemas.analysis import AnalysisRequest, AnalysisResponse
-from .services.mock_service import process_mock_analysis
+from .services.mock_service import process_mock_analysis, InvalidImagePayloadError
 
 APP_START_TIME = time.time()
 SERVICE_NAME = "AURA.AiCore"
@@ -37,8 +38,11 @@ app.add_middleware(
 
 class HealthResponse(BaseModel):
     status: str
+    version: str
     service: str
+    device: str
     model_loaded: bool
+    uptime_seconds: float
 
 
 class PingResponse(BaseModel):
@@ -61,11 +65,25 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handles standard HTTP errors."""
+    """Handles standard HTTP errors with machine-readable error codes."""
+    error_code = f"HTTP_{exc.status_code}"
+    message = "Lỗi xử lý yêu cầu."
+    details = None
+    if isinstance(exc.detail, dict):
+        error_code = exc.detail.get("error_code", error_code)
+        message = exc.detail.get("message", message)
+        details = exc.detail.get("details", None)
+    elif isinstance(exc.detail, str):
+        message = exc.detail
+        if "unsupported_modality" in message.lower():
+            error_code = "UNSUPPORTED_MODALITY"
+        elif "invalid_image_payload" in message.lower():
+            error_code = "INVALID_IMAGE_PAYLOAD"
+
     error_payload = {
-        "error_code": f"HTTP_{exc.status_code}",
-        "message": exc.detail if isinstance(exc.detail, str) else "Lỗi xử lý yêu cầu.",
-        "details": exc.detail if isinstance(exc.detail, dict) else None,
+        "error_code": error_code,
+        "message": message,
+        "details": details,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     return JSONResponse(status_code=exc.status_code, content=error_payload)
@@ -86,10 +104,14 @@ def root():
 
 @app.get("/health", response_model=HealthResponse, tags=["Platform"])
 def health():
+    uptime = round(time.time() - APP_START_TIME, 2)
     return HealthResponse(
         status="ok",
+        version=VERSION,
         service=SERVICE_NAME,
+        device="cpu",
         model_loaded=False,
+        uptime_seconds=uptime,
     )
 
 
@@ -107,28 +129,72 @@ def analyze_retina(request: AnalysisRequest):
     """
     Endpoint phân tích ảnh võng mạc (Mock Engine cho tuần 1 - SCRUM-62).
     Nhận chuỗi ảnh Base64 và thông tin yêu cầu, trả về kết quả phân vùng và chỉ số hình học.
+    Được gọi nội bộ từ Analysis Worker.
     """
+    # 1. Check blank image
+    if not request.image_base64 or len(request.image_base64.strip()) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "INVALID_IMAGE_PAYLOAD",
+                "message": "Chuỗi image_base64 không được để trống.",
+                "details": None,
+            },
+        )
+
+    # 2. Modality check: only FUNDUS supported, OCT rejected with UNSUPPORTED_MODALITY (422)
+    norm_modality = request.modality.strip().upper() if request.modality else "FUNDUS"
+    if norm_modality == "OCT":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error_code": "UNSUPPORTED_MODALITY",
+                "message": "unsupported_modality: Định dạng ảnh OCT chưa được hỗ trợ trong phiên bản hiện tại (chỉ hỗ trợ FUNDUS).",
+                "details": {"supported_modalities": ["FUNDUS"], "received_modality": request.modality},
+            },
+        )
+    elif norm_modality != "FUNDUS":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error_code": "INVALID_MODALITY",
+                "message": f"Modality '{request.modality}' không hợp lệ. Chỉ hỗ trợ FUNDUS.",
+                "details": {"supported_modalities": ["FUNDUS"], "received_modality": request.modality},
+            },
+        )
+
+    # 3. Mode check: only retina_vessels allowed
+    if request.mode != AnalysisMode.RETINA_VESSELS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error_code": "UNSUPPORTED_MODE",
+                "message": f"Chế độ phân tích '{request.mode.value}' nằm ngoài phạm vi hỗ trợ của phiên bản v0.1 (chỉ hỗ trợ retina_vessels).",
+                "details": {"supported_modes": ["retina_vessels"], "received_mode": request.mode.value},
+            },
+        )
+
+    # 4. Strict Image payload validation & mock processing
     try:
-        # Check blank image
-        if not request.image_base64 or len(request.image_base64.strip()) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Chuỗi image_base64 không được để trống.",
-            )
-
-        # OCT modality check (Task requirement: OCT returns 422 unsupported_modality)
-        if request.modality and request.modality.upper() == "OCT":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="unsupported_modality: Định dạng ảnh OCT chưa được hỗ trợ trong phiên bản hiện tại (chỉ hỗ trợ Fundus).",
-            )
-
         result = process_mock_analysis(request)
         return result
+    except InvalidImagePayloadError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "INVALID_IMAGE_PAYLOAD",
+                "message": str(e),
+                "details": {"supported_formats": ["PNG", "JPEG", "WEBP"]},
+            },
+        )
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Lỗi nội bộ khi xử lý mô hình AI: {str(e)}",
+            detail={
+                "error_code": "INFERENCE_RUNTIME_ERROR",
+                "message": f"Lỗi nội bộ khi xử lý mô hình AI: {str(e)}",
+                "details": None,
+            },
         )

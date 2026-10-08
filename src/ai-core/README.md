@@ -1,4 +1,4 @@
-# AURA AI Service (Module M4)
+# AURA AI Core Service (Module M4)
 > Microservice phân tích ảnh mạch máu võng mạc và tính toán chỉ số nguy cơ theo thuật toán Heuristic.
 
 ---
@@ -8,27 +8,36 @@
 ### 1. Khởi chạy bằng Docker & Docker Compose (Khuyên dùng)
 Từ thư mục gốc dự án:
 ```bash
-docker compose up --build -d
+docker compose up --build -d ai-core
 ```
 Service sẽ lắng nghe tại cổng `http://localhost:8000`.
 
 Kiểm tra trạng thái container:
 ```bash
 docker compose ps
-docker compose logs -f ai-service
+docker compose logs -f ai-core
 ```
 
 ### 2. Khởi chạy trực tiếp bằng Python
-Yêu cầu Python 3.10+:
+Yêu cầu Python 3.12 (theo `.python-version`):
 ```bash
-cd ai_service
+cd src/ai-core
 python -m venv .venv
 
-# Trên Windows
+# Kích hoạt venv (Trên Windows)
 .venv\Scripts\activate
 
-# Cài đặt thư viện
-pip install -r requirements.txt
+# Kích hoạt venv (Trên Linux/macOS)
+source .venv/bin/activate
+
+# Cài đặt thư viện theo lockfile
+pip install -r requirements.lock
+
+# Hoặc cài đặt qua uv
+uv pip install -r requirements.lock
+
+# Chạy kiểm thử tự động
+python -m pytest tests -v
 
 # Khởi chạy service
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -40,6 +49,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 Sau khi khởi chạy, truy cập trực tiếp bằng trình duyệt:
 * **Interactive Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
 * **ReDoc Documentation**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+* **OpenAPI Specification**: [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json)
 
 ---
 
@@ -59,6 +69,7 @@ curl -X POST http://localhost:8000/api/v1/analyze \
     "patient_id": "PAT-12345",
     "eye_side": "right",
     "mode": "retina_vessels",
+    "modality": "FUNDUS",
     "image_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
     "include_mask": true,
     "include_overlay": true
