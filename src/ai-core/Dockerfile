@@ -14,10 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir \
+    -c requirements.lock \
+    -r requirements.txt
 # Create non-root user for container security
 RUN useradd -m -u 1001 appuser
 
