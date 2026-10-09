@@ -68,63 +68,81 @@ SAMPLE_OVERLAY_PNG_BASE64 = create_mock_overlay_png(512, 512)
 
 def inspect_image(base64_str: str) -> Tuple[int, int, int]:
     """
-    Decodes base64 string and validates that it represents a valid image file.
-    Uses Pillow verify() then load() to strictly ensure full pixel decoding.
-    Rejects corrupted data, truncated images, header-only images, and unsupported formats.
-    NEVER falls back to fake dimensions or raw header parsing.
+    Validate image size and format before decoding all pixels.
+    Verify file integrity, then reopen and fully decode accepted images.
     """
     if not base64_str or not base64_str.strip():
-        raise InvalidImagePayloadError("Chuỗi image_base64 rỗng hoặc chỉ chứa khoảng trắng.")
+        raise InvalidImagePayloadError(
+            "Chuỗi image_base64 rỗng hoặc chỉ chứa khoảng trắng."
+        )
 
     clean_b64 = base64_str.strip()
     if "," in clean_b64:
         clean_b64 = clean_b64.split(",", 1)[1].strip()
 
-    # 1. Strict Base64 decoding
     try:
         image_data = base64.b64decode(clean_b64, validate=True)
     except Exception as e:
-        raise InvalidImagePayloadError(f"Chuỗi Base64 không hợp lệ hoặc bị hỏng mã hóa: {str(e)}")
+        raise InvalidImagePayloadError(
+            f"Chuỗi Base64 không hợp lệ hoặc bị hỏng mã hóa: {e}"
+        ) from e
 
-    # 2. Check maximum raw payload size
     if len(image_data) > MAX_IMAGE_BYTES:
         raise InvalidImagePayloadError(
-            f"Dung lượng ảnh ({len(image_data)} bytes) vượt quá giới hạn tối đa cho phép ({MAX_IMAGE_BYTES} bytes)."
+            f"Dung lượng ảnh ({len(image_data)} bytes) vượt quá "
+            f"giới hạn tối đa cho phép ({MAX_IMAGE_BYTES} bytes)."
         )
 
     if len(image_data) < 12:
-        raise InvalidImagePayloadError("Dữ liệu sau khi giải mã quá ngắn (<12 bytes), không phải tệp ảnh hợp lệ.")
+        raise InvalidImagePayloadError(
+            "Dữ liệu sau khi giải mã quá ngắn (<12 bytes), "
+            "không phải tệp ảnh hợp lệ."
+        )
 
-    # 3. Pillow validation: verify() followed by reopen and load()
     try:
         with Image.open(io.BytesIO(image_data)) as img:
-            img.verify()
-        with Image.open(io.BytesIO(image_data)) as img:
-            img.load()  # Force complete decoding of all pixel data (detects truncated / bad CRC)
             format_name = (img.format or "").upper()
             width, height = img.size
-            channels = len(img.getbands()) if hasattr(img, "getbands") else 3
-    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as e:
-        raise InvalidImagePayloadError(
-            f"Dữ liệu gửi lên không phải là tệp ảnh hợp lệ hoặc bị cắt cụt/lỗi CRC: {str(e)}"
-        )
 
-    # 4. Check supported format (PNG, JPEG, WEBP)
-    if format_name not in SUPPORTED_FORMATS:
-        raise InvalidImagePayloadError(
-            f"Định dạng ảnh '{format_name}' không được hỗ trợ. Chỉ chấp nhận các định dạng: PNG, JPEG, WEBP."
-        )
+            if format_name not in SUPPORTED_FORMATS:
+                raise InvalidImagePayloadError(
+                    f"Định dạng ảnh '{format_name}' không được hỗ trợ. "
+                    f"Chỉ chấp nhận: {', '.join(SUPPORTED_FORMATS)}."
+                )
 
-    # 5. Check resolution / pixel count limits
-    if width <= 0 or height <= 0:
-        raise InvalidImagePayloadError(f"Kích thước ảnh ({width}x{height}) không hợp lệ.")
-    if width * height > MAX_PIXELS:
+            if width <= 0 or height <= 0:
+                raise InvalidImagePayloadError(
+                    f"Kích thước ảnh ({width}x{height}) không hợp lệ."
+                )
+
+            if width * height > MAX_PIXELS:
+                raise InvalidImagePayloadError(
+                    f"Độ phân giải ảnh ({width}x{height} = "
+                    f"{width * height} pixels) vượt quá "
+                    f"giới hạn ({MAX_PIXELS} pixels)."
+                )
+
+            img.verify()
+
+        with Image.open(io.BytesIO(image_data)) as img:
+            img.load()
+            channels = len(img.getbands())
+
+    except InvalidImagePayloadError:
+        raise
+    except (
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        OSError,
+        SyntaxError,
+        ValueError,
+    ) as e:
         raise InvalidImagePayloadError(
-            f"Độ phân giải ảnh ({width}x{height} = {width * height} pixels) vượt quá giới hạn ({MAX_PIXELS} pixels)."
-        )
+            "Dữ liệu gửi lên không phải là tệp ảnh hợp lệ "
+            f"hoặc bị cắt cụt/lỗi CRC: {e}"
+        ) from e
 
     return width, height, channels
-
 
 def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
     """
