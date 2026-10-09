@@ -25,10 +25,12 @@ __pycache__/
 *.pyc
 
 # AI datasets and model weights
-datasets/
+/datasets/
 *.pt
 *.pth
 
 # Operating system
 .DS_Store
 Thumbs.db
+
+/.venv-dataset/

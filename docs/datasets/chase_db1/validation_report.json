@@ -1,0 +1,44 @@
+{
+  "dataset": "CHASE_DB1",
+  "seed": 42,
+  "split_type": "project_defined_subject_split",
+  "reference_mask": "1stHO",
+  "image_count": 28,
+  "mask_count": 56,
+  "subject_count": 14,
+  "dimensions_width_height": [
+    999,
+    960
+  ],
+  "decoded_file_count": 84,
+  "split_subjects": {
+    "train": [
+      "03",
+      "06",
+      "07",
+      "08",
+      "09",
+      "12",
+      "13",
+      "14"
+    ],
+    "validation": [
+      "04",
+      "05",
+      "10"
+    ],
+    "test": [
+      "01",
+      "02",
+      "11"
+    ]
+  },
+  "split_image_counts": {
+    "train": 16,
+    "validation": 6,
+    "test": 6
+  },
+  "extra_files": [],
+  "checks_passed": true,
+  "benchmark_performed": false
+}
