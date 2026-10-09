@@ -1,4 +1,4 @@
-> **Trạng thái**: Đã kiểm tra CHASE_DB1 và tạo manifest chia tập theo đối tượng; chưa đánh giá thuật toán trên dữ liệu thật
+> **Trạng thái**: Đã kiểm tra CHASE_DB1, tạo manifest chia tập và đánh giá baseline Frangi v0.2 trên validation/test; chất lượng còn hạn chế, chưa xác nhận hiệu năng toàn luồng
 
 > **Dự án**: AURA — Phân tích mạch máu võng mạc hỗ trợ đánh giá sức khỏe
 > **Mã Jira**: SCRUM-59 — Kiểm tra dataset và giấy phép; SCRUM-290 — Version NiFi và dữ liệu huấn luyện
@@ -210,23 +210,38 @@ Dự án sử dụng dữ liệu cho nghiên cứu và demo kỹ thuật trong p
 
 ## 8. Trạng thái benchmark
 
-Chưa có kết quả Dice/IoU của thuật toán trên CHASE_DB1 được xác nhận trong Data Card này.
+Đã chạy baseline Frangi v0.2 trên dữ liệu CHASE_DB1 thực tế.
 
-Các kết quả từ dữ liệu giả lập, giá trị sinh ngẫu nhiên hoặc vòng lặp mô phỏng:
-- Phải được ghi rõ là mô phỏng.
-- Không được trình bày như độ chính xác phân vùng trên ảnh thật.
-- Không được dùng để xác nhận độ trễ toàn luồng AURA.
+- Nhãn tham chiếu: `_1stHO.png`.
+- Đánh giá trên toàn ảnh, không resize.
+- Chọn cấu hình và ngưỡng trên validation.
+- Ngưỡng đã chốt: 0.02.
+- Test sử dụng cấu hình đã chốt, không tìm lại ngưỡng.
 
-Một benchmark thực tế cần:
-- Đọc ảnh thật.
-- Chạy thuật toán tạo mask dự đoán.
-- So sánh mask dự đoán với nhãn tham chiếu.
-- Đo thời gian thực thi.
-- Ghi dataset, split, cấu hình, phiên bản mã nguồn và môi trường chạy.
+| Chỉ số trung bình theo ảnh | Validation — 6 ảnh | Test — 6 ảnh |
+|---|---:|---:|
+| Dice | 0.3892 | 0.4201 |
+| IoU | 0.2423 | 0.2662 |
+| Sensitivity | 0.4140 | 0.4198 |
+| Specificity | 0.9437 | 0.9565 |
 
-Phần triển khai và chạy benchmark thuộc task baseline/benchmark tương ứng.
+Thời gian xử lý thuật toán local trên test:
+- Trung vị: 1729.30 ms/ảnh.
+- p95: 1765.00 ms/ảnh.
+- Lớn nhất: 1768.73 ms/ảnh.
 
----
+Thời gian chưa gồm đọc/ghi file, tính metric, API, hàng đợi
+và database. Chỉ có 6 mẫu đo từ 3 đối tượng; chưa xác nhận
+hiệu năng ổn định hoặc đạt NFR toàn luồng.
+
+Baseline còn nhiều nhiễu và bỏ sót mạch.
+Chưa xác nhận đạt ngưỡng chất lượng mục tiêu của dự án.
+
+Báo cáo chi tiết:
+`docs/benchmarks/frangi_baseline_v0.2.md`
+
+Báo cáo mô phỏng cũ được giữ với trạng thái SIMULATION_ONLY;
+không dùng làm bằng chứng về độ chính xác hoặc hiệu năng thật.
 
 ## 9. Giới hạn sử dụng kết quả AURA
 

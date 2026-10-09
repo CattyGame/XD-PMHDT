@@ -21,7 +21,7 @@ Biên bản này tổng kết quá trình rà soát, đánh giá tính khả thi
 
 ### 2.1. Đánh giá tính khả thi theo yêu cầu chức năng
 * **FR-3 (Phân tích mạch máu võng mạc - Retinal Vessel Analysis)**:
-    * *Hiện trạng*: Đã có AI Core dạng mock phục vụ kiểm thử tích hợp. Dataset CHASE_DB1 đã được tải, kiểm tra và chia theo đối tượng thành 16 ảnh train, 6 validation và 6 test. Chưa xác nhận triển khai và đánh giá U-Net hoặc Frangi trên ảnh thật. Các số liệu Dice = 0.796 và p95 khoảng 461 ms trước đây chưa có cơ sở thực nghiệm trên DRIVE; không sử dụng làm kết quả đánh giá thuật toán hoặc bằng chứng đạt yêu cầu hiệu năng.
+    * *Hiện trạng*: Đã triển khai script baseline Frangi v0.2 trên CHASE_DB1. Ngưỡng 0.02 được chọn trên validation. Trên 6 ảnh test của 3 đối tượng, mean Dice = 0.4201, mean IoU = 0.2662, sensitivity = 0.4198 và specificity = 0.9565. Thời gian thuật toán local có trung vị 1729.30 ms và p95 1765.00 ms; chưa gồm API, hàng đợi và database. Baseline còn nhiều nhiễu, bỏ sót mạch và chưa xác nhận đạt yêu cầu chất lượng hoặc NFR toàn luồng. API hiện vẫn là mock; chưa tích hợp baseline này vào API/Worker và chưa triển khai U-Net.
   * *Khoảng trống (Gap)*: Các tham số hình thái học vi mạch (mật độ mạch, tỷ lệ động - tĩnh mạch AVR, độ ngoằn ngoèo) hiện đang được tính toán theo thuật toán hình học sơ bộ (heuristic morphometrics), chưa qua hiệu chuẩn với hệ thống đo đạc nhãn khoa chuyên dụng.
 * **FR-4 (Phát hiện bất thường và đánh giá mức độ nguy cơ)**:
   * *Hiện trạng*: Triển khai mock service trả về các phân tầng nguy cơ sơ bộ (`LOW`, `MEDIUM`, `HIGH`) phục vụ tích hợp luồng toàn hệ thống.
