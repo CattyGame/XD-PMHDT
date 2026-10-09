@@ -21,18 +21,17 @@ Biên bản này tổng kết quá trình rà soát, đánh giá tính khả thi
 
 ### 2.1. Đánh giá tính khả thi theo yêu cầu chức năng
 * **FR-3 (Phân tích mạch máu võng mạc - Retinal Vessel Analysis)**:
-  * *Hiện trạng*: Đã xây dựng pipeline phân vùng mạch máu (vessel segmentation) baseline dựa trên mô hình U-Net nhẹ và bộ lọc hình thái học Frangi. Đạt Dice = 0.796 trên tập kiểm thử DRIVE độc lập; thời gian suy luận đạt ~461ms (p95), đáp ứng hoàn hảo tiêu chí phân hệ AI.
+    * *Hiện trạng*: Đã có AI Core dạng mock phục vụ kiểm thử tích hợp. Dataset CHASE_DB1 đã được tải, kiểm tra và chia theo đối tượng thành 16 ảnh train, 6 validation và 6 test. Chưa xác nhận triển khai và đánh giá U-Net hoặc Frangi trên ảnh thật. Các số liệu Dice = 0.796 và p95 khoảng 461 ms trước đây chưa có cơ sở thực nghiệm trên DRIVE; không sử dụng làm kết quả đánh giá thuật toán hoặc bằng chứng đạt yêu cầu hiệu năng.
   * *Khoảng trống (Gap)*: Các tham số hình thái học vi mạch (mật độ mạch, tỷ lệ động - tĩnh mạch AVR, độ ngoằn ngoèo) hiện đang được tính toán theo thuật toán hình học sơ bộ (heuristic morphometrics), chưa qua hiệu chuẩn với hệ thống đo đạc nhãn khoa chuyên dụng.
 * **FR-4 (Phát hiện bất thường và đánh giá mức độ nguy cơ)**:
   * *Hiện trạng*: Triển khai mock service trả về các phân tầng nguy cơ sơ bộ (`LOW`, `MEDIUM`, `HIGH`) phục vụ tích hợp luồng toàn hệ thống.
-  * *Khoảng trống (Gap)*: **Hai bộ dữ liệu DRIVE và APTOS 2019 hoàn toàn không chứa nhãn chẩn đoán huyết áp toàn thân hoặc biến cố đột quỵ.**
-    * DRIVE chỉ có nhãn phân vùng mạch máu thủ công (manual vessel segmentation).
+    * *Khoảng trống (Gap)*: **CHASE_DB1 đang sử dụng cung cấp nhãn phân vùng mạch máu, không cung cấp nhãn chẩn đoán huyết áp toàn thân hoặc biến cố đột quỵ. DRIVE và APTOS hiện là nguồn tham khảo, chưa được tải và kiểm tra trực tiếp trong dự án.**
     * APTOS 2019 chỉ gắn nhãn mức độ tổn thương võng mạc tiểu đường (DR Grades 0–4).
     * Do đó, hệ thống hiện tại **CHƯA ĐỦ BẰNG CHỨNG LÂM SÀNG** để đưa ra khẳng định bệnh lý tim mạch/đột quỵ hệ thống. Mọi phân tầng nguy cơ ở giai đoạn này chỉ là chỉ số nghiên cứu giả lập (Research Heuristic).
 
 ### 2.2. Khẳng định giới hạn đạo đức và y sinh
 > [!IMPORTANT]
-> Tuyệt đối không sử dụng bộ dữ liệu DRIVE/APTOS làm cơ sở chẩn đoán tự động bệnh tăng huyết áp hoặc nguy cơ đột quỵ cho bệnh nhân thực tế. Kết quả phân tích của AI Core là công cụ hỗ trợ sàng lọc hình ảnh vi mạch (Screening Aid), không thay thế kết luận của Bác sĩ Chuyên khoa.
+> Không sử dụng CHASE_DB1 hoặc thông tin tham khảo từ DRIVE/APTOS làm bằng chứng xác nhận khả năng chẩn đoán tăng huyết áp hoặc dự đoán đột quỵ. AI Core hiện phục vụ nghiên cứu và demo kỹ thuật; khả năng hỗ trợ sàng lọc lâm sàng chưa được kiểm chứng.
 
 ---
 
@@ -61,7 +60,7 @@ Dựa trên kết quả thực nghiệm Sprint 1 và tài liệu chỉ đạo ki
 | **R-02** | **Chất lượng ảnh đáy mắt kém (Poor Quality Input)**: Ảnh mất nét, đục thủy tinh thể, thiếu sáng gây suy giảm nghiêm trọng độ chính xác. | Cao | Cao | Trung bình | Xây dựng bộ lọc kiểm tra chất lượng ảnh (Quality Assessment); từ chối xử lý hoặc cảnh báo độ tin cậy thấp `IMAGE_QUALITY_INSUFFICIENT`. |
 | **R-03** | **Hiện tượng thiên kiến phụ thuộc máy (Automation Bias)**: Bác sĩ đồng thuận vô điều kiện với đề xuất AI mà không kiểm tra kỹ. | Trung bình | Trung bình | Nghiêm trọng | Tách biệt hoàn toàn bản ghi `DoctorReview` khỏi kết quả AI; giao diện yêu cầu bác sĩ chủ động thao tác xác nhận hoặc chỉnh sửa. |
 | **R-04** | **Nghẽn cổ chai hiệu năng toàn luồng (End-to-End Latency)**: Tắc nghẽn tại hàng đợi RabbitMQ hoặc quá tải container AI Core. | Trung bình | Thấp | Trung bình | **Tuân thủ NFR-1**: AI Core CPU inference p95 đạt ~461ms; luồng Worker xử lý bất đồng bộ cam kết hoàn tất trong khoảng 10–20 giây/ảnh. |
-| **R-05** | **Trôi dữ liệu & Lệch thiết bị (Data & Device Drift)**: Khác biệt quang học giữa camera thực tế tại phòng khám và tập DRIVE (Canon CR5). | Cao | Cao | Trung bình | **Tuân thủ NFR-23**: Version hóa ngưỡng đánh giá (`threshold_version="v0.1"`), theo dõi phân phối kích thước ảnh và lưu vết provenance qua NiFi. |
+| **R-05** | **Trôi dữ liệu & Lệch thiết bị (Data & Device Drift)**: Khác biệt giữa ảnh thực tế tại phòng khám và CHASE_DB1; tập dữ liệu nhỏ, gồm ảnh của trẻ em trong nghiên cứu tại Anh, chưa đại diện cho quần thể người dùng mục tiêu. | Cao | Cao | Trung bình | **Tuân thủ NFR-23**: Version hóa ngưỡng đánh giá (`threshold_version="v0.1"`), theo dõi phân phối kích thước ảnh và lưu vết provenance qua NiFi. |
 | **R-06** | **Rò rỉ thông tin y tế nhạy cảm (PHI Leakage)**: Lộ thông tin bệnh nhân trong payload xử lý AI hoặc log hệ thống. | Cao | Thấp | Rất cao | Phân hệ AI chỉ nhận ảnh ẩn danh kèm `request_id`, không nhận họ tên hoặc bệnh án; NiFi flow không chứa secret/credential trong file export. |
 
 ---
@@ -91,7 +90,7 @@ Dựa trên kết quả thực nghiệm Sprint 1 và tài liệu chỉ đạo ki
 ## 6. Kế hoạch Lấp khoảng trống (Gap-Closing Roadmap cho Sprint 2–4)
 
 1. **Sprint 2 (Deep Learning Training & Quality Assessment)**:
-   * Huấn luyện mô hình U-Net hoàn chỉnh trên tập dữ liệu DRIVE Train (20 ảnh) kèm kỹ thuật Data Augmentation mở rộng.
+   *    * Triển khai baseline phân vùng trên CHASE_DB1 theo manifest đã lưu. Dùng train để xây dựng thuật toán, validation để chọn tham số và test để đánh giá sau khi chốt cấu hình. Nếu triển khai U-Net, augmentation chỉ áp dụng cho train. DRIVE là dataset bổ sung dự kiến, cần tải và kiểm tra trước khi sử dụng.
    * Tích hợp mạng phân loại chất lượng ảnh chụp đáy mắt (Acceptable / Unacceptable) trước khi đưa vào phân tích mạch.
 2. **Sprint 3 (Multicentric Data & Biomarker Calibration)**:
    * Khảo sát tích hợp các tập dữ liệu đa trung tâm có kèm thông tin huyết áp lâm sàng (như ODIR-5K hoặc dữ liệu nghiên cứu hợp tác).
