@@ -148,6 +148,89 @@ def test_non_image_bytes_returns_400():
     assert data["error_code"] == "INVALID_IMAGE_PAYLOAD"
 
 
+def test_header_only_png_returns_400():
+    # PNG with only 8-byte signature and IHDR (no IDAT chunk)
+    header_only = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x0a\x00\x00\x00\x0a\x08\x02\x00\x00\x00\x00\x00\x00\x00"
+    payload = {
+        "request_id": "req_api_hdr_only",
+        "image_base64": base64.b64encode(header_only).decode("utf-8"),
+    }
+    response = client.post("/api/v1/analyze", json=payload)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error_code"] == "INVALID_IMAGE_PAYLOAD"
+
+
+def test_truncated_image_returns_400():
+    # Valid PNG cut in half
+    raw_bytes = base64.b64decode(SAMPLE_VALID_PNG_BASE64)
+    truncated = raw_bytes[:len(raw_bytes) // 2]
+    payload = {
+        "request_id": "req_api_truncated",
+        "image_base64": base64.b64encode(truncated).decode("utf-8"),
+    }
+    response = client.post("/api/v1/analyze", json=payload)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error_code"] == "INVALID_IMAGE_PAYLOAD"
+
+
+def test_oversized_pixel_resolution_returns_400():
+    # Image with dimensions exceeding 16 MP limit (5000x5000 = 25 MP)
+    from PIL import Image
+    import io
+    big_img = Image.new("L", (5000, 5000), color=0)
+    buf = io.BytesIO()
+    big_img.save(buf, format="PNG")
+    payload = {
+        "request_id": "req_api_oversized",
+        "image_base64": base64.b64encode(buf.getvalue()).decode("utf-8"),
+    }
+    response = client.post("/api/v1/analyze", json=payload)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error_code"] == "INVALID_IMAGE_PAYLOAD"
+
+
+def test_mask_and_overlay_are_valid_decodable_pngs():
+    from PIL import Image
+    import io
+    payload = {
+        "request_id": "req_api_seg_check",
+        "image_base64": SAMPLE_VALID_PNG_BASE64,
+        "modality": "FUNDUS",
+        "mode": "retina_vessels",
+        "include_mask": True,
+        "include_overlay": True,
+    }
+    response = client.post("/api/v1/analyze", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["is_mock"] is True
+    assert "Mock Engine" in data["limitations"]
+    assert any("[MOCK]" in ind for ind in data["risk_assessment"]["indicators"])
+
+    seg = data["segmentation"]
+    assert seg is not None
+    assert seg["mask_format"] == "png_base64"
+
+    # Verify returned mask PNG
+    mask_bytes = base64.b64decode(seg["mask_base64"])
+    with Image.open(io.BytesIO(mask_bytes)) as img:
+        img.verify()
+    with Image.open(io.BytesIO(mask_bytes)) as img:
+        img.load()
+        assert img.format == "PNG"
+
+    # Verify returned overlay PNG
+    overlay_bytes = base64.b64decode(seg["overlay_base64"])
+    with Image.open(io.BytesIO(overlay_bytes)) as img:
+        img.verify()
+    with Image.open(io.BytesIO(overlay_bytes)) as img:
+        img.load()
+        assert img.format == "PNG"
+
+
 def test_health_endpoint_conforms_to_contract():
     response = client.get("/health")
     assert response.status_code == 200

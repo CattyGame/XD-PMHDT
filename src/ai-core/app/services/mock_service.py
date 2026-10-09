@@ -1,14 +1,15 @@
 """
 Mock inference engine for AURA AI Service (Module M4).
-Provides realistic mock responses with valid segmentation masks and heuristic risk scores.
+Provides mock responses with valid segmentation masks and heuristic mock metrics for integration.
 Strictly complies with task requirements: isMock=true, modelVersion=mock-v0.1, limitations.
 """
 import time
 import base64
 import io
-import struct
 from datetime import datetime, timezone
 from typing import Tuple
+
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from ..schemas.common import EyeSide, AnalysisMode, RiskLevel, AnalysisStatus
 from ..schemas.analysis import (
@@ -20,36 +21,57 @@ from ..schemas.analysis import (
     SegmentationResult
 )
 
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB limit
+MAX_PIXELS = 16_000_000  # 16 Megapixels limit
+SUPPORTED_FORMATS = ("PNG", "JPEG", "WEBP")
+
 
 class InvalidImagePayloadError(ValueError):
     """Raised when image_base64 string is invalid or does not contain valid image data."""
     pass
 
 
-# 1x1 valid sample PNGs (Mask: white square, Overlay: green/red tinted sample)
-SAMPLE_MASK_PNG_BASE64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAIElEQVR42mP8z8AARAwMDDAG"
-    "Awg4eP8hH4A8jE+DkS4AAN1dD2N31pX2AAAAAElFTkSuQmCC"
-)
+def create_mock_mask_png(width: int = 512, height: int = 512) -> str:
+    """Generates a valid binary mask PNG (mode L) matching image dimensions."""
+    w = max(1, min(width, 2048))
+    h = max(1, min(height, 2048))
+    mask = Image.new("L", (w, h), color=0)
+    draw = ImageDraw.Draw(mask)
+    line_w = max(1, w // 128)
+    draw.line([(w // 4, h // 4), (w // 2, h // 2), (3 * w // 4, 3 * h // 4)], fill=255, width=line_w)
+    buf = io.BytesIO()
+    mask.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
-SAMPLE_OVERLAY_PNG_BASE64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAALUlEQVR42mNk+M9AwMDEgAQY"
-    "GBgYgBwDAyNMMVge5AAc7vj//z8jTBzMAOUiGAB2tBDYn7bX+wAAAABJRU5ErkJggg=="
-)
 
-# Valid sample 1x1 PNG for testing
+def create_mock_overlay_png(width: int = 512, height: int = 512) -> str:
+    """Generates a valid tinted overlay PNG (mode RGB) matching image dimensions."""
+    w = max(1, min(width, 2048))
+    h = max(1, min(height, 2048))
+    overlay = Image.new("RGB", (w, h), color=(10, 10, 10))
+    draw = ImageDraw.Draw(overlay)
+    line_w = max(1, w // 128)
+    draw.line([(w // 4, h // 4), (w // 2, h // 2), (3 * w // 4, 3 * h // 4)], fill=(0, 255, 128), width=line_w)
+    buf = io.BytesIO()
+    overlay.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+# Pre-generated valid sample PNGs for fast reference & testing
 SAMPLE_VALID_PNG_BASE64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGA"
     "WjR9awAAAABJRU5ErkJggg=="
 )
+SAMPLE_MASK_PNG_BASE64 = create_mock_mask_png(512, 512)
+SAMPLE_OVERLAY_PNG_BASE64 = create_mock_overlay_png(512, 512)
 
 
 def inspect_image(base64_str: str) -> Tuple[int, int, int]:
     """
     Decodes base64 string and validates that it represents a valid image file.
-    Extracts width, height, and channels.
-    STRICT: Rejects corrupted Base64 and non-image data with InvalidImagePayloadError.
-    NEVER falls back to fake dimensions for invalid inputs.
+    Uses Pillow verify() then load() to strictly ensure full pixel decoding.
+    Rejects corrupted data, truncated images, header-only images, and unsupported formats.
+    NEVER falls back to fake dimensions or raw header parsing.
     """
     if not base64_str or not base64_str.strip():
         raise InvalidImagePayloadError("Chuỗi image_base64 rỗng hoặc chỉ chứa khoảng trắng.")
@@ -64,90 +86,49 @@ def inspect_image(base64_str: str) -> Tuple[int, int, int]:
     except Exception as e:
         raise InvalidImagePayloadError(f"Chuỗi Base64 không hợp lệ hoặc bị hỏng mã hóa: {str(e)}")
 
+    # 2. Check maximum raw payload size
+    if len(image_data) > MAX_IMAGE_BYTES:
+        raise InvalidImagePayloadError(
+            f"Dung lượng ảnh ({len(image_data)} bytes) vượt quá giới hạn tối đa cho phép ({MAX_IMAGE_BYTES} bytes)."
+        )
+
     if len(image_data) < 12:
         raise InvalidImagePayloadError("Dữ liệu sau khi giải mã quá ngắn (<12 bytes), không phải tệp ảnh hợp lệ.")
 
-    # 2. Try Pillow if available
+    # 3. Pillow validation: verify() followed by reopen and load()
     try:
-        from PIL import Image
         with Image.open(io.BytesIO(image_data)) as img:
             img.verify()
         with Image.open(io.BytesIO(image_data)) as img:
+            img.load()  # Force complete decoding of all pixel data (detects truncated / bad CRC)
+            format_name = (img.format or "").upper()
             width, height = img.size
             channels = len(img.getbands()) if hasattr(img, "getbands") else 3
-            if width > 0 and height > 0:
-                return width, height, channels
-    except Exception:
-        pass
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as e:
+        raise InvalidImagePayloadError(
+            f"Dữ liệu gửi lên không phải là tệp ảnh hợp lệ hoặc bị cắt cụt/lỗi CRC: {str(e)}"
+        )
 
-    # 3. Binary header inspection (PNG, JPEG, WebP, BMP)
-    # PNG: Signature \x89PNG\r\n\x1a\n (8 bytes)
-    if image_data.startswith(b"\x89PNG\r\n\x1a\n") and len(image_data) >= 24:
-        try:
-            width, height = struct.unpack(">II", image_data[16:24])
-            if width > 0 and height > 0:
-                return width, height, 3
-        except Exception:
-            pass
+    # 4. Check supported format (PNG, JPEG, WEBP)
+    if format_name not in SUPPORTED_FORMATS:
+        raise InvalidImagePayloadError(
+            f"Định dạng ảnh '{format_name}' không được hỗ trợ. Chỉ chấp nhận các định dạng: PNG, JPEG, WEBP."
+        )
 
-    # JPEG: Signature \xff\xd8
-    if image_data.startswith(b"\xff\xd8"):
-        try:
-            offset = 2
-            while offset < len(image_data) - 8:
-                if image_data[offset] != 0xff:
-                    offset += 1
-                    continue
-                marker = image_data[offset + 1]
-                if marker in (0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf):
-                    height, width = struct.unpack(">HH", image_data[offset + 5:offset + 9])
-                    channels = image_data[offset + 9] if len(image_data) > offset + 9 else 3
-                    if width > 0 and height > 0:
-                        return width, height, channels
-                else:
-                    if offset + 4 <= len(image_data):
-                        length = struct.unpack(">H", image_data[offset + 2:offset + 4])[0]
-                        offset += 2 + length
-                    else:
-                        break
-        except Exception:
-            pass
+    # 5. Check resolution / pixel count limits
+    if width <= 0 or height <= 0:
+        raise InvalidImagePayloadError(f"Kích thước ảnh ({width}x{height}) không hợp lệ.")
+    if width * height > MAX_PIXELS:
+        raise InvalidImagePayloadError(
+            f"Độ phân giải ảnh ({width}x{height} = {width * height} pixels) vượt quá giới hạn ({MAX_PIXELS} pixels)."
+        )
 
-    # WebP: Signature RIFF....WEBP
-    if image_data.startswith(b"RIFF") and len(image_data) >= 30 and image_data[8:12] == b"WEBP":
-        try:
-            if image_data[12:16] == b"VP8 ":
-                w_raw, h_raw = struct.unpack("<HH", image_data[26:30])
-                width = w_raw & 0x3fff
-                height = h_raw & 0x3fff
-                if width > 0 and height > 0:
-                    return width, height, 3
-            elif image_data[12:16] == b"VP8L" and len(image_data) >= 25:
-                b1, b2, b3, b4 = image_data[21:25]
-                width = 1 + (((b2 & 0x3f) << 8) | b1)
-                height = 1 + (((b4 & 0xf) << 10) | (b3 << 2) | ((b2 & 0xc0) >> 6))
-                if width > 0 and height > 0:
-                    return width, height, 3
-        except Exception:
-            pass
-
-    # BMP: Signature BM
-    if image_data.startswith(b"BM") and len(image_data) >= 26:
-        try:
-            width, height = struct.unpack("<ii", image_data[18:26])
-            if abs(width) > 0 and abs(height) > 0:
-                return abs(width), abs(height), 3
-        except Exception:
-            pass
-
-    raise InvalidImagePayloadError(
-        "Dữ liệu gửi lên không phải là tệp ảnh hợp lệ. Hỗ trợ các định dạng: PNG, JPEG, WEBP."
-    )
+    return width, height, channels
 
 
 def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
     """
-    Simulates AI vessel segmentation and risk heuristic calculation.
+    Simulates AI vessel segmentation and risk heuristic calculation for pipeline integration.
     Returns a complete, fully populated AnalysisResponse conforming to week 1 contract.
     """
     start_time = time.perf_counter()
@@ -162,7 +143,7 @@ def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
         modality=request.modality
     )
 
-    # 2. Mock vessel geometric metrics (Retina vessel geometry standards)
+    # 2. Mock vessel geometric metrics (Simulated values for integration testing)
     metrics = VesselMetrics(
         vessel_density=0.1485,
         tortuosity_index=1.165,
@@ -171,33 +152,33 @@ def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
         branching_points=62
     )
 
-    # 3. Mock Heuristic Risk Assessment (NFR-21 compliant)
+    # 3. Mock Heuristic Risk Assessment (NFR-21 compliant, explicitly marked as mock)
     risk_assessment = RiskAssessment(
         risk_score=0.32,
         risk_level=RiskLevel.LOW,
         confidence_score=0.91,
         indicators=[
-            "Mật độ mạch máu võng mạc trong giới hạn bình thường (14.85%)",
-            "Chỉ số xoắn mạch (Tortuosity index 1.165) nằm trong khoảng an toàn (<1.25)",
-            "Tỷ lệ động mạch/tĩnh mạch AVR (0.672) phù hợp tiêu chuẩn tham chiếu (0.65 - 0.70)"
+            "[MOCK] Giá trị giả lập mật độ mạch (vessel_density=0.1485) phục vụ kiểm thử tích hợp",
+            "[MOCK] Giá trị giả lập chỉ số uốn lượn (tortuosity_index=1.165) phục vụ kiểm thử tích hợp",
+            "[MOCK] Giá trị giả lập tỷ lệ động/tĩnh mạch (av_ratio=0.672) phục vụ kiểm thử tích hợp"
         ],
         disclaimer=(
-            "Kết quả ước lượng dựa trên phân tích hình thái học võng mạc (Heuristic). "
-            "Mang tính chất tham khảo kỹ thuật, không thay thế chẩn đoán y khoa chính thức từ bác sĩ chuyên khoa."
+            "Kết quả hoàn toàn là dữ liệu giả lập (Mock Engine v0.1) phục vụ tích hợp giao diện M5 và Worker M2. "
+            "Không phải kết quả chẩn đoán y tế thực tế và không thay thế kết luận của bác sĩ chuyên khoa."
         )
     )
 
-    # 4. Mock Segmentation Output
+    # 4. Mock Segmentation Output (valid PNGs matching input dimensions)
     segmentation = None
     if request.include_mask or request.include_overlay:
         segmentation = SegmentationResult(
             mask_format="png_base64",
-            mask_base64=SAMPLE_MASK_PNG_BASE64 if request.include_mask else None,
-            overlay_base64=SAMPLE_OVERLAY_PNG_BASE64 if request.include_overlay else None
+            mask_base64=create_mock_mask_png(width, height) if request.include_mask else None,
+            overlay_base64=create_mock_overlay_png(width, height) if request.include_overlay else None
         )
 
-    # 5. Measure latency
-    elapsed_ms = round((time.perf_counter() - start_time) * 1000 + 45.0, 2)
+    # 5. Measure latency (pure actual measured execution time, no artificial offset)
+    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
     timestamp = datetime.now(timezone.utc).isoformat()
 
     return AnalysisResponse(
@@ -209,7 +190,7 @@ def process_mock_analysis(request: AnalysisRequest) -> AnalysisResponse:
         model_version="mock-v0.1",
         threshold_version="v0.1",
         config_version="v0.1",
-        limitations="Kết quả mô phỏng (Mock Engine) phục vụ tích hợp giao diện M5 và Backend M2.",
+        limitations="Kết quả mô phỏng (Mock Engine v0.1) phục vụ tích hợp giao diện M5 và Worker M2; chưa tích hợp mô hình phân vùng thực tế.",
         processing_time_ms=elapsed_ms,
         image_info=image_info,
         metrics=metrics,
