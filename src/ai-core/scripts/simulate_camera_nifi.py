@@ -1,280 +1,212 @@
 """
-AURA Camera Ingestion Pipeline Test & Simulation Harness (Module M4 - SCRUM-63 & SCRUM-290).
+Camera test client for the current AURA NiFi ingestion flow.
 
-Provides:
-1. Logic verification test suite mimicking NiFi pipeline rules (validation, deduplication, retry, quarantine, correlation headers).
-2. Live HTTP test client for testing running Apache NiFi instance (http://localhost:8081/ingest/camera).
+Default: prepare and describe test requests without sending.
+--live: send requests to ListenHTTP.
 
-Note: Running in simulation mode (--mock) verifies pipeline business logic locally and does NOT
-constitute proof that the live containerized Apache NiFi service is running. Live verification
-requires a running NiFi instance with --live flag.
+HTTP 200 confirms ingress receipt only.
+Inspect NiFi queues and quarantine files to verify routing.
+This script does not verify Gateway, authentication, dedup or retry.
 """
+
 import argparse
 import base64
 import json
 import sys
-import time
 import urllib.error
 import urllib.request
-from typing import Dict, Any, Tuple, List, Optional
+import uuid
+from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-SAMPLE_PNG_BASE64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGA"
-    "WjR9awAAAABJRU5ErkJggg=="
-)
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_IMAGE = REPO_ROOT / "datasets/CHASE_DB1/raw/Image_03L.jpg"
+DEFAULT_PATIENT = "11111111-1111-4111-8111-111111111111"
 
 
-class MockNiFiPipeline:
-    """
-    Simulates Apache NiFi process group behavior as defined in infra/nifi/camera_ingestion_flow.json.
-    """
+def json_bytes(payload):
+    return json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
 
-    def __init__(self, gateway_fail_attempts: int = 0):
-        self.seen_request_ids = set()
-        self.quarantine_queue: List[Dict[str, Any]] = []
-        self.gateway_forwarded: List[Dict[str, Any]] = []
-        self.audit_log: List[str] = []
-        self.gateway_fail_attempts = gateway_fail_attempts
-        self.gateway_call_count = 0
 
-    def process_camera_flowfile(self, payload: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
-        """
-        Simulates:
-        ListenHTTP -> EvaluateJsonPath -> RouteOnAttribute -> DetectDuplicate ->
-        UpdateAttribute (trace headers) -> InvokeHTTP (with Retry & Quarantine)
-        """
-        req_id = payload.get("request_id", "").strip() if payload.get("request_id") else ""
-        modality = payload.get("modality", "").strip().upper() if payload.get("modality") else ""
-        b64 = payload.get("image_base64", "").strip() if payload.get("image_base64") else ""
+def build_cases(image_bytes, patient_id):
+    image_base64 = base64.b64encode(image_bytes).decode("ascii")
 
-        correlation_id = req_id if req_id else f"corr-anon-{int(time.time()*1000)}"
-        idempotency_key = f"idemp-{req_id}" if req_id else f"idemp-anon-{int(time.time()*1000)}"
-
-        # 1. Validation (RouteOnAttribute-Validation)
-        if not req_id:
-            reason = "MISSING_REQUEST_ID"
-            entry = {
-                "payload": payload,
-                "reason": reason,
-                "correlation_id": correlation_id,
-                "timestamp": time.time(),
-            }
-            self.quarantine_queue.append(entry)
-            return "QUARANTINE", reason, entry
-
-        if modality == "OCT":
-            reason = "UNSUPPORTED_MODALITY: OCT (Chỉ hỗ trợ FUNDUS)"
-            entry = {
-                "payload": payload,
-                "reason": reason,
-                "correlation_id": correlation_id,
-                "timestamp": time.time(),
-            }
-            self.quarantine_queue.append(entry)
-            return "QUARANTINE", reason, entry
-
-        if modality != "FUNDUS" or not b64 or len(b64) < 16:
-            reason = f"INVALID_PAYLOAD: modality '{modality}', image_len {len(b64)}"
-            entry = {
-                "payload": payload,
-                "reason": reason,
-                "correlation_id": correlation_id,
-                "timestamp": time.time(),
-            }
-            self.quarantine_queue.append(entry)
-            return "QUARANTINE", reason, entry
-
-        # 2. Deduplication (DetectDuplicate-RequestId via DistributedMapCacheClient)
-        if req_id in self.seen_request_ids:
-            reason = f"DUPLICATE_DETECTED: request_id '{req_id}' đã tồn tại trong 24h"
-            entry = {
-                "payload": payload,
-                "reason": reason,
-                "correlation_id": correlation_id,
-                "timestamp": time.time(),
-            }
-            self.quarantine_queue.append(entry)
-            return "QUARANTINE", reason, entry
-
-        self.seen_request_ids.add(req_id)
-
-        # 3. Add Trace Headers (UpdateAttribute-AddTraceHeaders)
-        headers = {
-            "X-Correlation-Id": correlation_id,
-            "Idempotency-Key": idempotency_key,
-            "X-Device-Id": str(payload.get("device_id", "UNKNOWN")),
+    def payload():
+        return {
+            "request_id": str(uuid.uuid4()),
+            "patient_id": patient_id,
+            "device_id": "CAM-DEMO",
+            "modality": "FUNDUS",
+            "eye_side": "left",
+            "image_base64": image_base64,
         }
 
-        # 4. Forward to Gateway & Retry Backoff (InvokeHTTP & RetryFlowFile)
-        max_retries = 3
-        retry_count = 0
-        while retry_count <= max_retries:
-            self.gateway_call_count += 1
-            if self.gateway_call_count <= self.gateway_fail_attempts:
-                # Simulated Gateway 503 / Timeout
-                retry_count += 1
-                if retry_count > max_retries:
-                    reason = f"RETRIES_EXCEEDED: Gateway lỗi sau {max_retries} lần thử"
-                    entry = {
-                        "payload": payload,
-                        "reason": reason,
-                        "correlation_id": correlation_id,
-                        "retries": retry_count,
-                        "timestamp": time.time(),
-                    }
-                    self.quarantine_queue.append(entry)
-                    return "QUARANTINE", reason, entry
-                continue
+    cases = []
 
-            # Gateway Success (202 Accepted)
-            forward_data = {
-                "requestId": req_id,
-                "patientId": payload.get("patient_id"),
-                "deviceId": payload.get("device_id"),
-                "modality": modality,
-                "eyeSide": payload.get("eye_side", "unknown"),
-                "imagePayload": b64,
-                "headers": headers,
-                "timestamp": time.time(),
-            }
-            self.gateway_forwarded.append(forward_data)
-            self.audit_log.append(f"SUCCESS: Forwarded {req_id} [CorrId: {correlation_id}]")
-            return "SUCCESS", f"Forwarded to Gateway (202 Accepted) [Retries: {retry_count}]", forward_data
+    valid = payload()
+    cases.append((
+        "ValidFundus",
+        json_bytes(valid),
+        valid["request_id"],
+        "Queue before PreparedMultipart-PendingGateway",
+    ))
 
+    unsupported = payload()
+    unsupported["modality"] = "OCT"
+    cases.append((
+        "UnsupportedModality",
+        json_bytes(unsupported),
+        unsupported["request_id"],
+        "quarantine/UnsupportedModality",
+    ))
 
-def run_simulation_tests():
-    print("=" * 75)
-    print("AURA Camera Ingestion - Logic Verification Test Suite (SCRUM-63 & SCRUM-290)")
-    print("Mode: Local Mock Simulator (Logic Verification)")
-    print("=" * 75)
+    missing = payload()
+    del missing["patient_id"]
+    cases.append((
+        "MissingPatient",
+        json_bytes(missing),
+        missing["request_id"],
+        "quarantine/unmatched",
+    ))
 
-    nifi = MockNiFiPipeline(gateway_fail_attempts=0)
+    missing_image = payload()
+    del missing_image["image_base64"]
+    cases.append((
+        "MissingImage",
+        json_bytes(missing_image),
+        missing_image["request_id"],
+        "quarantine/MISSING_IMAGE_BASE64",
+    ))
 
-    # Scenario 1: Valid Fundus Image
-    p1 = {
-        "request_id": "cam_req_test_001",
-        "patient_id": "PAT-001",
-        "device_id": "TOPCON-TRC-NW400",
-        "modality": "FUNDUS",
-        "eye_side": "right",
-        "image_base64": SAMPLE_PNG_BASE64,
-    }
-    route, msg, data = nifi.process_camera_flowfile(p1)
-    print(f"[Scenario 1] Valid Fundus Upload          -> Route: {route} | Msg: {msg}")
-    assert route == "SUCCESS", "Scenario 1 should succeed"
-    assert data["headers"]["X-Correlation-Id"] == "cam_req_test_001"
-    assert data["headers"]["Idempotency-Key"] == "idemp-cam_req_test_001"
+    invalid_base64 = payload()
+    invalid_base64["image_base64"] = "@@@@"
+    cases.append((
+        "InvalidBase64",
+        json_bytes(invalid_base64),
+        invalid_base64["request_id"],
+        "quarantine/INVALID_BASE64",
+    ))
 
-    # Scenario 2: Duplicate Request ID
-    route, msg, _ = nifi.process_camera_flowfile(p1)
-    print(f"[Scenario 2] Duplicate Upload Prevention    -> Route: {route} | Msg: {msg}")
-    assert route == "QUARANTINE" and "DUPLICATE" in msg, "Scenario 2 should quarantine duplicate"
+    not_image = payload()
+    not_image["image_base64"] = base64.b64encode(
+        b"This is not an image"
+    ).decode("ascii")
+    cases.append((
+        "NotAnImage",
+        json_bytes(not_image),
+        not_image["request_id"],
+        "quarantine/INVALID_OR_UNSUPPORTED_IMAGE",
+    ))
 
-    # Scenario 3: OCT Modality (Unsupported)
-    p3 = {
-        "request_id": "cam_req_test_002",
-        "patient_id": "PAT-002",
-        "device_id": "ZEISS-CIRRUS-OCT",
-        "modality": "OCT",
-        "eye_side": "left",
-        "image_base64": SAMPLE_PNG_BASE64,
-    }
-    route, msg, _ = nifi.process_camera_flowfile(p3)
-    print(f"[Scenario 3] Unsupported OCT Modality      -> Route: {route} | Msg: {msg}")
-    assert route == "QUARANTINE" and "UNSUPPORTED_MODALITY" in msg, "Scenario 3 should quarantine OCT"
+    cases.append((
+        "InvalidJSON",
+        b'{"request_id":',
+        None,
+        "quarantine/INVALID_JSON",
+    ))
 
-    # Scenario 4: Missing Request ID / Invalid Payload
-    p4 = {
-        "request_id": "",
-        "patient_id": "PAT-003",
-        "modality": "FUNDUS",
-        "image_base64": SAMPLE_PNG_BASE64,
-    }
-    route, msg, _ = nifi.process_camera_flowfile(p4)
-    print(f"[Scenario 4] Missing Request ID / Payload  -> Route: {route} | Msg: {msg}")
-    assert route == "QUARANTINE" and "MISSING_REQUEST_ID" in msg
-
-    # Scenario 5: Gateway Transient Failure & Retry with Backoff
-    nifi_retry = MockNiFiPipeline(gateway_fail_attempts=2)
-    p5 = {
-        "request_id": "cam_req_test_005",
-        "patient_id": "PAT-005",
-        "device_id": "CANON-CR2",
-        "modality": "FUNDUS",
-        "eye_side": "right",
-        "image_base64": SAMPLE_PNG_BASE64,
-    }
-    route, msg, _ = nifi_retry.process_camera_flowfile(p5)
-    print(f"[Scenario 5] Gateway Retry Recovered       -> Route: {route} | Msg: {msg}")
-    assert route == "SUCCESS" and "Retries: 2" in msg
-
-    # Scenario 6: Gateway Outage (Exceeds Max Retries -> Quarantine)
-    nifi_outage = MockNiFiPipeline(gateway_fail_attempts=10)
-    p6 = {
-        "request_id": "cam_req_test_006",
-        "patient_id": "PAT-006",
-        "device_id": "CANON-CR2",
-        "modality": "FUNDUS",
-        "eye_side": "left",
-        "image_base64": SAMPLE_PNG_BASE64,
-    }
-    route, msg, _ = nifi_outage.process_camera_flowfile(p6)
-    print(f"[Scenario 6] Gateway Max Retries Exceeded  -> Route: {route} | Msg: {msg}")
-    assert route == "QUARANTINE" and "RETRIES_EXCEEDED" in msg
-
-    print("-" * 75)
-    print(f"Summary: Forwarded: {len(nifi.gateway_forwarded) + 1} | Quarantined: {len(nifi.quarantine_queue) + 1}")
-    print("[LOGIC SIMULATION COMPLETED] Camera ingestion logic verified locally.")
-    print("Note: Live container verification is performed by running with --live when NiFi container is active.")
-    print("=" * 75)
+    return cases
 
 
-def send_live_request(url: str, payload: Dict[str, Any]) -> Tuple[int, str]:
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+def send_request(url, body, timeout):
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status, resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", errors="replace")
-    except Exception as e:
-        return 0, str(e)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, ""
+    except urllib.error.HTTPError as error:
+        return error.code, "HTTP error"
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        return 0, str(error)
 
 
-def run_live_tests(target_url: str):
-    print("=" * 75)
-    print(f"AURA Camera Ingestion - Live Container Test against {target_url}")
-    print("=" * 75)
+def main():
+    parser = argparse.ArgumentParser(
+        description="Prepare or send camera test requests to NiFi."
+    )
+    parser.add_argument("--live", action="store_true")
+    parser.add_argument(
+        "--image", type=Path, default=DEFAULT_IMAGE
+    )
+    parser.add_argument(
+        "--patient-id", default=DEFAULT_PATIENT
+    )
+    parser.add_argument(
+        "--url", default="http://127.0.0.1:8081/ingest/camera"
+    )
+    parser.add_argument("--timeout", type=float, default=15.0)
+    args = parser.parse_args()
 
-    p1 = {
-        "request_id": f"live_cam_{int(time.time())}",
-        "patient_id": "PAT-LIVE-001",
-        "device_id": "TOPCON-TRC-LIVE",
-        "modality": "FUNDUS",
-        "eye_side": "right",
-        "image_base64": SAMPLE_PNG_BASE64,
-    }
+    if args.timeout <= 0:
+        parser.error("--timeout must be greater than zero")
 
-    code, body = send_live_request(target_url, p1)
-    print(f"[Live Test 1] Send Valid Fundus Image -> HTTP Status: {code} | Body: {body[:100]}")
-    if code == 200:
-        print("[SUCCESS] Live NiFi service is reachable and accepted the camera payload.")
+    try:
+        patient_id = str(uuid.UUID(args.patient_id))
+    except ValueError:
+        parser.error("--patient-id must be a UUID")
+
+    if not args.image.is_file():
+        parser.error(f"Image not found: {args.image}")
+
+    if not 0 < args.image.stat().st_size <= 10 * 1024 * 1024:
+        parser.error("Image must be nonempty and at most 10 MiB")
+
+    image_bytes = args.image.read_bytes()
+
+    is_png = image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    is_jpeg = image_bytes.startswith(b"\xff\xd8\xff")
+    if not (is_png or is_jpeg):
+        parser.error("Test image must have a PNG or JPEG signature")
+
+    cases = build_cases(image_bytes, patient_id)
+
+    print("Mode:", "LIVE INGRESS" if args.live else "DRY RUN")
+    print("Patient UUID:", patient_id)
+    print("The default patient UUID is synthetic, not a backend record.")
+    print("Image:", args.image)
+    print("Image bytes:", len(image_bytes))
+    print("Expected destinations require manual NiFi inspection.")
+    print()
+
+    errors = 0
+    received = 0
+
+    for name, body, request_id, expected in cases:
+        print(f"[{name}]")
+        print("  Request ID:", request_id or "(invalid JSON)")
+        print("  Expected destination:", expected)
+
+        if args.live:
+            status, error = send_request(args.url, body, args.timeout)
+            print("  HTTP:", status)
+            if status == 200:
+                received += 1
+                print("  RECEIVED by ingress; routing not verified.")
+            else:
+                errors += 1
+                print("  SEND FAILED:", error)
+        else:
+            print("  Prepared bytes:", len(body))
+            print("  Not sent.")
+        print()
+
+    if args.live:
+        print(f"Ingress received: {received}/{len(cases)}")
+        print("Inspect queues and quarantine to verify each case.")
     else:
-        print(f"[WARNING] Live NiFi returned status {code} (ensure NiFi container is running on {target_url}).")
+        print(f"Prepared {len(cases)} cases. No requests were sent.")
+
+    print("Gateway, service token, dedup and retry are NOT verified.")
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Test and simulate NiFi camera ingestion pipeline")
-    parser.add_argument("--live", action="store_true", help="Send actual HTTP requests to live NiFi service")
-    parser.add_argument("--url", default="http://localhost:8081/ingest/camera", help="Live NiFi endpoint URL")
-    args = parser.parse_args()
-
-    if args.live:
-        run_live_tests(args.url)
-    else:
-        run_simulation_tests()
+    raise SystemExit(main())

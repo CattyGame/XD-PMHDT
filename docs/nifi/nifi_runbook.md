@@ -252,9 +252,15 @@ Xem file quarantine:
 docker exec aura-nifi find /opt/nifi/quarantine -maxdepth 2 -type f
 ```
 
-Script `src/ai-core/scripts/simulate_camera_nifi.py` chưa được
-đồng bộ với flow sửa lần này. Không dùng kết quả mô phỏng của script
-để kết luận Gateway, dedup hoặc retry đã hoạt động.
+Script `src/ai-core/scripts/simulate_camera_nifi.py` chuẩn bị 7 mẫu thử.
+Mặc định chạy dry-run, không gửi HTTP.
+
+Thêm `--live` để gửi đến ListenHTTP khi các processor đã chạy
+và hai Output Port vẫn Stopped. Mỗi lượt live tạo thêm payload
+trong hàng đợi và quarantine.
+
+HTTP 200 chỉ xác nhận ingress nhận request.
+Script không tự kiểm tra routing, Gateway, service token, dedup hoặc retry.
 
 ## 8. Start, Stop và lưu cấu hình
 
