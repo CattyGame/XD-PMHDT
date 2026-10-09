@@ -8,12 +8,14 @@
     "runtime_engine": "AURA.AiCore Mock/Benchmark Engine v0.1"
   },
   "config": {
-    "dataset": "DRIVE_Test_Set",
+    "dataset": "NONE_SIMULATION_ONLY",
     "sample_count": 20,
     "seed": 42,
     "model_version": "mock-v0.1",
     "threshold_version": "v0.1",
-    "config_version": "v0.1"
+    "config_version": "v0.1",
+    "original_dataset_claim": "DRIVE_Test_Set",
+    "sample_count_description": "Simulation iterations; not a count of real retinal images."
   },
   "accuracy_metrics": {
     "mean_dice": 0.7927,
@@ -161,7 +163,8 @@
         "sensitivity": 0.752,
         "specificity": 0.9674
       }
-    ]
+    ],
+    "is_simulated": true
   },
   "latency_metrics": {
     "median_ms": 422.25,
@@ -188,23 +191,42 @@
       440.36,
       463.22,
       407.02
-    ]
+    ],
+    "is_simulated": true,
+    "measurement_scope": "Simulation; not measured image inference or end-to-end processing."
   },
   "nfr_compliance": {
     "NFR-1": {
       "requirement": "10-20 seconds per image for end-to-end processing pipeline",
       "inference_component_p95_ms": 463.28,
-      "status": "PASSED (Latency budget surplus available for RabbitMQ queue and persistence)"
+      "status": "NOT_VERIFIED",
+      "previous_status": "PASSED (Latency budget surplus available for RabbitMQ queue and persistence)"
     },
     "NFR-22": {
       "requirement": "Explainability via visual segmentation masks and geometric indicators",
-      "status": "PASSED"
+      "status": "NOT_VERIFIED",
+      "previous_status": "PASSED"
     },
     "NFR-23": {
       "requirement": "Traceability of model version and risk threshold",
       "model_version": "mock-v0.1",
       "threshold_version": "v0.1",
-      "status": "PASSED"
+      "status": "NOT_VERIFIED",
+      "previous_status": "PASSED"
     }
+  },
+  "validation_status": {
+    "status": "SIMULATION_ONLY",
+    "review_date": "2026-10-09",
+    "real_dataset_evaluated": false,
+    "valid_for_accuracy_claims": false,
+    "valid_for_inference_latency_claims": false,
+    "valid_for_end_to_end_nfr_claims": false,
+    "reason": "The original script generated simulated accuracy and latency values without evaluating real retinal images and reference masks."
+  },
+  "next_real_benchmark": {
+    "dataset": "CHASE_DB1",
+    "manifest": "docs/datasets/chase_db1/manifest.csv",
+    "status": "NOT_RUN"
   }
 }

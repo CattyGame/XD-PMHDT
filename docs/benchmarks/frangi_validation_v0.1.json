@@ -1,0 +1,161 @@
+{
+  "status": "VALIDATION_THRESHOLD_SELECTION",
+  "timestamp_utc": "2026-10-09T04:17:45.501490+00:00",
+  "dataset": "CHASE_DB1",
+  "split": "validation",
+  "sample_count": 6,
+  "reference_mask": "1stHO",
+  "evaluation_region": "whole_image",
+  "manifest_sha256": "2fbfb652d7c824fa53608d1aff7aeaefcadcc90a96f264d35dac84e1023bcc76",
+  "environment": {
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.8",
+    "Pillow": "12.3.0",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "scikit_image": "0.26.0"
+  },
+  "algorithm": {
+    "name": "frangi",
+    "version": "frangi-baseline-v0.1",
+    "input": "green_channel_divided_by_255",
+    "sigmas": [
+      1,
+      2,
+      3
+    ],
+    "alpha": 0.5,
+    "beta": 0.5,
+    "gamma": null,
+    "black_ridges": true,
+    "boundary_mode": "reflect",
+    "response_normalization": "divide_by_each_image_max",
+    "resize": false,
+    "postprocessing": "threshold_only",
+    "selected_threshold": 0.05
+  },
+  "threshold_candidates": [
+    {
+      "threshold": 0.05,
+      "mean_dice": 0.21279183165232254,
+      "mean_iou": 0.12120243232243184
+    },
+    {
+      "threshold": 0.1,
+      "mean_dice": 0.10862407034940207,
+      "mean_iou": 0.05816472079626145
+    },
+    {
+      "threshold": 0.15,
+      "mean_dice": 0.055910592372969324,
+      "mean_iou": 0.028962841121855095
+    },
+    {
+      "threshold": 0.2,
+      "mean_dice": 0.03074139439615269,
+      "mean_iou": 0.01566864979734681
+    },
+    {
+      "threshold": 0.25,
+      "mean_dice": 0.017725852180036156,
+      "mean_iou": 0.008961356463919781
+    }
+  ],
+  "accuracy_metrics": {
+    "mean_dice": 0.21279183165232254,
+    "mean_iou": 0.12120243232243184,
+    "mean_sensitivity": 0.15850739878267925,
+    "mean_specificity": 0.9775667287417465
+  },
+  "latency_metrics": {
+    "scope": "green extraction, Frangi, normalization, threshold",
+    "excludes": "disk I/O, metrics, PNG output, API, queue, database",
+    "warmup_performed": false,
+    "median_ms": 1130.8202500076732,
+    "p95_ms": 1152.2677750072035,
+    "max_ms": 1154.3685000069672,
+    "note": "Descriptive timing on 6 images; not a stable performance estimate."
+  },
+  "samples": [
+    {
+      "image": "Image_04L.jpg",
+      "subject_id": "04",
+      "dice": 0.25728704963356297,
+      "iou": 0.14763593142488768,
+      "sensitivity": 0.19498988931460196,
+      "specificity": 0.9727222946308968,
+      "tp": 14657,
+      "fp": 24110,
+      "fn": 60511,
+      "tn": 859762,
+      "local_segmentation_ms": 1109.0045000019018
+    },
+    {
+      "image": "Image_04R.jpg",
+      "subject_id": "04",
+      "dice": 0.062106518940244035,
+      "iou": 0.0320484688901892,
+      "sensitivity": 0.03561172518422193,
+      "specificity": 0.9907276868018653,
+      "tp": 2629,
+      "fp": 8208,
+      "fn": 71195,
+      "tn": 877008,
+      "local_segmentation_ms": 1132.3812000046019
+    },
+    {
+      "image": "Image_05L.jpg",
+      "subject_id": "05",
+      "dice": 0.2556052575984422,
+      "iou": 0.14652948176543068,
+      "sensitivity": 0.18322118486719954,
+      "specificity": 0.9784667404220818,
+      "tp": 13914,
+      "fp": 19016,
+      "fn": 62027,
+      "tn": 864083,
+      "local_segmentation_ms": 1154.3685000069672
+    },
+    {
+      "image": "Image_05R.jpg",
+      "subject_id": "05",
+      "dice": 0.31454609397697214,
+      "iou": 0.18662396690466038,
+      "sensitivity": 0.25190110576393226,
+      "specificity": 0.96744386962503,
+      "tp": 20571,
+      "fp": 28564,
+      "fn": 61092,
+      "tn": 848813,
+      "local_segmentation_ms": 1107.6705000159563
+    },
+    {
+      "image": "Image_10L.jpg",
+      "subject_id": "10",
+      "dice": 0.1876507422463284,
+      "iou": 0.10354005523135941,
+      "sensitivity": 0.13792529462680606,
+      "specificity": 0.9778066752394979,
+      "tp": 8286,
+      "fp": 19951,
+      "fn": 51790,
+      "tn": 879013,
+      "local_segmentation_ms": 1129.2593000107445
+    },
+    {
+      "image": "Image_10R.jpg",
+      "subject_id": "10",
+      "dice": 0.1995553275183855,
+      "iou": 0.11083668971806368,
+      "sensitivity": 0.1473951929393138,
+      "specificity": 0.9782331057311078,
+      "tp": 8751,
+      "fp": 19583,
+      "fn": 50620,
+      "tn": 880086,
+      "local_segmentation_ms": 1145.9656000079121
+    }
+  ],
+  "test_evaluated": false,
+  "end_to_end_nfr_status": "NOT_VERIFIED"
+}

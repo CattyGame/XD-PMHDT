@@ -1,0 +1,192 @@
+{
+  "status": "VALIDATION_THRESHOLD_SELECTION",
+  "timestamp_utc": "2026-10-09T04:27:58.581631+00:00",
+  "dataset": "CHASE_DB1",
+  "split": "validation",
+  "sample_count": 6,
+  "reference_mask": "1stHO",
+  "evaluation_region": "whole_image",
+  "manifest_sha256": "2fbfb652d7c824fa53608d1aff7aeaefcadcc90a96f264d35dac84e1023bcc76",
+  "script_sha256": "3298614b6194a71562db63fa62c18755eeb9448cbfdeb01c85b75e6cc1770126",
+  "environment": {
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.14.8",
+    "Pillow": "12.3.0",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "scikit_image": "0.26.0"
+  },
+  "algorithm": {
+    "name": "frangi",
+    "version": "frangi-baseline-v0.2",
+    "input": "green_channel_divided_by_255",
+    "smoothing_sigma": 1.0,
+    "smoothing_boundary_mode": "nearest",
+    "prediction_region": {
+      "method": "max_rgb_threshold_fill_holes_erode",
+      "max_rgb_threshold": 20,
+      "erosion_structure": "3x3_ones",
+      "erosion_iterations": 12,
+      "uses_reference_labels": false,
+      "is_official_fov_mask": false
+    },
+    "sigmas": [
+      1,
+      2,
+      3,
+      5,
+      8
+    ],
+    "alpha": 0.5,
+    "beta": 0.5,
+    "gamma": null,
+    "black_ridges": true,
+    "boundary_mode": "reflect",
+    "response_normalization": "divide_by_max_after_region_suppression",
+    "resize": false,
+    "postprocessing": "region_suppression_and_threshold",
+    "selected_threshold": 0.02,
+    "selection_metric": "highest_mean_validation_dice",
+    "tie_break": "first_threshold_in_ascending_candidate_list"
+  },
+  "threshold_candidates": [
+    {
+      "threshold": 0.005,
+      "mean_dice": 0.3475477940399612,
+      "mean_iou": 0.21039555127499066
+    },
+    {
+      "threshold": 0.01,
+      "mean_dice": 0.37377607800822105,
+      "mean_iou": 0.2299486242619947
+    },
+    {
+      "threshold": 0.02,
+      "mean_dice": 0.38919064257272473,
+      "mean_iou": 0.2422803988819152
+    },
+    {
+      "threshold": 0.03,
+      "mean_dice": 0.377034246191875,
+      "mean_iou": 0.23400792005148538
+    },
+    {
+      "threshold": 0.05,
+      "mean_dice": 0.32550716969159554,
+      "mean_iou": 0.19769596599014735
+    },
+    {
+      "threshold": 0.08,
+      "mean_dice": 0.24444303830790662,
+      "mean_iou": 0.14270451267128675
+    },
+    {
+      "threshold": 0.1,
+      "mean_dice": 0.19938961689253246,
+      "mean_iou": 0.11362307499366621
+    },
+    {
+      "threshold": 0.15,
+      "mean_dice": 0.11851835960947778,
+      "mean_iou": 0.06436801131926727
+    }
+  ],
+  "accuracy_metrics": {
+    "mean_dice": 0.38919064257272473,
+    "mean_iou": 0.2422803988819152,
+    "mean_sensitivity": 0.414016174257337,
+    "mean_specificity": 0.9437205972734369
+  },
+  "latency_metrics": {
+    "scope": "green extraction, smoothing, region estimation, Frangi, normalization, threshold",
+    "excludes": "disk I/O, SHA-256 verification, metrics, PNG output, API, queue, database",
+    "warmup_performed": false,
+    "median_ms": 1929.3416500004241,
+    "p95_ms": 2933.9326250010345,
+    "percentile_method": "linear",
+    "max_ms": 2965.4458000004524,
+    "note": "Descriptive timing on 6 images; not a stable performance estimate or end-to-end latency."
+  },
+  "samples": [
+    {
+      "image": "Image_04L.jpg",
+      "subject_id": "04",
+      "dice": 0.4043321299638989,
+      "iou": 0.25339366515837103,
+      "sensitivity": 0.4119838229033631,
+      "specificity": 0.946773967271279,
+      "tp": 30968,
+      "fp": 47045,
+      "fn": 44200,
+      "tn": 836827,
+      "local_segmentation_ms": 1896.7923000018345
+    },
+    {
+      "image": "Image_04R.jpg",
+      "subject_id": "04",
+      "dice": 0.3668156934989853,
+      "iou": 0.22460152968580913,
+      "sensitivity": 0.3317484828781968,
+      "specificity": 0.9602153598669704,
+      "tp": 24491,
+      "fp": 35218,
+      "fn": 49333,
+      "tn": 849998,
+      "local_segmentation_ms": 2965.4458000004524
+    },
+    {
+      "image": "Image_05L.jpg",
+      "subject_id": "05",
+      "dice": 0.41729560626798134,
+      "iou": 0.263659852035918,
+      "sensitivity": 0.49181601506432626,
+      "specificity": 0.9255859195854599,
+      "tp": 37349,
+      "fp": 65715,
+      "fn": 38592,
+      "tn": 817384,
+      "local_segmentation_ms": 2839.3931000027806
+    },
+    {
+      "image": "Image_05R.jpg",
+      "subject_id": "05",
+      "dice": 0.445770844985031,
+      "iou": 0.2868115319717688,
+      "sensitivity": 0.5807281143235002,
+      "specificity": 0.9046179692424123,
+      "tp": 47424,
+      "fp": 83686,
+      "fn": 34239,
+      "tn": 793691,
+      "local_segmentation_ms": 1961.8909999990137
+    },
+    {
+      "image": "Image_10L.jpg",
+      "subject_id": "10",
+      "dice": 0.33241727000492777,
+      "iou": 0.1993407967267148,
+      "sensitivity": 0.2919468673014182,
+      "specificity": 0.9689542629070798,
+      "tp": 17539,
+      "fp": 27909,
+      "fn": 42537,
+      "tn": 871055,
+      "local_segmentation_ms": 1673.464999999851
+    },
+    {
+      "image": "Image_10R.jpg",
+      "subject_id": "10",
+      "dice": 0.3685123107155242,
+      "iou": 0.22587501771290916,
+      "sensitivity": 0.3758737430732176,
+      "specificity": 0.95617610476742,
+      "tp": 22316,
+      "fp": 39427,
+      "fn": 37055,
+      "tn": 860242,
+      "local_segmentation_ms": 1671.3911999977427
+    }
+  ],
+  "test_evaluated": false,
+  "end_to_end_nfr_status": "NOT_VERIFIED"
+}
