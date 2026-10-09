@@ -1,3 +1,5 @@
+> SUPERSEDED: bộ hợp đồng đang sửa dùng BASELINE-W1-v0.2.md (REST 0.6.0, event/job 0.6). Nội dung bên dưới là lịch sử v0.5, không dùng hash này để kiểm tra v0.6.
+
 # BASELINE-W1-v0.1 - Hợp đồng Analysis REST và event
 
 - Phiên bản file hợp đồng: **0.5.0** (schemaVersion event và job: 0.5)

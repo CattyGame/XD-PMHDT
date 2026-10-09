@@ -34,7 +34,8 @@
         "kind": "heatmap"
       }
     ],
-    "configVersion": "cfg-0.1"
+    "configVersion": "cfg-0.1",
+    "version": 1
   },
   "ownerId": "9b2e5c10-1111-4a2b-8c3d-000000000001",
   "image": {
@@ -44,6 +45,8 @@
   "job": {
     "jobId": "a0000000-0000-4000-8000-000000000001",
     "status": "SUCCEEDED",
-    "retryCount": 0
-  }
+    "retryCount": 0,
+    "attemptNo": 1
+  },
+  "requesterId": "9b2e5c10-1111-4a2b-8c3d-000000000001"
 }

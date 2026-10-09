@@ -33,8 +33,8 @@ class InvalidImagePayloadError(ValueError):
 
 def create_mock_mask_png(width: int = 512, height: int = 512) -> str:
     """Generates a valid binary mask PNG (mode L) matching image dimensions."""
-    w = max(1, min(width, 2048))
-    h = max(1, min(height, 2048))
+    w = width
+    h = height
     mask = Image.new("L", (w, h), color=0)
     draw = ImageDraw.Draw(mask)
     line_w = max(1, w // 128)
@@ -46,8 +46,8 @@ def create_mock_mask_png(width: int = 512, height: int = 512) -> str:
 
 def create_mock_overlay_png(width: int = 512, height: int = 512) -> str:
     """Generates a valid tinted overlay PNG (mode RGB) matching image dimensions."""
-    w = max(1, min(width, 2048))
-    h = max(1, min(height, 2048))
+    w = width
+    h = height
     overlay = Image.new("RGB", (w, h), color=(10, 10, 10))
     draw = ImageDraw.Draw(overlay)
     line_w = max(1, w // 128)

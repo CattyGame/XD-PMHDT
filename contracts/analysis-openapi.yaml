@@ -1,26 +1,43 @@
 openapi: 3.0.3
 info:
   title: AURA Analysis API
-  version: 0.5.0
-  description: |-
-    Hợp đồng REST công khai của Analysis Service (SCRUM-280) - **v0.5 - ứng viên baseline tuần 1 (BASELINE-W1-v0.1), chờ M1/M4/M5 xác nhận**.
+  version: 0.6.0
+  description: 'Hợp đồng REST Analysis v0.6.0 — dự thảo đồng bộ ERD, State Machine và ma trận quyền v0.3.
 
-    Căn cứ: ADR-002/003/008 (M1), State Machine SCRUM-52, ERD SCRUM-53, hợp đồng AI SCRUM-61, yêu cầu chỉnh sửa của nhóm trưởng cho M2.
+    Thay đổi so với v0.5.0: chỉ FUNDUS; review không nhận lý do toàn khoảng trắng; bổ sung version kết quả, attemptNo
+    và tổng hợp batch; chuẩn hóa phạm vi idempotency.
 
-    Nguyên tắc:
-    - Kết quả AI là **sàng lọc hỗ trợ quyết định lâm sàng**, không phải chẩn đoán (BR-05).
-    - Mỗi ảnh trong batch là một analysis riêng, có `processingStatus`, `job` và `result` hoặc `error` riêng.
-    - `processingStatus` (xử lý) tách riêng `reviewStatus` (bác sĩ).
-    - Ảnh chất lượng kém là `LOW_QUALITY`, không có `result`, không được hiểu là nguy cơ thấp (BR-12).
-    - Ảnh và annotation là tệp riêng tư: API chỉ trả `fileId`; muốn đọc phải gọi endpoint `/files/{fileId}/access` để được kiểm tra quyền rồi cấp URL ký có thời hạn. Object key chỉ nằm trong database.
-    - Tenant và vai trò lấy từ token; mọi truy vấn lọc theo tenant (NFR-12, BR-15). Mỗi operation ghi vai trò được phép ở `x-roles`.
-    - Analysis không sửa bảng credit; phối hợp Billing qua API và event (BR-08, BR-09).
-    - `analysis.failed` có thể mô tả một lần xử lý lỗi có thể retry. Billing chỉ release credit khi lỗi đã kết thúc (retryable=false); không release ở lỗi tạm thời còn retry.
-    - Mã lỗi ERR_*; tên trạng thái khớp State Machine SCRUM-52 (processing_status, review_status, job.status).
-    - JSON public dùng camelCase. Ví dụ là dữ liệu giả; `result.isMock` đánh dấu kết quả giả lập.
+    Đây là đặc tả triển khai, chưa chứng minh Analysis API/Worker đã chạy hoặc được nghiệm thu.
+
+    - Một batch chứa nhiều ảnh của cùng bệnh nhân. batchId = AnalysisRequest.id; analysisId = Image.id.
+
+    - Kết quả AI bất biến, có isMock và phiên bản nguồn; review lưu riêng theo ảnh.
+
+    - Principal, tenant, owner, requester và patient có ý nghĩa riêng; patientId không mặc định bằng token.sub.
+
+    - Quyền tài nguyên do Analysis API kiểm tra; SYSTEM_ADMIN không mặc định được đọc dữ liệu Analysis cá nhân.
+
+    - Ảnh/annotation riêng tư; public trả fileId và kind, không trả object key hoặc Base64.
+
+    - Worker gửi request_id = analysisId; retry giữ analysisId, tạo Job attempt mới.
+
+    - Billing giữ/capture/release theo từng analysis; không release khi lỗi tạm thời còn retry. Retry thủ công sau
+    release phải giữ credit lại trước khi tạo attempt.
+
+    - Event/message giao ít nhất một lần; idempotent consumer và durable ACK. Không ghi trực tiếp bảng Billing/Identity.
+
+    - WARNING có kết quả hợp lệ được giữ trong warnings, không tự đổi LOW_QUALITY. Ảnh kém chất lượng cần dấu hiệu
+    chất lượng rõ ràng.
+
+    - NFR toàn luồng và bảo mật backend chưa được xác minh chỉ bằng hợp đồng này.'
+  x-change-notes:
+  - 0.6.0 thay đổi ràng buộc và trường response bắt buộc; cập nhật fixtures/examples và thông báo các bên trước
+    khi khóa baseline.
 servers:
-- url: http://localhost:8080
-  description: Gateway (local, đề xuất - chờ M1 duyệt route)
+- url: http://127.0.0.1:5000
+  description: Gateway trên máy chạy Compose; route Analysis cần triển khai.
+- url: http://api-gateway:8080
+  description: Gateway nội bộ Docker, dùng cho NiFi; không phải URL trình duyệt Windows.
 tags:
 - name: Analyses
 - name: Reviews
@@ -34,11 +51,36 @@ paths:
       - Analyses
       operationId: createAnalysis
       summary: Tạo yêu cầu phân tích (1..N ảnh, mỗi ảnh một analysis)
-      description: |-
-        Trả 202 với batchId và danh sách analysisId theo từng ảnh. Bắt buộc header `Idempotency-Key`.
-        Luồng: kiểm tra quyền, ảnh và credit (hỏi Billing qua API) -> lưu ảnh vào private object storage -> lưu analysis, job và outbox trong cùng transaction -> trả 202. Outbox publisher phát job lên hàng đợi sau đó (ADR-003).
-        Gửi lại cùng key và cùng nội dung: trả lại phản hồi gốc (header `Idempotent-Replayed: true`), không tạo job hay trừ credit lần nữa (BR-10). Cùng key, nội dung khác: 409 ERR_IDEMPOTENCY_KEY_REUSED.
+      description: 'Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
+        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. Trả 202 với batchId và danh sách
+        analysisId theo từng ảnh. Bắt buộc header `Idempotency-Key`.
+
+        Luồng: kiểm tra quyền, ảnh và credit (hỏi Billing qua API) -> lưu ảnh vào private object storage -> lưu
+        analysis, job và outbox trong cùng transaction -> trả 202. Outbox publisher phát job lên hàng đợi sau đó
+        (ADR-003).
+
+        Gửi lại cùng key và cùng nội dung: trả lại phản hồi gốc (header `Idempotent-Replayed: true`), không tạo
+        job hay trừ credit lần nữa (BR-10). Cùng key, nội dung khác: 409 ERR_IDEMPOTENCY_KEY_REUSED.
+
         Ảnh trùng (theo checksum): item có processingStatus DUPLICATE kèm existingAnalysisId.
+
+        Idempotency được phạm vi hóa theo (tenantId, requesterId, Idempotency-Key), có unique constraint tương ứng.
+        Kiểm tra quyền hiện hành trước khi replay. Requester khác cùng tenant dùng cùng key không replay dữ liệu
+        người trước.
+
+        Fingerprint là SHA-256 của metadata nghiệp vụ chuẩn hóa (patientId, modality, eyeSide) và checksum từng
+        ảnh theo thứ tự request; áp mặc định trước khi tính, version hóa cách chuẩn hóa; không gồm token, correlationId
+        hay timestamp. Hai request đồng thời chỉ tạo một logical resource và một reservation hợp lệ; request thua
+        tranh chấp đọc phản hồi đã commit hoặc nhận 409 ERR_REQUEST_IN_PROGRESS để gửi lại cùng key.
+
+        NiFi dùng service token có scope analysis:ingest và tenant được cấp; không dùng role DOCTOR để vượt quyền.
+        Chỉ được tạo cho bệnh nhân trong tenant. JWT claim scope là danh sách phân tách bằng dấu cách; backend phải
+        kiểm tra scope và quyền bệnh nhân.
+
+        Multipart gửi repeated field images (binary JPEG/PNG), patientId (UUID), eyeSide và modality. OCT bị 400
+        trước job/hold credit. accepted items thông thường ở QUEUED sau transaction chứa Job/Outbox; replay không
+        biến item cũ thành DUPLICATE.'
       parameters:
       - $ref: '#/components/parameters/IdempotencyKey'
       - $ref: '#/components/parameters/CorrelationId'
@@ -48,6 +90,9 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/CreateAnalysisRequest'
+            encoding:
+              images:
+                contentType: image/jpeg, image/png
       responses:
         '202':
           description: Đã nhận, đang xếp hàng
@@ -67,10 +112,10 @@ paths:
                     items:
                     - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
                       fileName: fundus-01.jpg
-                      processingStatus: PENDING
+                      processingStatus: QUEUED
                     - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0002
                       fileName: fundus-02.jpg
-                      processingStatus: PENDING
+                      processingStatus: QUEUED
                     createdAt: '2026-10-08T03:15:00Z'
                     statusUrl: /api/v1/batches/b0000000-0000-4000-8000-000000000001
         '400':
@@ -93,15 +138,23 @@ paths:
           $ref: '#/components/responses/NotFound'
       x-roles:
       - PATIENT
-      - DOCTOR (cho bệnh nhân được phân công)
-      - CLINIC_ADMIN (trong tenant)
+      - DOCTOR
+      - CLINIC_ADMIN
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
+      x-service-scopes:
+      - analysis:ingest
     get:
       tags:
       - Analyses
       operationId: listAnalyses
       summary: Danh sách analysis trong phạm vi được phép
-      description: Phạm vi theo vai trò - bệnh nhân chỉ thấy của mình, bác sĩ chỉ thấy bệnh nhân được
-        phân công, clinic admin trong tenant (BR-01..03, BR-15).
+      description: Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
+        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. Phạm vi theo vai trò - bệnh nhân
+        chỉ thấy của mình, bác sĩ chỉ thấy bệnh nhân được phân công, clinic admin trong tenant (BR-01..03, BR-15).
       parameters:
       - name: patientId
         in: query
@@ -144,18 +197,24 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
       x-roles:
-      - PATIENT (của mình)
-      - DOCTOR (được phân công)
-      - CLINIC_ADMIN (trong tenant)
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
   /api/v1/analyses/{analysisId}:
     get:
       tags:
       - Analyses
       operationId: getAnalysis
       summary: Lấy trạng thái và kết quả
-      description: Client poll. `result` chỉ có khi processingStatus là COMPLETED. `error` có khi FAILED,
-        LOW_QUALITY, REJECTED, DUPLICATE. Không có quyền hoặc không tồn tại đều trả 404 (BR-02); 403 cho
-        vai trò không được dùng chức năng.
+      description: Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
+        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. Client poll. `result` chỉ có khi
+        processingStatus là COMPLETED. `error` có khi FAILED, LOW_QUALITY, REJECTED, DUPLICATE. Không có quyền hoặc
+        không tồn tại đều trả 404 (BR-02); 403 cho vai trò không được dùng chức năng.
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
       - $ref: '#/components/parameters/CorrelationId'
@@ -185,6 +244,7 @@ paths:
                       jobId: a0000000-0000-4000-8000-000000000001
                       status: RUNNING
                       retryCount: 0
+                      attemptNo: 1
                 completed:
                   summary: AI hoàn tất, chờ bác sĩ
                   value:
@@ -217,6 +277,7 @@ paths:
                       - fileId: f0000000-0000-4000-8000-000000000003
                         kind: heatmap
                       configVersion: cfg-0.1
+                      version: 1
                     ownerId: 9b2e5c10-1111-4a2b-8c3d-000000000001
                     image:
                       fileId: f0000000-0000-4000-8000-000000000001
@@ -225,6 +286,7 @@ paths:
                       jobId: a0000000-0000-4000-8000-000000000001
                       status: SUCCEEDED
                       retryCount: 0
+                      attemptNo: 1
                 reviewed:
                   summary: Bác sĩ đã điều chỉnh
                   value:
@@ -257,6 +319,7 @@ paths:
                       - fileId: f0000000-0000-4000-8000-000000000003
                         kind: heatmap
                       configVersion: cfg-0.1
+                      version: 1
                     latestReview:
                       reviewId: 7e000000-0000-4000-8000-000000000001
                       analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
@@ -276,6 +339,7 @@ paths:
                       jobId: a0000000-0000-4000-8000-000000000001
                       status: SUCCEEDED
                       retryCount: 0
+                      attemptNo: 1
                 lowQuality:
                   summary: Ảnh chất lượng kém (không có kết quả)
                   value:
@@ -298,6 +362,7 @@ paths:
                       jobId: a0000000-0000-4000-8000-000000000001
                       status: SUCCEEDED
                       retryCount: 0
+                      attemptNo: 1
                 failed:
                   summary: Thất bại (ảnh được giữ lại)
                   value:
@@ -321,6 +386,52 @@ paths:
                       jobId: a0000000-0000-4000-8000-000000000001
                       status: FAILED
                       retryCount: 3
+                      attemptNo: 4
+                completedWithWarning:
+                  summary: AI hoàn tất, chờ bác sĩ
+                  value:
+                    analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
+                    batchId: b0000000-0000-4000-8000-000000000001
+                    patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    processingStatus: COMPLETED
+                    reviewStatus: PENDING
+                    createdAt: '2026-10-08T03:15:00Z'
+                    updatedAt: '2026-10-08T03:15:14Z'
+                    result:
+                      riskLevel: MODERATE
+                      riskScore: 0.57
+                      confidenceScore: 0.88
+                      metrics:
+                        vesselDensity: 0.1428
+                        tortuosityIndex: 1.185
+                        avRatio: 0.672
+                        fractalDimension: 1.482
+                        branchingPoints: 64
+                      indicators:
+                      - Chỉ số xoắn mạch tăng nhẹ
+                      isMock: true
+                      modelVersion: aura-retina-0.1.0
+                      thresholdVersion: thr-0.1
+                      disclaimer: Kết quả sàng lọc hỗ trợ quyết định lâm sàng, không phải chẩn đoán.
+                      annotations:
+                      - fileId: f0000000-0000-4000-8000-000000000002
+                        kind: overlay
+                      - fileId: f0000000-0000-4000-8000-000000000003
+                        kind: heatmap
+                      configVersion: cfg-0.1
+                      version: 1
+                      warnings:
+                      - code: AI_WARNING
+                        message: Kết quả có cảnh báo kỹ thuật; cần bác sĩ đối chiếu.
+                    ownerId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    image:
+                      fileId: f0000000-0000-4000-8000-000000000001
+                      kind: original
+                    job:
+                      jobId: a0000000-0000-4000-8000-000000000001
+                      status: SUCCEEDED
+                      retryCount: 0
+                      attemptNo: 1
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -328,17 +439,27 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
       x-roles:
-      - PATIENT (của mình)
-      - DOCTOR (được phân công)
-      - CLINIC_ADMIN (trong tenant)
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
   /api/v1/analyses/{analysisId}/retry:
     post:
       tags:
       - Analyses
       operationId: retryAnalysis
       summary: Thử lại analysis thất bại
-      description: Chỉ khi processingStatus là FAILED hoặc RETRY_READY và error.retryable = true. Cùng
-        logical request, không trừ credit thêm, không tạo kết quả trùng (BR-10).
+      description: Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
+        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. Retry tự động theo policy; retry
+        thủ công chỉ được nhận khi processingStatus FAILED hoặc RETRY_READY và backend xác định còn khả năng thực
+        hiện. error.retryable=false của lỗi terminal không tự cho phép retry; backend kiểm tra nguyên nhân và policy
+        thủ công riêng. Giữ analysisId/request_id, tạo Job attempt mới và không xóa lịch sử. Nếu reservation đã
+        release, phải hỏi Billing và giữ credit lại; không capture hai lần cho cùng lần xử lý tính phí. Request
+        cạnh tranh không tạo hai attempt kế tiếp; trả 409 nếu đã có attempt mới đang hoạt động.
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
       - $ref: '#/components/parameters/IdempotencyKey'
@@ -358,10 +479,16 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '402':
+          $ref: '#/components/responses/InsufficientCredit'
       x-roles:
-      - PATIENT (của mình)
-      - DOCTOR (được phân công)
-      - CLINIC_ADMIN (trong tenant)
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
   /api/v1/analyses/{analysisId}/reviews:
     get:
       tags:
@@ -392,17 +519,30 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
       x-roles:
-      - PATIENT (của mình)
-      - DOCTOR (được phân công)
-      - CLINIC_ADMIN (trong tenant)
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
+      description: 'Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
+        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. '
     post:
       tags:
       - Reviews
       operationId: submitReview
       summary: Bác sĩ xác nhận hoặc chỉnh sửa kết quả AI
-      description: 'Chỉ bác sĩ được phân công (BR-03), chỉ khi processingStatus là COMPLETED. Mỗi review
-        là bản ghi riêng, version tăng dần; kết quả AI gốc không bị ghi đè (BR-06, ADR-008). `baseVersion`
-        lệch: 409 ERR_CONCURRENT_REVIEW.'
+      description: 'Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
+        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. Chỉ bác sĩ được phân công (BR-03),
+        chỉ khi processingStatus là COMPLETED. Mỗi review là bản ghi riêng, version tăng dần; kết quả AI gốc không
+        bị ghi đè (BR-06, ADR-008). `baseVersion` lệch: 409 ERR_CONCURRENT_REVIEW. Version review tăng theo ảnh;
+        baseVersion là review hiện hành (0 nếu chưa có). Backend chọn kết quả AI hiện hành được trả trong GET analysis,
+        kiểm tra trong transaction và ghi aiResultVersion. Có thay đổi kết quả AI thì không tự nhận review dựa vào
+        snapshot cũ; cần workflow tái phân tích riêng. Xác nhận hoặc hiệu chỉnh đều REVIEWED; không dùng IN_REVIEW/CORRECTION_REQUIRED
+        trong phiên bản này.'
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
       - $ref: '#/components/parameters/CorrelationId'
@@ -442,16 +582,23 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
       x-roles:
-      - DOCTOR (được phân công)
+      - DOCTOR
+      x-resource-scopes:
+        DOCTOR: ASSIGNED
   /api/v1/analyses/{analysisId}/report:
     get:
       tags:
       - Reports
       operationId: getReport
       summary: Xuất báo cáo theo phạm vi quyền
-      description: |
-        PDF hoặc CSV (NFR-20). Báo cáo ghi phiên bản model và ngưỡng (BR-07, NFR-23).
+      description: 'Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
+        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. PDF hoặc CSV (NFR-20). Báo cáo
+        ghi phiên bản model và ngưỡng (BR-07, NFR-23).
+
         Bệnh nhân chỉ báo cáo của mình; bác sĩ trong phạm vi phân công; clinic trong tenant.
+
+        '
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
       - name: format
@@ -485,9 +632,13 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
       x-roles:
-      - PATIENT (của mình)
-      - DOCTOR (được phân công)
-      - CLINIC_ADMIN (trong tenant)
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
   /api/v1/batches/{batchId}:
     get:
       tags:
@@ -511,7 +662,7 @@ paths:
                 $ref: '#/components/schemas/Batch'
               example:
                 batchId: b0000000-0000-4000-8000-000000000001
-                batchStatus: PARTIAL_FAILED
+                batchStatus: IN_PROGRESS
                 createdAt: '2026-10-08T03:15:00Z'
                 items:
                 - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
@@ -523,6 +674,7 @@ paths:
                     jobId: a0000000-0000-4000-8000-000000000001
                     status: SUCCEEDED
                     retryCount: 0
+                    attemptNo: 1
                 - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0002
                   fileName: fundus-02.jpg
                   processingStatus: FAILED
@@ -536,6 +688,23 @@ paths:
                     jobId: a0000000-0000-4000-8000-000000000002
                     status: FAILED
                     retryCount: 3
+                    attemptNo: 4
+                summary:
+                  total: 2
+                  active: 1
+                  succeeded: 1
+                  failed: 0
+                  duplicate: 0
+                  byStatus:
+                    PENDING: 0
+                    QUEUED: 0
+                    PROCESSING: 0
+                    COMPLETED: 1
+                    FAILED: 1
+                    RETRY_READY: 0
+                    LOW_QUALITY: 0
+                    REJECTED: 0
+                    DUPLICATE: 0
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -543,23 +712,32 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
       x-roles:
-      - PATIENT (của mình)
-      - DOCTOR (được phân công)
-      - CLINIC_ADMIN (trong tenant)
-      description: Mỗi item có trạng thái, job và kết quả/lỗi riêng. Ảnh lỗi không làm hỏng các ảnh khác
-        (PARTIAL_FAILED).
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      description: Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
+        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. Mỗi item có trạng thái, job và
+        kết quả/lỗi riêng. Ảnh lỗi không làm hỏng các ảnh khác (PARTIAL_FAILED). batchStatus và summary được tính
+        theo quy tắc Batch/BatchSummary; một batch hiện thuộc cùng bệnh nhân. Không công bố số đếm ngoài quyền actor.
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
   /api/v1/analyses/{analysisId}/files/{fileId}/access:
     get:
       tags:
       - Analyses
       operationId: getFileAccess
       summary: Xin quyền đọc ảnh hoặc annotation riêng tư
-      description: 'Backend kiểm tra tenant, ownership và phân công bác sĩ trên analysis rồi mới cấp URL
-        ký có thời hạn. Không có quyền hoặc không tồn tại: 404.'
+      description: 'Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
+        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. Backend kiểm tra tenant, ownership
+        và phân công bác sĩ trên analysis rồi mới cấp URL ký có thời hạn. Không có quyền hoặc không tồn tại: 404.'
       x-roles:
-      - PATIENT (của mình)
-      - DOCTOR (được phân công)
-      - CLINIC_ADMIN (trong tenant)
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
       - name: fileId
@@ -585,13 +763,18 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: JWT do Identity cấp; claims gồm sub, role, tenantId. Không nhận tenantId từ client.
+      description: 'JWT đã xác minh từ Identity: sub, tenantId và role đối với người dùng hoặc scope đối với service.
+        Không tin tenant client gửi. analysis:ingest chỉ cấp cho service tạo analysis trong tenant được phép.'
   parameters:
     AnalysisId:
       name: analysisId
@@ -604,7 +787,8 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      description: UUID do client sinh, giữ nguyên khi gửi lại.
+      description: UUID ổn định cho cùng request. Phạm vi (tenantId, requesterId, key); cùng payload replay sau
+        kiểm tra quyền, khác payload 409.
       schema:
         type: string
         format: uuid
@@ -620,7 +804,7 @@ components:
   schemas:
     ProcessingStatus:
       type: string
-      enum:
+      enum: &id001
       - PENDING
       - QUEUED
       - PROCESSING
@@ -653,15 +837,14 @@ components:
           items:
             type: string
             format: binary
-          description: 1..N ảnh đáy mắt (JPEG/PNG). Mỗi ảnh tạo một analysis riêng, cùng một batchId.
-            Ảnh lưu object storage, DB chỉ giữ tham chiếu.
+          description: 1..N ảnh đáy mắt (JPEG/PNG). Mỗi ảnh tạo một analysis riêng, cùng một batchId. Ảnh lưu object
+            storage, DB chỉ giữ tham chiếu.
         modality:
           type: string
           enum:
           - FUNDUS
-          - OCT
           default: FUNDUS
-          description: Loại ảnh yêu cầu. Phiên bản hiện tại chỉ xử lý FUNDUS; OCT phải bị từ chối bằng 400 ERR_VALIDATION.
+          description: Chỉ FUNDUS; OCT hoặc giá trị khác trả 400 ERR_VALIDATION trước job và hold credit.
         eyeSide:
           type: string
           enum:
@@ -669,6 +852,8 @@ components:
           - right
           - unknown
           default: unknown
+      description: Một batch của cùng patientId. Backend xác minh quan hệ bệnh nhân/principal hoặc assignment/tenant;
+        không mặc định patientId = token.sub.
     AnalysisAccepted:
       type: object
       required:
@@ -702,6 +887,7 @@ components:
       - configVersion
       - thresholdVersion
       - disclaimer
+      - version
       properties:
         riskLevel:
           $ref: '#/components/schemas/RiskLevel'
@@ -733,10 +919,27 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileRef'
-          description: Tham chiếu annotation (mask, overlay, heatmap); đọc qua /files/{fileId}/access
+          description: FileRef với fileId và kind. Runtime hiện chỉ tạo kind mask/overlay; kind khác dự phòng, không
+            tự sinh. Annotation khớp kích thước ảnh gốc.
         configVersion:
           type: string
           description: Phiên bản cấu hình/ngưỡng áp dụng (NFR-23, ADR-008)
+        version:
+          type: integer
+          minimum: 1
+          description: Version kết quả AI theo ảnh; dùng để xác định kết quả được review.
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Warning'
+          description: Cảnh báo của kết quả hợp lệ. WARNING không tự đồng nghĩa LOW_QUALITY.
+        processingTimeMs:
+          type: number
+          minimum: 0
+          description: Ánh xạ AI processing_time_ms; chỉ thời gian component, không phải NFR toàn luồng.
+        limitations:
+          type: string
+          description: Giới hạn nguồn AI; không biến mock thành kết quả thật.
     Analysis:
       type: object
       required:
@@ -780,11 +983,15 @@ components:
         ownerId:
           type: string
           format: uuid
-          description: Chủ sở hữu dữ liệu (người tạo yêu cầu)
+          description: Principal sở hữu resource theo policy; không mặc định là requester.
         image:
           $ref: '#/components/schemas/FileRef'
         job:
           $ref: '#/components/schemas/Job'
+        requesterId:
+          type: string
+          format: uuid
+          description: Principal tạo request, được backend xác định.
     AnalysisList:
       type: object
       required:
@@ -804,7 +1011,8 @@ components:
         total:
           type: integer
     ReviewRequest:
-      description: Khi xác nhận kết quả AI (isApproved=true), correctedRiskLevel/reason không bắt buộc. Khi hiệu chỉnh (isApproved=false), correctedRiskLevel và reason bắt buộc. baseVersion phải khớp phiên bản hiện tại; nếu không trả 409 ERR_CONCURRENT_REVIEW.
+      description: 'Hai nhánh loại trừ: xác nhận chỉ isApproved/baseVersion/doctorNotes; hiệu chỉnh bắt buộc correctedRiskLevel
+        và reason có ký tự không phải khoảng trắng. Backend trim và kiểm tra quyền/version trong transaction.'
       oneOf:
       - type: object
         title: Confirm AI result
@@ -814,7 +1022,8 @@ components:
         properties:
           isApproved:
             type: boolean
-            enum: [true]
+            enum:
+            - true
             description: Xác nhận kết quả AI hiện tại.
           baseVersion:
             type: integer
@@ -834,7 +1043,8 @@ components:
         properties:
           isApproved:
             type: boolean
-            enum: [false]
+            enum:
+            - false
             description: Bác sĩ không chấp nhận kết quả AI và thực hiện hiệu chỉnh.
           baseVersion:
             type: integer
@@ -850,6 +1060,7 @@ components:
             minLength: 1
             maxLength: 1000
             description: Bắt buộc khi hiệu chỉnh (ADR-008).
+            pattern: \S
         additionalProperties: false
     Review:
       type: object
@@ -860,6 +1071,7 @@ components:
       - isApproved
       - doctorId
       - createdAt
+      - aiResultVersion
       properties:
         reviewId:
           type: string
@@ -884,9 +1096,13 @@ components:
           format: date-time
         reason:
           type: string
+          pattern: \S
         aiResultVersion:
           type: integer
           description: Phiên bản kết quả AI gốc được review; bản gốc không bị ghi đè
+          minimum: 1
+      description: Append-only, version tăng theo analysisId; tham chiếu AnalysisResult đúng ảnh. Không ghi đè AI.
+        aiResultVersion không phải review version.
     Error:
       type: object
       required:
@@ -943,11 +1159,8 @@ components:
       - IN_REVIEW
       - REVIEWED
       - CORRECTION_REQUIRED
-      description: 'Khớp review_status của State Machine (SCRUM-52). NOT_REQUIRED khi chưa COMPLETED.
-        PENDING sau khi COMPLETED và cần bác sĩ. REVIEWED sau khi POST /reviews thành công (cả xác nhận
-        lẫn hiệu chỉnh; phân biệt bằng Review.isApproved và Review.version). IN_REVIEW và CORRECTION_REQUIRED
-        là trạng thái trung gian của State Machine, hiện chưa có operation nào đặt (xem mục Pending: có
-        cần thao tác nhận review hay không).'
+      description: Runtime v0.6 dùng NOT_REQUIRED → PENDING → REVIEWED. IN_REVIEW/CORRECTION_REQUIRED là dự phòng,
+        chưa có operation; backend/fixtures không tự sinh. COMPLETED đưa về PENDING, review thành công đưa REVIEWED.
     BatchItem:
       type: object
       required:
@@ -975,6 +1188,8 @@ components:
       - batchId
       - items
       - createdAt
+      - batchStatus
+      - summary
       properties:
         batchId:
           type: string
@@ -993,7 +1208,12 @@ components:
           - COMPLETED
           - PARTIAL_FAILED
           - FAILED
-          description: Tổng hợp từ các item; không thay thế trạng thái từng ảnh
+          description: 'IN_PROGRESS nếu còn PENDING/QUEUED/PROCESSING/RETRY_READY hoặc FAILED còn retry. Khi tất
+            cả terminal: COMPLETED nếu không có FAILED/LOW_QUALITY/REJECTED; PARTIAL_FAILED nếu có lỗi và có COMPLETED
+            hoặc DUPLICATE; FAILED nếu mọi item đều lỗi. DUPLICATE là item đã được bỏ qua hợp lệ, không có nghĩa
+            tạo kết quả AI mới. Summary/items chỉ gồm tài nguyên được phép thấy.'
+        summary:
+          $ref: '#/components/schemas/BatchSummary'
     ErrorInfo:
       type: object
       required:
@@ -1022,7 +1242,8 @@ components:
           type: boolean
         retryCount:
           type: integer
-          description: 'ERD: Job.retry_count'
+          description: Số retry đã thực hiện, suy ra attemptNo - 1; không phải cột Job.retry_count.
+          minimum: 0
       description: Lý do khi processingStatus là FAILED, LOW_QUALITY, REJECTED hoặc DUPLICATE.
     FileRef:
       type: object
@@ -1060,6 +1281,7 @@ components:
       - jobId
       - status
       - retryCount
+      - attemptNo
       properties:
         jobId:
           type: string
@@ -1076,7 +1298,85 @@ components:
         retryCount:
           type: integer
           minimum: 0
-      description: Khớp bảng Job trong ERD; mỗi ảnh một job.
+        attemptNo:
+          type: integer
+          minimum: 1
+      description: Job hiện hành/gần nhất của ảnh. Một Job = một attempt; retry tạo jobId mới. retryCount = attemptNo
+        - 1.
+    Warning:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          minLength: 1
+        message:
+          type: string
+          minLength: 1
+    BatchSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - total
+      - active
+      - succeeded
+      - failed
+      - duplicate
+      - byStatus
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        active:
+          type: integer
+          minimum: 0
+        succeeded:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        duplicate:
+          type: integer
+          minimum: 0
+        byStatus:
+          type: object
+          additionalProperties: false
+          required: *id001
+          properties:
+            PENDING:
+              type: integer
+              minimum: 0
+            QUEUED:
+              type: integer
+              minimum: 0
+            PROCESSING:
+              type: integer
+              minimum: 0
+            COMPLETED:
+              type: integer
+              minimum: 0
+            FAILED:
+              type: integer
+              minimum: 0
+            RETRY_READY:
+              type: integer
+              minimum: 0
+            LOW_QUALITY:
+              type: integer
+              minimum: 0
+            REJECTED:
+              type: integer
+              minimum: 0
+            DUPLICATE:
+              type: integer
+              minimum: 0
+      description: total=active+succeeded+failed+duplicate=sum(byStatus). succeeded=COMPLETED; duplicate=DUPLICATE;
+        active gồm trạng thái đang chạy/chờ và FAILED retryable còn được retry; failed chỉ lỗi kết thúc FAILED/LOW_QUALITY/REJECTED.
+        byStatus đếm trạng thái thô. Backend kiểm tra các invariant, JSON Schema không biểu diễn phép cộng.
   responses:
     ValidationError:
       description: Dữ liệu không hợp lệ
@@ -1118,8 +1418,8 @@ components:
               correlationId: c0ffee00-0000-4000-8000-000000000003
               retryable: false
     NotFound:
-      description: 'Không tồn tại, khác tenant, không phải của mình hoặc không được phân công (cùng một
-        phản hồi, không phân biệt). Với tạo yêu cầu: patientId ngoài phạm vi.'
+      description: 'Không tồn tại, khác tenant, không phải của mình hoặc không được phân công (cùng một phản hồi,
+        không phân biệt). Với tạo yêu cầu: patientId ngoài phạm vi.'
       content:
         application/json:
           schema:
@@ -1136,12 +1436,21 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-          example:
-            error:
-              code: ERR_IDEMPOTENCY_KEY_REUSED
-              message: Idempotency-Key đã dùng với nội dung khác.
-              correlationId: c0ffee00-0000-4000-8000-000000000005
-              retryable: false
+          examples:
+            keyReused:
+              value:
+                error:
+                  code: ERR_IDEMPOTENCY_KEY_REUSED
+                  message: Idempotency-Key đã dùng với nội dung khác.
+                  correlationId: c0ffee00-0000-4000-8000-000000000005
+                  retryable: false
+            requestInProgress:
+              value:
+                error:
+                  code: ERR_REQUEST_IN_PROGRESS
+                  message: Yêu cầu cùng khóa đang được hoàn tất. Gửi lại cùng key và payload.
+                  correlationId: c0ffee00-0000-4000-8000-000000000010
+                  retryable: true
     InsufficientCredit:
       description: Không đủ credit (tính từ DB, không từ cache - BR-09)
       content:
@@ -1160,19 +1469,39 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_PAYLOAD_TOO_LARGE
+              message: File vượt giới hạn kích thước theo policy.
+              correlationId: c0ffee00-0000-4000-8000-000000000007
+              retryable: false
     UnsupportedMedia:
       description: Định dạng ảnh không hỗ trợ
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_UNSUPPORTED_MEDIA_TYPE
+              message: Chỉ nhận ảnh JPEG hoặc PNG.
+              correlationId: c0ffee00-0000-4000-8000-000000000008
+              retryable: false
     TooManyRequests:
       description: Vượt giới hạn tần suất
       headers:
         Retry-After:
           schema:
             type: integer
+            minimum: 0
+            example: 30
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_TOO_MANY_REQUESTS
+              message: Vượt giới hạn tần suất. Thử lại sau thời gian Retry-After.
+              correlationId: c0ffee00-0000-4000-8000-000000000009
+              retryable: true
