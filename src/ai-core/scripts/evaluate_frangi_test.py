@@ -35,10 +35,15 @@ MASK_OUTPUT = ROOT / "datasets/CHASE_DB1/predictions/test_v0.2"
 
 
 def get_content_hashes(data: bytes) -> set:
-    """Return both raw and LF-normalized SHA-256 hashes for cross-platform consistency."""
-    raw_hash = hashlib.sha256(data).hexdigest()
-    normalized_hash = hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
-    return {raw_hash, normalized_hash}
+    """Accept equivalent LF/CRLF text without ignoring content changes."""
+    normalized = data.replace(b"\r\n", b"\n")
+    windows_text = normalized.replace(b"\n", b"\r\n")
+
+    return {
+        hashlib.sha256(data).hexdigest(),
+        hashlib.sha256(normalized).hexdigest(),
+        hashlib.sha256(windows_text).hexdigest(),
+    }
 
 
 def parse_args():
@@ -85,15 +90,17 @@ def main():
     # Cross-platform hash check (Windows CRLF vs Linux LF)
     script_bytes = Path(baseline.__file__).read_bytes()
     script_hashes = get_content_hashes(script_bytes)
+
     if validation["script_sha256"] not in script_hashes:
-        print(
-            f"Notice: Baseline script hash difference. "
-            f"Validation hash: {validation['script_sha256']}, current hashes: {script_hashes}. "
-            "Proceeding with frozen algorithmic configuration."
+        raise ValueError(
+            "Baseline script content changed since validation. "
+            "Stop frozen test evaluation. Restore the validated script "
+            "or create a separately versioned experiment."
         )
 
     manifest_bytes = baseline.MANIFEST.read_bytes()
     manifest_hashes = get_content_hashes(manifest_bytes)
+
     if validation["manifest_sha256"] not in manifest_hashes:
         raise ValueError("Manifest changed since validation")
 
@@ -254,13 +261,33 @@ def main():
     if TEST_REPORT.exists() and target_report_path != TEST_REPORT:
         orig = json.loads(TEST_REPORT.read_text(encoding="utf-8"))
         print("\n--- Reproducibility Verification against Frozen Baseline ---")
-        for m in ("mean_dice", "mean_iou", "mean_sensitivity", "mean_specificity"):
+
+        for m in (
+            "mean_dice",
+            "mean_iou",
+            "mean_sensitivity",
+            "mean_specificity",
+        ):
             actual = report["accuracy_metrics"][m]
             expected = orig["accuracy_metrics"][m]
             diff = abs(actual - expected)
-            print(f"  {m}: {actual:.4f} vs {expected:.4f} (diff: {diff:.6f})")
-            assert diff < 1e-4, f"Mismatch in metric {m}: diff={diff}"
-        print(">> VERIFIED: 100% exact numerical match with frozen test report! <<")
+
+            print(
+                f"  {m}: {actual:.4f} vs {expected:.4f} "
+                f"(diff: {diff:.6f})"
+            )
+
+            if not np.isfinite(diff) or diff >= 1e-4:
+                raise ValueError(
+                    f"Mismatch in metric {m}: diff={diff}; "
+                    "required absolute difference < 0.0001"
+                )
+
+        print(
+            "VERIFIED: all four mean accuracy metrics match the frozen "
+            "test report within absolute tolerance < 0.0001. "
+            "Latency is not included in this comparison."
+        )
 
 
 if __name__ == "__main__":

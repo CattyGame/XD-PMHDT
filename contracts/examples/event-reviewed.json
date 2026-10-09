@@ -1,7 +1,7 @@
 {
   "eventId": "e0000000-0000-4000-8000-000000000004",
   "eventType": "analysis.reviewed",
-  "schemaVersion": "0.5",
+  "schemaVersion": "0.6",
   "occurredAt": "2026-10-08T04:00:00Z",
   "tenantId": "7a000000-0000-4000-8000-000000000001",
   "correlationId": "c0ffee00-0000-4000-8000-0000000000aa",
@@ -9,6 +9,7 @@
   "data": {
     "patientId": "9b2e5c10-1111-4a2b-8c3d-000000000001",
     "reviewStatus": "REVIEWED",
-    "version": 1
+    "version": 1,
+    "aiResultVersion": 1
   }
 }

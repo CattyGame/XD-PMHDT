@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "ERR_TOO_MANY_REQUESTS",
+    "message": "Vượt giới hạn tần suất. Thử lại sau thời gian Retry-After.",
+    "correlationId": "c0ffee00-0000-4000-8000-000000000009",
+    "retryable": true
+  }
+}

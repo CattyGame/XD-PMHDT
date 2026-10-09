@@ -1,7 +1,7 @@
 {
   "eventId": "e0000000-0000-4000-8000-000000000002",
   "eventType": "analysis.completed",
-  "schemaVersion": "0.5",
+  "schemaVersion": "0.6",
   "occurredAt": "2026-10-08T03:15:14Z",
   "tenantId": "7a000000-0000-4000-8000-000000000001",
   "correlationId": "c0ffee00-0000-4000-8000-0000000000aa",
@@ -12,6 +12,7 @@
     "isMock": true,
     "modelVersion": "aura-retina-0.1.0",
     "configVersion": "cfg-0.1",
-    "thresholdVersion": "thr-0.1"
+    "thresholdVersion": "thr-0.1",
+    "resultVersion": 1
   }
 }

@@ -20,6 +20,8 @@
   "job": {
     "jobId": "a0000000-0000-4000-8000-000000000001",
     "status": "FAILED",
-    "retryCount": 3
-  }
+    "retryCount": 3,
+    "attemptNo": 4
+  },
+  "requesterId": "9b2e5c10-1111-4a2b-8c3d-000000000001"
 }
