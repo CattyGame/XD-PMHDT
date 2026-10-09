@@ -1,17 +1,60 @@
 # BASELINE-W1-v0.2 — Analysis contracts
 
-- REST: 0.6.0; event/job schemaVersion: 0.6.
-- Trạng thái: dự thảo đồng bộ ERD/State Machine/ma trận quyền v0.3; chưa nghiệm thu tích hợp.
-- Nguồn ban đầu: develop 5070ab6; các file trong gói này là thay đổi chưa commit trên nhánh sửa.
-- Commit phát hành: chưa có; điền SHA thực trong biên bản Confluence sau commit, dùng link cố định.
-- Job message attempt ánh xạ REST Job.attemptNo; retryCount = attemptNo - 1.
-- Annotation public giữ fileId/kind, không đổi thành type trong REST.
-- Mã băm: SHA-256 bytes UTF-8 với CRLF chuẩn hóa thành LF; không thay đổi khoảng trắng/nội dung khác.
+## Phiên bản và nguồn phát hành
+
+- REST OpenAPI: `0.6.0`.
+- Event/job `schemaVersion`: `0.6`.
+- Commit đưa bộ contract vào Git: `a422e76`.
+- Pull request: https://github.com/CattyGame/XD-PMHDT/pull/22
+- Commit merge vào `develop`: `e434dd344ae40651bf689b1a3e8233f2150f9402`.
+- Nguồn contract cố định:
+  https://github.com/CattyGame/XD-PMHDT/tree/e434dd344ae40651bf689b1a3e8233f2150f9402/contracts
+
+## Trạng thái baseline
+
+Bộ contract đã được commit và merge vào `develop`; validator đã kiểm tra đạt schema, examples và mã băm.
+
+Tài liệu thiết kế liên quan:
+- ERD: `v0.4`.
+- State Machine: `v0.3`.
+- Ma trận quyền: `v0.3`.
+
+Kết quả này chỉ xác nhận tính hợp lệ của contract. Chưa nghiệm thu triển khai backend, phân quyền thực tế, service token, NiFi gửi Gateway, idempotency, retry hoặc độ trễ toàn luồng.
+
+## Quy ước đồng bộ
+
+- ID tài nguyên và `Idempotency-Key` dùng UUID theo contract.
+- `correlationId` là chuỗi tối đa 64 ký tự; không bắt buộc UUID. Trong ERD, `correlation_id` dùng `VARCHAR(64)`.
+- Gateway/API sinh correlation ID khi client không cung cấp; giữ nguyên giá trị khi truyền qua job và event.
+- Correlation ID phục vụ truy vết, không thay thế idempotency key hoặc khóa thao tác Billing.
+- Trường `attempt` trong job message ánh xạ sang `attempt_no` trong database và `attemptNo` trong REST.
+- `retryCount = attemptNo - 1`.
+- Annotation công khai dùng `fileId` và `kind`; `AnnotationRef.type` trong database ánh xạ sang `annotations[].kind`.
+- `object_key` là thông tin nội bộ; không trả trực tiếp trong REST.
+- `WARNING` không mặc định đồng nghĩa ảnh kém chất lượng hoặc `LOW_QUALITY`.
+- Mã băm dùng SHA-256 trên bytes UTF-8, chuẩn hóa CRLF thành LF; không thay đổi khoảng trắng hoặc nội dung khác.
 - File baseline này không tự băm chính nó.
 
 ## Kiểm chứng
 
-python scripts/validate_analysis_contract.py
+Chạy từ thư mục gốc repository:
+
+```powershell
+.\.venv-contract\Scripts\python.exe scripts/validate_analysis_contract.py
+```
+
+Kết quả đã kiểm tra đạt:
+
+```text
+PASS: OpenAPI 0.6.0
+PASS: examples REST=20, event=4, job=1
+PASS: embedded example checks=54
+PASS: negative checks for review, OCT, binary job and old event version
+PASS: LF-normalized SHA-256 hashes=31
+Contract validation only; backend, permissions, NiFi and end-to-end NFR are not verified.
+```
+
+Các hash bên dưới được giữ nguyên từ bộ contract đã kiểm tra đạt.
 
 ## Mã băm
 
