@@ -1,34 +1,44 @@
+
 :root {
-  font-family: Arial, sans-serif;
-  color: #17324d;
-  background: #f3f7fb;
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  color: #24394d;
+  background: #f5f8fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --color-primary: #176f86;
+  --color-sidebar: #102a43;
+  --color-text: #20394f;
+  --color-muted: #8493a2;
+  --color-border: #e6ecf1;
+  --color-surface: #ffffff;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
 }
 
 body {
+  min-width: 320px;
+  min-height: 100vh;
   margin: 0;
 }
 
-main {
-  max-width: 720px;
-  margin: 64px auto;
-  padding: 32px;
-  background: white;
-  border-radius: 16px;
-}
-
 button {
-  padding: 12px 20px;
-  border: 0;
-  border-radius: 8px;
-  background: #176b87;
-  color: white;
-  cursor: pointer;
+  font-family: inherit;
 }
 
-button:disabled {
-  opacity: 0.6;
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #3197aa;
+  outline-offset: 3px;
 }
 
-[role="alert"] {
-  color: #b42318;
+::selection {
+  color: #ffffff;
+  background: #176f86;
 }
