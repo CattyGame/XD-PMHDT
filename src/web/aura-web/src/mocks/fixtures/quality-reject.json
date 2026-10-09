@@ -1,0 +1,24 @@
+{
+  "analysisId": "3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0003",
+  "batchId": "b0000000-0000-4000-8000-000000000001",
+  "patientId": "9b2e5c10-1111-4a2b-8c3d-000000000001",
+  "processingStatus": "LOW_QUALITY",
+  "reviewStatus": "NOT_REQUIRED",
+  "createdAt": "2026-10-08T03:15:00Z",
+  "updatedAt": "2026-10-08T03:15:09Z",
+  "error": {
+    "code": "ERR_IMAGE_LOW_QUALITY",
+    "message": "Ảnh không đủ chất lượng để đánh giá, vui lòng chụp lại.",
+    "retryable": false
+  },
+  "ownerId": "9b2e5c10-1111-4a2b-8c3d-000000000001",
+  "image": {
+    "fileId": "f0000000-0000-4000-8000-000000000001",
+    "kind": "original"
+  },
+  "job": {
+    "jobId": "a0000000-0000-4000-8000-000000000001",
+    "status": "SUCCEEDED",
+    "retryCount": 0
+  }
+}
