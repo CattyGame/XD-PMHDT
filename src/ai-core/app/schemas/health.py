@@ -1,26 +1,19 @@
 """
-HealthCheck Schemas for AURA AI Service.
+HealthCheck and Platform Schemas for AURA AI Service (Module M4).
 """
-from typing import Optional
+from pydantic import BaseModel, Field
 
-try:
-    from pydantic import BaseModel, Field
-except ImportError:
-    # Lightweight fallback for environments before pip install
-    from dataclasses import dataclass, field
-    class BaseModel:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-        def dict(self):
-            return self.__dict__
-    def Field(*args, **kwargs):
-        return kwargs.get("default", None)
 
 class HealthResponse(BaseModel):
-    status: str = "healthy"
-    version: str = "1.0.0"
-    service: str = "aura-ai-service"
-    device: str = "cpu"
-    model_loaded: bool = True
-    uptime_seconds: float = 0.0
+    status: str = Field("ok", description="Trạng thái dịch vụ")
+    version: str = Field("0.1.0", description="Phiên bản dịch vụ")
+    service: str = Field("AURA.AiCore", description="Tên dịch vụ")
+    device: str = Field("cpu", description="Thiết bị tính toán")
+    model_loaded: bool = Field(False, description="Tình trạng nạp mô hình (luôn false ở giai đoạn mock)")
+    uptime_seconds: float = Field(0.0, description="Thời gian hoạt động tính theo giây")
+
+
+class PingResponse(BaseModel):
+    service: str = Field("AURA.AiCore", description="Tên dịch vụ")
+    message: str = Field("AI Core template is running", description="Thông điệp kiểm tra kết nối")
+    timestamp: str = Field(..., description="Thời điểm phản hồi UTC (ISO 8601)")

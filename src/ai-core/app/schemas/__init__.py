@@ -1,5 +1,5 @@
 from .common import EyeSide, AnalysisMode, RiskLevel, AnalysisStatus
-from .health import HealthResponse
+from .health import HealthResponse, PingResponse
 from .analysis import (
     AnalysisRequest,
     ImageInfo,
@@ -16,6 +16,7 @@ __all__ = [
     "RiskLevel",
     "AnalysisStatus",
     "HealthResponse",
+    "PingResponse",
     "AnalysisRequest",
     "ImageInfo",
     "VesselMetrics",
