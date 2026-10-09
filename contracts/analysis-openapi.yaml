@@ -15,6 +15,7 @@ info:
     - Ảnh và annotation là tệp riêng tư: API chỉ trả `fileId`; muốn đọc phải gọi endpoint `/files/{fileId}/access` để được kiểm tra quyền rồi cấp URL ký có thời hạn. Object key chỉ nằm trong database.
     - Tenant và vai trò lấy từ token; mọi truy vấn lọc theo tenant (NFR-12, BR-15). Mỗi operation ghi vai trò được phép ở `x-roles`.
     - Analysis không sửa bảng credit; phối hợp Billing qua API và event (BR-08, BR-09).
+    - `analysis.failed` có thể mô tả một lần xử lý lỗi có thể retry. Billing chỉ release credit khi lỗi đã kết thúc (retryable=false); không release ở lỗi tạm thời còn retry.
     - Mã lỗi ERR_*; tên trạng thái khớp State Machine SCRUM-52 (processing_status, review_status, job.status).
     - JSON public dùng camelCase. Ví dụ là dữ liệu giả; `result.isMock` đánh dấu kết quả giả lập.
 servers:
@@ -654,6 +655,13 @@ components:
             format: binary
           description: 1..N ảnh đáy mắt (JPEG/PNG). Mỗi ảnh tạo một analysis riêng, cùng một batchId.
             Ảnh lưu object storage, DB chỉ giữ tham chiếu.
+        modality:
+          type: string
+          enum:
+          - FUNDUS
+          - OCT
+          default: FUNDUS
+          description: Loại ảnh yêu cầu. Phiên bản hiện tại chỉ xử lý FUNDUS; OCT phải bị từ chối bằng 400 ERR_VALIDATION.
         eyeSide:
           type: string
           enum:
@@ -796,27 +804,53 @@ components:
         total:
           type: integer
     ReviewRequest:
-      type: object
-      required:
-      - isApproved
-      - baseVersion
-      properties:
-        isApproved:
-          type: boolean
-          description: 'true = đồng ý kết quả AI; false = hiệu chỉnh (ERD: is_approved)'
-        baseVersion:
-          type: integer
-          minimum: 0
-          description: Số review hiện có; lệch => 409 ERR_CONCURRENT_REVIEW
-        correctedRiskLevel:
-          $ref: '#/components/schemas/RiskLevel'
-        doctorNotes:
-          type: string
-          maxLength: 2000
-        reason:
-          type: string
-          maxLength: 1000
-          description: Lý do điều chỉnh (ADR-008)
+      description: Khi xác nhận kết quả AI (isApproved=true), correctedRiskLevel/reason không bắt buộc. Khi hiệu chỉnh (isApproved=false), correctedRiskLevel và reason bắt buộc. baseVersion phải khớp phiên bản hiện tại; nếu không trả 409 ERR_CONCURRENT_REVIEW.
+      oneOf:
+      - type: object
+        title: Confirm AI result
+        required:
+        - isApproved
+        - baseVersion
+        properties:
+          isApproved:
+            type: boolean
+            enum: [true]
+            description: Xác nhận kết quả AI hiện tại.
+          baseVersion:
+            type: integer
+            minimum: 0
+            description: Phiên bản review hiện tại; lệch => 409 ERR_CONCURRENT_REVIEW.
+          doctorNotes:
+            type: string
+            maxLength: 2000
+        additionalProperties: false
+      - type: object
+        title: Correct AI result
+        required:
+        - isApproved
+        - baseVersion
+        - correctedRiskLevel
+        - reason
+        properties:
+          isApproved:
+            type: boolean
+            enum: [false]
+            description: Bác sĩ không chấp nhận kết quả AI và thực hiện hiệu chỉnh.
+          baseVersion:
+            type: integer
+            minimum: 0
+            description: Phiên bản review hiện tại; lệch => 409 ERR_CONCURRENT_REVIEW.
+          correctedRiskLevel:
+            $ref: '#/components/schemas/RiskLevel'
+          doctorNotes:
+            type: string
+            maxLength: 2000
+          reason:
+            type: string
+            minLength: 1
+            maxLength: 1000
+            description: Bắt buộc khi hiệu chỉnh (ADR-008).
+        additionalProperties: false
     Review:
       type: object
       required:
@@ -978,6 +1012,10 @@ components:
           - ERR_INSUFFICIENT_CREDIT
           - ERR_UNAUTHORIZED
           - ERR_DUPLICATE_REQUEST
+          - ERR_VALIDATION
+          - ERR_UNSUPPORTED_MODALITY
+          - ERR_CONCURRENT_REVIEW
+          - ERR_IDEMPOTENCY_KEY_REUSED
         message:
           type: string
         retryable:

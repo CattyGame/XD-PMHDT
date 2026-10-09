@@ -3,15 +3,15 @@
 - Phiên bản file hợp đồng: **0.5.0** (schemaVersion event và job: 0.5)
 - Ngày khóa: 2026-10-09
 - Người lập: M2 (Võ Hữu Duy). Task: SCRUM-282, SCRUM-280
-- Trạng thái: đã khóa phía M2; chờ M1, M4, M5 xác nhận (xem trang Confluence "Contract Baseline v0.1")
+- Trạng thái: bản dự thảo sau rà soát M2; chờ M1, M4, M5 xác nhận trước khi khóa baseline (xem trang Confluence "Contract Baseline v0.1")
 - Tag Git đề xuất: `contract-baseline-w1-v0.1`
 
 ## Mã băm SHA-256
 
 | File | SHA-256 |
 |---|---|
-| `analysis-openapi.yaml` | `d00f33a309bc08e2f378bb6dfbce5a81b0d3ebd43869b9a9beb4d25ae4922ef2` |
-| `analysis-events.schema.json` | `78650f950469e0551c90e5fdc9ec081ba0223ae58d8f4f041ce32dee7f21c8b0` |
+| `analysis-openapi.yaml` | `94a3a148e85577dc9095be12a49944ea226306f60bc1eac45fdb44b816ff84e2` |
+| `analysis-events.schema.json` | `361bd618b1d51f99fd02e692ffba263d7a1d4a1ac73f776a7c84dd0285d5a954` |
 | `analysis-job.schema.json` | `83d21209a93c3089a61502fe46cdb32d9492e1f3b77b18b64f4dc8522be7b1df` |
 | `examples/analysis-completed-200.json` | `31047e4e66b8b9310749110bfb903c6581d502c7f0f5a7392a97d83604d5d107` |
 | `examples/analysis-duplicate-200.json` | `54acad26802e844af66e9a1c23c68173f1236beed53319eba4a9a1dafda1834b` |
@@ -40,3 +40,8 @@ Kiểm tra trên Linux hoặc Git Bash: `sha256sum contracts/analysis-openapi.ya
 2. Đổi tên hoặc kiểu trường, enum, mã lỗi là thay đổi phá vỡ: tăng baseline (v0.2) và báo M1, M3, M4, M5 trước khi gộp.
 3. Chỉ thêm trường tùy chọn, ví dụ, mô tả: tăng phiên bản phụ (0.5.1), ghi lịch sử.
 4. Sau mỗi thay đổi: kiểm tra lại OpenAPI, ví dụ, schema; cập nhật mã băm và file này; tạo tag mới.
+
+
+## Ghi chú cập nhật sau rà soát M2
+
+Bản dự thảo này đã cập nhật SHA-256 theo các file hiện tại trong gói làm việc. Các hash này chỉ xác định đúng nội dung của gói này; không chứng minh đã được nhóm nghiệm thu hoặc đã có commit/tag phát hành. Sau khi M1/M4/M5 duyệt, cần chốt phiên bản hợp đồng, commit SHA và tag baseline tương ứng.
