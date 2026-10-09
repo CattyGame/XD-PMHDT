@@ -124,6 +124,7 @@ services:
 
 networks:
   aura_network:
+    name: ${AURA_DOCKER_NETWORK:-aura_network}
     driver: bridge
 
 volumes:
