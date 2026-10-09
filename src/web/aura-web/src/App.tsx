@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import './App.css'
+import NotificationSettings from './components/NotificationSettings'
+import FcmDemoPanel from './components/FcmDemoPanel'
 
 type PingResponse = {
   service: string
@@ -631,6 +633,8 @@ function App() {
           </div>
 
           {renderPageContent()}
+          <NotificationSettings />
+          <FcmDemoPanel />
 
           <footer className="page-footer">
             <span>© 2026 AURA · Retinal Health Screening System</span>

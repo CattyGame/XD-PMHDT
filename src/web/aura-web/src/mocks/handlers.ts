@@ -9,11 +9,12 @@ import qualityReject from './fixtures/quality-reject.json'
 import error400 from './fixtures/error-400.json'
 import error401 from './fixtures/error-401.json'
 import error403 from './fixtures/error-403.json'
-
+import { fcmHandlers } from './fcmHandlers'
 // Chọn kịch bản demo bằng query parameter.
 // Ví dụ: /api/v1/analysis/123?scenario=failed
 
 export const handlers = [
+  ...fcmHandlers,
   // Tạo yêu cầu phân tích
   
 http.post('/api/v1/analysis', async ({ request }) => {
@@ -30,6 +31,7 @@ http.post('/api/v1/analysis', async ({ request }) => {
         status: 409,
       }
     )
+    
   }
 
   await delay(500)
