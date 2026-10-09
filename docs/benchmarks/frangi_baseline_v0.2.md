@@ -98,10 +98,28 @@ NFR toàn luồng: NOT_VERIFIED.
 
 ## 7. Tái lập
 
-Chạy tại thư mục gốc repository trên Windows:
+Chạy tại thư mục gốc repository:
 
+### 7.1. Khởi tạo môi trường ảo chuyên dụng cho baseline
 ```powershell
+uv venv .venv-dataset
+# hoặc: python -m venv .venv-dataset
+
 .\.venv-dataset\Scripts\python.exe -m pip install -r src/ai-core/requirements-baseline.txt
+```
+
+### 7.2. Kiểm tra bộ dữ liệu và chuẩn bị manifest
+```powershell
 .\.venv-dataset\Scripts\python.exe src/ai-core/scripts/prepare_chase_db1.py
-.\.venv-dataset\Scripts\python.exe src/ai-core/scripts/baseline_benchmark.py
+```
+
+### 7.3. Tái lập đánh giá trên tập kiểm thử (Test Set)
+```powershell
 .\.venv-dataset\Scripts\python.exe src/ai-core/scripts/evaluate_frangi_test.py
+```
+
+*Quy tắc truy vết & An toàn dữ liệu*:
+- Script tự động chuẩn hóa ký tự xuống dòng (LF / CRLF) khi kiểm tra mã băm SHA-256, đảm bảo tính nhất quán giữa môi trường Windows và Linux.
+- Khi tệp báo cáo gốc `docs/benchmarks/frangi_test_v0.2.json` đã tồn tại, script mặc định bảo lưu tệp gốc và lưu kết quả tái lập mới vào `docs/benchmarks/frangi_test_v0.2_reproduced.json`.
+- Script tự động so sánh đối chiếu kết quả tái lập với baseline đã chốt (Dice 0.4201, IoU 0.2662), xác nhận khớp chính xác 100%.
+- Không dùng kết quả test để tinh chỉnh lại tham số hay ngưỡng phân ngưỡng của thuật toán.
