@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: AURA Analysis API
-  version: 0.4.0
+  version: 0.5.0
   description: |-
-    Hợp đồng REST công khai của Analysis Service (SCRUM-280) - **v0.4 đề xuất, chờ M1/M4/M5 xác nhận**.
+    Hợp đồng REST công khai của Analysis Service (SCRUM-280) - **v0.5 - ứng viên baseline tuần 1 (BASELINE-W1-v0.1), chờ M1/M4/M5 xác nhận**.
 
     Căn cứ: ADR-002/003/008 (M1), State Machine SCRUM-52, ERD SCRUM-53, hợp đồng AI SCRUM-61, yêu cầu chỉnh sửa của nhóm trưởng cho M2.
 
@@ -15,7 +15,7 @@ info:
     - Ảnh và annotation là tệp riêng tư: API chỉ trả `fileId`; muốn đọc phải gọi endpoint `/files/{fileId}/access` để được kiểm tra quyền rồi cấp URL ký có thời hạn. Object key chỉ nằm trong database.
     - Tenant và vai trò lấy từ token; mọi truy vấn lọc theo tenant (NFR-12, BR-15). Mỗi operation ghi vai trò được phép ở `x-roles`.
     - Analysis không sửa bảng credit; phối hợp Billing qua API và event (BR-08, BR-09).
-    - Mã lỗi theo danh mục ERR_* của SCRUM-52.
+    - Mã lỗi ERR_*; tên trạng thái khớp State Machine SCRUM-52 (processing_status, review_status, job.status).
     - JSON public dùng camelCase. Ví dụ là dữ liệu giả; `result.isMock` đánh dấu kết quả giả lập.
 servers:
 - url: http://localhost:8080
@@ -40,6 +40,7 @@ paths:
         Ảnh trùng (theo checksum): item có processingStatus DUPLICATE kèm existingAnalysisId.
       parameters:
       - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -127,6 +128,7 @@ paths:
         in: query
         schema:
           $ref: '#/components/schemas/ReviewStatus'
+      - $ref: '#/components/parameters/CorrelationId'
       responses:
         '200':
           description: OK
@@ -150,11 +152,12 @@ paths:
       - Analyses
       operationId: getAnalysis
       summary: Lấy trạng thái và kết quả
-      description: Client poll. `result` chỉ có khi processingStatus là AI_COMPLETED. `error` có khi FAILED,
+      description: Client poll. `result` chỉ có khi processingStatus là COMPLETED. `error` có khi FAILED,
         LOW_QUALITY, REJECTED, DUPLICATE. Không có quyền hoặc không tồn tại đều trả 404 (BR-02); 403 cho
         vai trò không được dùng chức năng.
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
+      - $ref: '#/components/parameters/CorrelationId'
       responses:
         '200':
           description: OK
@@ -170,7 +173,7 @@ paths:
                     batchId: b0000000-0000-4000-8000-000000000001
                     patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
                     processingStatus: PROCESSING
-                    reviewStatus: NOT_APPLICABLE
+                    reviewStatus: NOT_REQUIRED
                     createdAt: '2026-10-08T03:15:00Z'
                     updatedAt: '2026-10-08T03:15:04Z'
                     ownerId: 9b2e5c10-1111-4a2b-8c3d-000000000001
@@ -187,8 +190,8 @@ paths:
                     analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
                     batchId: b0000000-0000-4000-8000-000000000001
                     patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
-                    processingStatus: AI_COMPLETED
-                    reviewStatus: REVIEW_PENDING
+                    processingStatus: COMPLETED
+                    reviewStatus: PENDING
                     createdAt: '2026-10-08T03:15:00Z'
                     updatedAt: '2026-10-08T03:15:14Z'
                     result:
@@ -219,7 +222,7 @@ paths:
                       kind: original
                     job:
                       jobId: a0000000-0000-4000-8000-000000000001
-                      status: SUCCESS
+                      status: SUCCEEDED
                       retryCount: 0
                 reviewed:
                   summary: Bác sĩ đã điều chỉnh
@@ -227,8 +230,8 @@ paths:
                     analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
                     batchId: b0000000-0000-4000-8000-000000000001
                     patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
-                    processingStatus: AI_COMPLETED
-                    reviewStatus: CORRECTED
+                    processingStatus: COMPLETED
+                    reviewStatus: REVIEWED
                     createdAt: '2026-10-08T03:15:00Z'
                     updatedAt: '2026-10-08T04:00:00Z'
                     result:
@@ -270,7 +273,7 @@ paths:
                       kind: original
                     job:
                       jobId: a0000000-0000-4000-8000-000000000001
-                      status: SUCCESS
+                      status: SUCCEEDED
                       retryCount: 0
                 lowQuality:
                   summary: Ảnh chất lượng kém (không có kết quả)
@@ -279,7 +282,7 @@ paths:
                     batchId: b0000000-0000-4000-8000-000000000001
                     patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
                     processingStatus: LOW_QUALITY
-                    reviewStatus: NOT_APPLICABLE
+                    reviewStatus: NOT_REQUIRED
                     createdAt: '2026-10-08T03:15:00Z'
                     updatedAt: '2026-10-08T03:15:09Z'
                     error:
@@ -292,7 +295,7 @@ paths:
                       kind: original
                     job:
                       jobId: a0000000-0000-4000-8000-000000000001
-                      status: SUCCESS
+                      status: SUCCEEDED
                       retryCount: 0
                 failed:
                   summary: Thất bại (ảnh được giữ lại)
@@ -301,7 +304,7 @@ paths:
                     batchId: b0000000-0000-4000-8000-000000000001
                     patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
                     processingStatus: FAILED
-                    reviewStatus: NOT_APPLICABLE
+                    reviewStatus: NOT_REQUIRED
                     createdAt: '2026-10-08T03:15:00Z'
                     updatedAt: '2026-10-08T03:21:10Z'
                     error:
@@ -338,6 +341,7 @@ paths:
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
       - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
       responses:
         '202':
           description: Đã xếp hàng lại
@@ -365,6 +369,7 @@ paths:
       summary: Lịch sử các phiên bản review
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
+      - $ref: '#/components/parameters/CorrelationId'
       responses:
         '200':
           description: OK
@@ -394,11 +399,12 @@ paths:
       - Reviews
       operationId: submitReview
       summary: Bác sĩ xác nhận hoặc chỉnh sửa kết quả AI
-      description: 'Chỉ bác sĩ được phân công (BR-03), chỉ khi processingStatus là AI_COMPLETED. Mỗi review
+      description: 'Chỉ bác sĩ được phân công (BR-03), chỉ khi processingStatus là COMPLETED. Mỗi review
         là bản ghi riêng, version tăng dần; kết quả AI gốc không bị ghi đè (BR-06, ADR-008). `baseVersion`
         lệch: 409 ERR_CONCURRENT_REVIEW.'
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
+      - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -455,6 +461,7 @@ paths:
           enum:
           - pdf
           - csv
+      - $ref: '#/components/parameters/CorrelationId'
       responses:
         '200':
           description: Tệp báo cáo
@@ -493,6 +500,7 @@ paths:
         schema:
           type: string
           format: uuid
+      - $ref: '#/components/parameters/CorrelationId'
       responses:
         '200':
           description: OK
@@ -507,17 +515,17 @@ paths:
                 items:
                 - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
                   fileName: fundus-01.jpg
-                  processingStatus: AI_COMPLETED
-                  reviewStatus: REVIEW_PENDING
+                  processingStatus: COMPLETED
+                  reviewStatus: PENDING
                   riskLevel: MODERATE
                   job:
                     jobId: a0000000-0000-4000-8000-000000000001
-                    status: SUCCESS
+                    status: SUCCEEDED
                     retryCount: 0
                 - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0002
                   fileName: fundus-02.jpg
                   processingStatus: FAILED
-                  reviewStatus: NOT_APPLICABLE
+                  reviewStatus: NOT_REQUIRED
                   error:
                     code: ERR_TIMEOUT
                     message: Quá thời gian xử lý.
@@ -559,6 +567,7 @@ paths:
         schema:
           type: string
           format: uuid
+      - $ref: '#/components/parameters/CorrelationId'
       responses:
         '200':
           description: OK
@@ -598,19 +607,27 @@ components:
       schema:
         type: string
         format: uuid
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Mã theo dõi xuyên dịch vụ. Nếu thiếu, Gateway/API tự sinh. Được trả lại trong error.correlationId
+        và ghi vào event/job.correlationId.
+      schema:
+        type: string
+        maxLength: 64
   schemas:
     ProcessingStatus:
       type: string
       enum:
       - PENDING
-      - CREDIT_CHECK
       - QUEUED
       - PROCESSING
-      - AI_COMPLETED
+      - COMPLETED
       - FAILED
       - RETRY_READY
-      - REJECTED
       - LOW_QUALITY
+      - REJECTED
       - DUPLICATE
       description: Theo State Machine SCRUM-52 (nhóm Analysis, Analysis error, Validation).
     RiskLevel:
@@ -790,7 +807,7 @@ components:
         baseVersion:
           type: integer
           minimum: 0
-          description: Số review hiện có; lệch => 409 REVIEW_VERSION_CONFLICT
+          description: Số review hiện có; lệch => 409 ERR_CONCURRENT_REVIEW
         correctedRiskLevel:
           $ref: '#/components/schemas/RiskLevel'
         doctorNotes:
@@ -851,6 +868,11 @@ components:
           properties:
             code:
               type: string
+              description: 'Mã lỗi ERR_*. Ánh xạ tên trong State Machine (SCRUM-52): VALIDATION_ERROR=ERR_VALIDATION,
+                UNAUTHORIZED=ERR_UNAUTHORIZED, FORBIDDEN=ERR_FORBIDDEN, NOT_FOUND=ERR_NOT_FOUND, IDEMPOTENCY_KEY_REUSED=ERR_IDEMPOTENCY_KEY_REUSED,
+                REVIEW_VERSION_CONFLICT=ERR_CONCURRENT_REVIEW, INVALID_STATE=ERR_INVALID_STATE, TOO_MANY_REQUESTS=ERR_TOO_MANY_REQUESTS.
+                Lỗi ở lớp xử lý AI: ERR_AI_FAILED, ERR_TIMEOUT, ERR_NETWORK, ERR_IMAGE_LOW_QUALITY, ERR_IMAGE_MISSING,
+                ERR_INSUFFICIENT_CREDIT, ERR_DUPLICATE_REQUEST.'
             message:
               type: string
             details:
@@ -882,12 +904,16 @@ components:
     ReviewStatus:
       type: string
       enum:
-      - NOT_APPLICABLE
-      - REVIEW_PENDING
+      - NOT_REQUIRED
+      - PENDING
+      - IN_REVIEW
       - REVIEWED
-      - CORRECTED
-      description: NOT_APPLICABLE khi chưa AI_COMPLETED. CORRECTED tương ứng CORRECTION/REVIEW_SAVED của
-        SCRUM-52 (ánh xạ Pending).
+      - CORRECTION_REQUIRED
+      description: 'Khớp review_status của State Machine (SCRUM-52). NOT_REQUIRED khi chưa COMPLETED.
+        PENDING sau khi COMPLETED và cần bác sĩ. REVIEWED sau khi POST /reviews thành công (cả xác nhận
+        lẫn hiệu chỉnh; phân biệt bằng Review.isApproved và Review.version). IN_REVIEW và CORRECTION_REQUIRED
+        là trạng thái trung gian của State Machine, hiện chưa có operation nào đặt (xem mục Pending: có
+        cần thao tác nhận review hay không).'
     BatchItem:
       type: object
       required:
@@ -1005,8 +1031,10 @@ components:
           enum:
           - QUEUED
           - RUNNING
-          - SUCCESS
+          - SUCCEEDED
           - FAILED
+          - RETRY_READY
+          - DEAD_LETTER
         retryCount:
           type: integer
           minimum: 0

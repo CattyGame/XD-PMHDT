@@ -1,7 +1,7 @@
 {
   "messageId": "e1000000-0000-4000-8000-000000000001",
   "messageType": "analysis.job.run",
-  "schemaVersion": "0.4",
+  "schemaVersion": "0.5",
   "occurredAt": "2026-10-08T03:15:01Z",
   "tenantId": "7a000000-0000-4000-8000-000000000001",
   "correlationId": "c0ffee00-0000-4000-8000-0000000000aa",

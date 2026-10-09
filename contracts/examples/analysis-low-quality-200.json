@@ -3,7 +3,7 @@
   "batchId": "b0000000-0000-4000-8000-000000000001",
   "patientId": "9b2e5c10-1111-4a2b-8c3d-000000000001",
   "processingStatus": "LOW_QUALITY",
-  "reviewStatus": "NOT_APPLICABLE",
+  "reviewStatus": "NOT_REQUIRED",
   "createdAt": "2026-10-08T03:15:00Z",
   "updatedAt": "2026-10-08T03:15:09Z",
   "error": {
@@ -18,7 +18,7 @@
   },
   "job": {
     "jobId": "a0000000-0000-4000-8000-000000000001",
-    "status": "SUCCESS",
+    "status": "SUCCEEDED",
     "retryCount": 0
   }
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Job message: analysis.job.run (v0.4, đề xuất)",
+  "title": "Job message: analysis.job.run (v0.5, ứng viên baseline W1)",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -25,7 +25,7 @@
       "const": "analysis.job.run"
     },
     "schemaVersion": {
-      "const": "0.4"
+      "const": "0.5"
     },
     "occurredAt": {
       "type": "string",
