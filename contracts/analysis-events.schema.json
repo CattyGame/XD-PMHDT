@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aura.local/contracts/analysis-events.schema.json",
   "title": "AURA Analysis Events và Job Message v0.5 (ứng viên baseline W1)",
-  "description": "Envelope event phân tích và message job. Nguyên tắc: (1) message chỉ chứa định danh/tham chiếu, KHÔNG chứa ảnh, Base64, object key hay dữ liệu bệnh nhân không cần thiết; (2) giao hàng at-least-once, consumer idempotent theo eventId/messageId; (3) Analysis ghi dữ liệu và outbox trong cùng transaction, outbox publisher phát sau; (4) Worker chỉ ACK sau khi kết quả hoặc trạng thái lỗi đã lưu bền vững; retry có giới hạn, backoff, dead-letter queue (số liệu Pending); (5) Billing nhận analysis.completed để capture credit và analysis.failed để release; Analysis không sửa bảng credit; Notification nhận completed/failed/reviewed.",
+  "description": "Envelope event phân tích và message job. Nguyên tắc: (1) message chỉ chứa định danh/tham chiếu, KHÔNG chứa ảnh, Base64, object key hay dữ liệu bệnh nhân không cần thiết; (2) giao hàng at-least-once, consumer idempotent theo eventId/messageId; (3) Analysis ghi dữ liệu và outbox trong cùng transaction, outbox publisher phát sau; (4) Worker chỉ ACK sau khi kết quả hoặc trạng thái lỗi đã lưu bền vững; retry có giới hạn, backoff, dead-letter queue (số liệu Pending); (5) Billing nhận analysis.completed để capture credit; analysis.failed chỉ được release credit khi retryable=false và lỗi đã kết thúc, không release ở lỗi tạm thời còn retry; Analysis không sửa bảng credit; Notification nhận completed/failed/reviewed.",
   "type": "object",
   "required": [
     "eventId",
