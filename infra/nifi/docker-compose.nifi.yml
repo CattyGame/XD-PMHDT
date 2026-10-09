@@ -16,13 +16,14 @@ services:
       - nifi_flowfile_repository:/opt/nifi/nifi-current/flowfile_repository
       - nifi_content_repository:/opt/nifi/nifi-current/content_repository
       - nifi_provenance_repository:/opt/nifi/nifi-current/provenance_repository
+      - nifi_quarantine:/opt/nifi/quarantine
     networks:
       - aura_network
     restart: unless-stopped
 
 networks:
   aura_network:
-    name: xd-phnmmhngitng_aura_network
+    name: ${AURA_DOCKER_NETWORK:-aura_network}
     external: true
 
 volumes:
@@ -30,3 +31,4 @@ volumes:
   nifi_flowfile_repository:
   nifi_content_repository:
   nifi_provenance_repository:
+  nifi_quarantine:
