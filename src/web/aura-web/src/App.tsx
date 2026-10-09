@@ -133,9 +133,7 @@ function App() {
       const data: PingResponse = await response.json()
       setResult(data)
     } catch {
-      setError(
-        'Không thể kết nối tới hệ thống. Hãy kiểm tra API Gateway và cấu hình proxy.',
-      )
+      setError('Không thể kết nối tới hệ thống.')
     } finally {
       setLoading(false)
     }
@@ -313,7 +311,11 @@ function App() {
                 </p>
               </div>
             </div>
-            {error && <p className="error-message">{error}</p>}
+            {error && (
+  <p className="error-message" role="alert">
+    {error}
+  </p>
+)}
             {result && <p className="success-message">{result.message}</p>}
             <button
               className="button button-outline"
@@ -476,7 +478,11 @@ function App() {
           >
             {loading ? 'Đang kiểm tra...' : 'Kiểm tra kết nối'}
           </button>
-          {error && <p className="error-message">{error}</p>}
+          {error && (
+  <p className="error-message" role="alert">
+    {error}
+  </p>
+)}
           {result && (
             <div className="connection-result">
               <h4>Kết nối thành công</h4>
