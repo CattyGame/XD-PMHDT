@@ -25,6 +25,10 @@
       "description": "Kiểm tra tình trạng hoạt động của service"
     },
     {
+      "name": "Platform",
+      "description": "Kiểm tra kết nối ping và thông tin nền tảng"
+    },
+    {
       "name": "Analysis",
       "description": "Phân tích hình ảnh võng mạc và đánh giá chỉ số"
     }
@@ -46,12 +50,38 @@
                   "$ref": "#/components/schemas/HealthResponse"
                 },
                 "example": {
-                  "status": "healthy",
-                  "version": "1.0.0",
-                  "service": "aura-ai-service",
-                  "device": "cuda:0",
-                  "model_loaded": true,
-                  "uptime_seconds": 3600.5
+                  "status": "ok",
+                  "version": "0.1.0",
+                  "service": "AURA.AiCore",
+                  "device": "cpu",
+                  "model_loaded": false,
+                  "uptime_seconds": 124.8
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/platform/ping": {
+      "get": {
+        "tags": [
+          "Platform"
+        ],
+        "summary": "Kiểm tra kết nối ping đến AI Core Service",
+        "operationId": "pingService",
+        "responses": {
+          "200": {
+            "description": "Kết nối hoạt động bình thường",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PingResponse"
+                },
+                "example": {
+                  "service": "AURA.AiCore",
+                  "message": "AI Core template is running",
+                  "timestamp": "2026-10-09T08:00:00+00:00"
                 }
               }
             }
@@ -79,6 +109,7 @@
                 "patient_id": "PAT-88231",
                 "eye_side": "right",
                 "mode": "retina_vessels",
+                "modality": "FUNDUS",
                 "image_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
                 "include_mask": true,
                 "include_overlay": true
@@ -104,7 +135,8 @@
                     "width": 512,
                     "height": 512,
                     "channels": 3,
-                    "eye_side": "right"
+                    "eye_side": "right",
+                    "modality": "FUNDUS"
                   },
                   "metrics": {
                     "vessel_density": 0.1428,
@@ -133,21 +165,44 @@
             }
           },
           "400": {
-            "description": "Dữ liệu đầu vào không hợp lệ",
+            "description": "Dữ liệu đầu vào không hợp lệ (Base64 sai, không phải ảnh, vượt kích thước)",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error_code": "INVALID_IMAGE_PAYLOAD",
+                  "message": "Không thể giải mã dữ liệu ảnh Base64 được gửi lên.",
+                  "details": {
+                    "supported_formats": [
+                      "PNG",
+                      "JPEG",
+                      "WEBP"
+                    ]
+                  },
+                  "timestamp": "2026-10-09T08:00:00Z"
                 }
               }
             }
           },
           "422": {
-            "description": "Lỗi định dạng JSON hoặc thiếu trường bắt buộc",
+            "description": "Lỗi định dạng JSON, thiếu trường bắt buộc, hoặc modality/mode không được hỗ trợ",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error_code": "UNSUPPORTED_MODALITY",
+                  "message": "unsupported_modality: Định dạng ảnh OCT chưa được hỗ trợ trong phiên bản hiện tại (chỉ hỗ trợ FUNDUS).",
+                  "details": {
+                    "supported_modalities": [
+                      "FUNDUS"
+                    ],
+                    "received_modality": "OCT"
+                  },
+                  "timestamp": "2026-10-09T08:00:00Z"
                 }
               }
             }
@@ -158,6 +213,12 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error_code": "INFERENCE_RUNTIME_ERROR",
+                  "message": "Lỗi nội bộ khi xử lý mô hình AI: Out of memory",
+                  "details": null,
+                  "timestamp": "2026-10-09T08:00:00Z"
                 }
               }
             }
@@ -203,6 +264,29 @@
             "type": "number",
             "format": "float",
             "example": 124.8
+          }
+        }
+      },
+      "PingResponse": {
+        "type": "object",
+        "required": [
+          "service",
+          "message",
+          "timestamp"
+        ],
+        "properties": {
+          "service": {
+            "type": "string",
+            "example": "AURA.AiCore"
+          },
+          "message": {
+            "type": "string",
+            "example": "AI Core template is running"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-09T08:00:00+00:00"
           }
         }
       },
@@ -303,6 +387,11 @@
           },
           "eye_side": {
             "$ref": "#/components/schemas/EyeSide"
+          },
+          "modality": {
+            "type": "string",
+            "example": "FUNDUS",
+            "description": "Loại ảnh chụp y tế"
           }
         }
       },

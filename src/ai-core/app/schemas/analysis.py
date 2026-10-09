@@ -75,7 +75,7 @@ class AnalysisResponse(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    error_code: str
-    message: str
-    details: Optional[Dict[str, Any]] = None
-    timestamp: str
+    error_code: str = Field(..., description="Mã lỗi máy đọc được")
+    message: str = Field(..., description="Thông điệp mô tả lỗi chi tiết")
+    details: Optional[Dict[str, Any]] = Field(None, description="Chi tiết lỗi bổ sung (nếu có)")
+    timestamp: str = Field(..., description="Thời điểm xảy ra lỗi theo chuẩn ISO 8601 UTC")

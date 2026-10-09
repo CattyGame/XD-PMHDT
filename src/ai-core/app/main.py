@@ -10,20 +10,30 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel
+from fastapi.encoders import jsonable_encoder
 
 from .schemas.common import AnalysisMode
-from .schemas.analysis import AnalysisRequest, AnalysisResponse
+from .schemas.health import HealthResponse, PingResponse
+from .schemas.analysis import AnalysisRequest, AnalysisResponse, ErrorResponse
 from .services.mock_service import process_mock_analysis, InvalidImagePayloadError
 
 APP_START_TIME = time.time()
 SERVICE_NAME = "AURA.AiCore"
 VERSION = "0.1.0"
+API_VERSION = "1.0.0"
 
 app = FastAPI(
-    title="AURA AI Core",
-    description="Microservice phân tích mạch máu võng mạc và đánh giá rủi ro tim mạch (Module M4).",
-    version=VERSION,
+    title="AURA AI Analysis Service API",
+    description=(
+        "Hợp đồng giao tiếp API (Module M4 - Computer Vision & AI Service) cho hệ thống AURA. "
+        "Cung cấp các endpoint phục vụ suy luận phân vùng mạch máu võng mạc, trích xuất đặc trưng hình học "
+        "và tính toán chỉ số nguy cơ tim mạch/đột quỵ theo thuật toán Heuristic."
+    ),
+    version=API_VERSION,
+    contact={
+        "name": "Dao Duy Quan (M4 Lead)",
+        "email": "quandd2937@ut.edu.vn",
+    },
 )
 
 # Enable CORS for Frontend (M5) and Gateway (M1)
@@ -36,28 +46,32 @@ app.add_middleware(
 )
 
 
-class HealthResponse(BaseModel):
-    status: str
-    version: str
-    service: str
-    device: str
-    model_loaded: bool
-    uptime_seconds: float
-
-
-class PingResponse(BaseModel):
-    service: str
-    message: str
-    timestamp: datetime
-
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handles 422 JSON validation errors with standard ErrorResponse schema."""
+    errors = exc.errors()
+    # Check if the error is specifically for unsupported mode
+    for err in errors:
+        loc = err.get("loc", ())
+        if "mode" in loc:
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                content={
+                    "error_code": "UNSUPPORTED_MODE",
+                    "message": "Chế độ phân tích nằm ngoài phạm vi hỗ trợ của phiên bản v0.1 (chỉ hỗ trợ retina_vessels).",
+                    "details": {
+                        "supported_modes": ["retina_vessels"],
+                        "received_mode": str(err.get("input", "")),
+                        "errors": jsonable_encoder(errors),
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
     error_payload = {
         "error_code": "SCHEMA_VALIDATION_ERROR",
         "message": "Dữ liệu gửi lên không đúng định dạng hoặc thiếu trường bắt buộc.",
-        "details": {"errors": exc.errors()},
+        "details": {"errors": jsonable_encoder(errors)},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content=error_payload)
@@ -89,7 +103,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content=error_payload)
 
 
-@app.get("/", tags=["Info"])
+@app.get("/", include_in_schema=False)
 def root():
     """Root info endpoint."""
     return {
@@ -102,7 +116,7 @@ def root():
     }
 
 
-@app.get("/health", response_model=HealthResponse, tags=["Platform"])
+@app.get("/health", response_model=HealthResponse, tags=["Health"])
 def health():
     uptime = round(time.time() - APP_START_TIME, 2)
     return HealthResponse(
@@ -120,11 +134,29 @@ def ping():
     return PingResponse(
         service=SERVICE_NAME,
         message="AI Core template is running",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 
-@app.post("/api/v1/analyze", response_model=AnalysisResponse, tags=["Analysis"])
+@app.post(
+    "/api/v1/analyze",
+    response_model=AnalysisResponse,
+    responses={
+        400: {
+            "model": ErrorResponse,
+            "description": "Dữ liệu đầu vào không hợp lệ (Base64 hỏng, không phải ảnh, vượt kích thước).",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "Lỗi định dạng JSON, thiếu trường bắt buộc, hoặc modality/mode không được hỗ trợ.",
+        },
+        500: {
+            "model": ErrorResponse,
+            "description": "Lỗi nội bộ trong quá trình xử lý mô hình AI.",
+        },
+    },
+    tags=["Analysis"],
+)
 def analyze_retina(request: AnalysisRequest):
     """
     Endpoint phân tích ảnh võng mạc (Mock Engine cho tuần 1 - SCRUM-62).

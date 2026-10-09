@@ -10,8 +10,6 @@ class EyeSide(str, Enum):
 
 class AnalysisMode(str, Enum):
     RETINA_VESSELS = "retina_vessels"
-    IRIS_BIOMETRICS = "iris_biometrics"
-    HYBRID = "hybrid"
 
 class RiskLevel(str, Enum):
     LOW = "LOW"
