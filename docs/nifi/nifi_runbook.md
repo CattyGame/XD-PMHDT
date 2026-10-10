@@ -30,7 +30,9 @@ Chưa triển khai hoặc chưa xác minh:
 - Retry/backoff khi HTTP 429, 503 hoặc timeout.
 - Xử lý phản hồi backend và lưu lỗi sau khi gửi.
 - Kiểm thử toàn luồng và NFR end-to-end.
-- Import lại flow export vào một nhóm mới.
+- Triển khai flow trên instance NiFi hoàn toàn mới và kiểm tra đầy đủ
+  các tình huống; import nhóm mới trong cùng instance đã đạt hai ca
+  ngày 2026-10-10, xem mục 8.
 
 HTTP 200 từ ListenHTTP chỉ xác nhận tiếp nhận dữ liệu vào NiFi;
 không có nghĩa backend đã tạo analysis.
@@ -296,7 +298,40 @@ Các ID tham chiếu đã được kiểm tra khớp.
 Flow definition chứa cấu hình và script, không chứa FlowFile đang chờ.
 Trạng thái ENABLED trong export không chứng minh processor đang chạy.
 Sau import phải kiểm tra trạng thái trước khi Start.
-Quy trình import lại chưa được kiểm thử trong lần sửa này.
+### Kiểm tra import flow — 2026-10-10
+
+Đã import flow definition vào nhóm mới
+`AURA-Camera-Ingestion-ImportCheck` trong cùng instance NiFi 1.27.0.
+
+Nhóm import có 7 processor, 11 connection và 2 output port.
+Dùng listener cổng 8081 với Base Path `ingest/import-check`;
+listener của nhóm cũ được giữ Stopped.
+
+Hai tình huống đã kiểm tra:
+
+| Trường hợp | Request ID | Kết quả |
+|---|---|---|
+| RealJPEG | a9423b30-dc93-4cb1-8f89-97154bf0c162 | Đến queue trước PreparedMultipart-PendingGateway |
+| InvalidBase64 | 81a21792-8df1-42e0-850f-689c79d063e4 | Lưu trong quarantine/INVALID_BASE64 |
+
+RealJPEG:
+- image.validation.status: VALID.
+- gateway.payload.ready: true.
+- image.format: JPEG.
+- Kích thước: 999×960.
+- image.size_bytes: 71630.
+- gateway.idempotency_key và gateway.correlation_id khớp request ID.
+- mime.type chứa multipart/form-data và boundary theo UUID FlowFile.
+
+File quarantine của InvalidBase64:
+`/opt/nifi/quarantine/INVALID_BASE64/c25beab1-21cf-40f7-b865-e7e4656948d5.json`.
+
+Kết quả xác nhận flow import hoạt động cho hai tình huống trên
+trong cùng instance NiFi. Chưa kiểm tra triển khai trên instance
+hoàn toàn mới, chưa kiểm tra lại toàn bộ tình huống và chưa nghiệm thu
+Gateway forwarding, service token, dedup hoặc retry.
+
+Sau kiểm tra, dừng các processor và giữ hai output port Stopped.
 
 Dừng container nhưng giữ dữ liệu:
 

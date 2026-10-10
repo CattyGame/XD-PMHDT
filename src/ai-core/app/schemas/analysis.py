@@ -53,26 +53,65 @@ class SegmentationResult(BaseModel):
     mask_base64: Optional[str] = None
     overlay_base64: Optional[str] = None
 
+class AnalysisWarning(BaseModel):
+    code: str = Field(
+        ...,
+        min_length=1,
+        description="Mã cảnh báo máy đọc được.",
+    )
+    message: str = Field(
+        ...,
+        min_length=1,
+        description="Nội dung cảnh báo.",
+    )
 
 class AnalysisResponse(BaseModel):
     request_id: str
     patient_id: Optional[str] = None
     timestamp: str
+
     status: AnalysisStatus = AnalysisStatus.SUCCESS
-    is_mock: bool = Field(True, description="Cờ xác nhận kết quả là Mock Engine tuần 1")
-    model_version: str = Field("mock-v0.1", description="Phiên bản mô hình suy luận")
-    threshold_version: str = Field("v0.1", description="Phiên bản ngưỡng đánh giá rủi ro")
-    config_version: str = Field("v0.1", description="Phiên bản cấu hình thuật toán")
-    limitations: str = Field(
-        "Kết quả mô phỏng (Mock Engine) phục vụ tích hợp giao diện M5 và Backend M2.",
-        description="Giới hạn kỹ thuật của phiên bản hiện tại"
+
+    warnings: List[AnalysisWarning] = Field(
+        default_factory=list,
+        description=(
+            "Cảnh báo đi kèm kết quả phân tích. "
+            "WARNING không mặc định đồng nghĩa ảnh kém chất lượng."
+        ),
     )
+
+    is_mock: bool = Field(
+        True,
+        description="Kết quả được tạo bởi Mock Engine để kiểm thử tích hợp.",
+    )
+
+    model_version: str = Field(
+        "mock-v0.1",
+        description="Phiên bản mô hình hoặc bộ xử lý giả lập.",
+    )
+
+    threshold_version: str = Field(
+        "v0.1",
+        description="Phiên bản cấu hình ngưỡng.",
+    )
+
+    config_version: str = Field(
+        "v0.1",
+        description="Phiên bản cấu hình xử lý.",
+    )
+
+    limitations: str = Field(
+        "Kết quả mô phỏng (Mock Engine) phục vụ kiểm thử tích hợp; "
+        "chưa tích hợp thuật toán phân vùng thật. "
+        "Mask và overlay là hình vẽ tổng hợp, không phải kết quả từ ảnh.",
+        description="Giới hạn kỹ thuật của phiên bản hiện tại.",
+    )
+
     processing_time_ms: float
     image_info: ImageInfo
     metrics: VesselMetrics
     risk_assessment: RiskAssessment
     segmentation: Optional[SegmentationResult] = None
-
 
 class ErrorResponse(BaseModel):
     error_code: str = Field(..., description="Mã lỗi máy đọc được")

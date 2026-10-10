@@ -1,11 +1,9 @@
-> **Trạng thái**: Đã kiểm tra CHASE_DB1, tạo manifest chia tập và đánh giá baseline Frangi v0.2 trên validation/test; chất lượng còn hạn chế, chưa xác nhận hiệu năng toàn luồng
-
 > **Dự án**: AURA — Phân tích mạch máu võng mạc hỗ trợ đánh giá sức khỏe
 > **Mã Jira**: SCRUM-59 — Kiểm tra dataset và giấy phép; SCRUM-290 — Version NiFi và dữ liệu huấn luyện
 > **Người biên soạn ban đầu**: Đào Duy Quân (M4 — AI Engineer)
-> **Phiên bản tài liệu**: 1.1.0
+> **Phiên bản tài liệu**: 1.2.0
 > **Ngày cập nhật**: 2026-10-09
-> **Trạng thái**: Đã kiểm tra dữ liệu CHASE_DB1; chưa hoàn thành chia tập và đánh giá thuật toán trên dữ liệu thật
+> **Trạng thái**: Đã kiểm tra CHASE_DB1, tạo manifest và chia tập theo đối tượng; đã đánh giá baseline Frangi v0.2 trên validation/test. Chất lượng còn hạn chế; chưa nghiệm thu hiệu năng toàn luồng hoặc hiệu quả lâm sàng.
 
 ---
 
@@ -52,7 +50,16 @@ Khi sử dụng hoặc phân phối dữ liệu:
 - Ghi rõ nếu đã thay đổi dữ liệu.
 - Không trình bày việc sử dụng dữ liệu như sự bảo trợ của tác giả hoặc đơn vị công bố.
 
-Dự án giữ ảnh gốc ở máy local và không commit ảnh vào Git. Đây là quy ước quản lý repository của nhóm.
+Dự án lưu archive gốc tại `data-assets/CHASE_DB1/CHASEDB1.zip`
+và hướng dẫn sử dụng tại `data-assets/CHASE_DB1/README.md`.
+
+Archive được quản lý trong repository để các thành viên sử dụng
+cùng nguồn dữ liệu. Khi chia sẻ phải giữ thông tin nguồn,
+ghi nhận tác giả và liên kết giấy phép.
+
+Ảnh và mask sau giải nén nằm tại `datasets/CHASE_DB1/raw/`.
+Thư mục dữ liệu giải nén và các prediction sinh ra được Git bỏ qua;
+không commit thêm bản sao của các file này.
 
 ### 2.3. Trích dẫn
 
@@ -112,13 +119,17 @@ Quy tắc:
 - Dùng `subject_id` để nhóm hai mắt của cùng đối tượng.
 - Không dùng mask làm ảnh đầu vào cho thuật toán dự đoán.
 
-Quy ước đánh giá dự kiến:
+Quy ước đánh giá hiện tại:
 - Dùng `_1stHO.png` làm nhãn tham chiếu chính.
-- Dùng `_2ndHO.png` để đánh giá sự khác biệt giữa hai người đánh dấu.
+- `_2ndHO.png` được giữ để có thể đánh giá khác biệt giữa hai người đánh dấu; baseline Frangi v0.2 hiện chưa báo cáo phép so sánh này.
 - Không coi mask của người đánh dấu thứ hai là kết quả dự đoán của AI.
 - Chuẩn hóa mask thành nhãn 0/1 trước khi tính metric.
 
-Dataset được Git bỏ qua. Tài liệu, script kiểm tra và manifest chia tập sẽ được quản lý phiên bản trong repository.
+Archive gốc trong `data-assets/CHASE_DB1/` được quản lý phiên bản.
+Dữ liệu giải nén trong `datasets/` được Git bỏ qua.
+
+Tài liệu, script kiểm tra, manifest và báo cáo JSON trong
+`docs/datasets/chase_db1/` được quản lý phiên bản trong repository.
 
 ---
 
@@ -168,11 +179,27 @@ Kết quả đã chạy:
 - 84 file giải mã thành công.
 - Không có file thừa.
 - Không có mã đối tượng xuất hiện ở nhiều tập.
-- Chưa thực hiện benchmark thuật toán.
+- Script `prepare_chase_db1.py` chỉ kiểm tra dữ liệu và tạo manifest,
+  không chạy benchmark. Vì vậy `benchmark_performed: false` trong
+  báo cáo chuẩn bị dữ liệu chỉ phản ánh phạm vi của script này.
+- Benchmark Frangi được chạy riêng và được trình bày tại mục 8.
 ## 6. Tiền xử lý và vùng đánh giá
+- Lấy kênh xanh lá và chia giá trị pixel cho 255.
+- Làm mượt Gaussian.
+- Ước lượng vùng dự đoán từ ảnh, sau đó áp dụng các bước xử lý vùng
+  theo script.
+- Tính phản hồi Frangi.
+- Triệt phản hồi ngoài vùng dự đoán và chuẩn hóa theo phản hồi lớn nhất.
+- Áp dụng threshold đã chọn trên validation.
+- Không resize ảnh hoặc mask.
+- Tính metric trên toàn ảnh với nhãn tham chiếu `_1stHO.png`.
 
-Trạng thái hiện tại: chưa xác nhận pipeline tiền xử lý thực tế trên CHASE_DB1.
+Vùng dự đoán do thuật toán ước lượng không phải FOV mask được
+dataset cung cấp. Việc triệt phản hồi ngoài vùng dự đoán không
+đồng nghĩa metric chỉ được tính trong FOV.
 
+Cấu hình chi tiết được lưu trong script và báo cáo benchmark;
+khi tái lập phải sử dụng cấu hình đã chốt.
 Quy tắc:
 - Không ghi đè ảnh và mask trong `raw`.
 - Ghi rõ kênh ảnh sử dụng, kích thước đầu vào và các phép biến đổi.
@@ -225,15 +252,18 @@ Dự án sử dụng dữ liệu cho nghiên cứu và demo kỹ thuật trong p
 | Sensitivity | 0.4140 | 0.4198 |
 | Specificity | 0.9437 | 0.9565 |
 
-Thời gian xử lý thuật toán local trên test:
+Thời gian xử lý thuật toán local trong báo cáo test gốc
+`docs/benchmarks/frangi_test_v0.2.json`:
 - Trung vị: 1729.30 ms/ảnh.
 - p95: 1765.00 ms/ảnh.
 - Lớn nhất: 1768.73 ms/ảnh.
+Các lần tái lập có thể cho thời gian khác do máy và tải hệ thống.
+Không thay số liệu báo cáo gốc bằng thời gian của lần chạy mới.
+Báo cáo tái lập được lưu riêng để đối chiếu.
 
 Thời gian chưa gồm đọc/ghi file, tính metric, API, hàng đợi
 và database. Chỉ có 6 mẫu đo từ 3 đối tượng; chưa xác nhận
 hiệu năng ổn định hoặc đạt NFR toàn luồng.
-
 Baseline còn nhiều nhiễu và bỏ sót mạch.
 Chưa xác nhận đạt ngưỡng chất lượng mục tiêu của dự án.
 
