@@ -97,10 +97,21 @@ Chưa có hoặc chưa kiểm chứng:
 - Retry có giới hạn.
 - Service token và quyền analysis:ingest.
 - Backend tạo analysis từ multipart.
-- Import flow trong môi trường sạch.
+- Triển khai flow trên instance NiFi hoàn toàn mới.
 
 HTTP 200 của ListenHTTP chỉ xác nhận tiếp nhận request,
 không xác nhận xử lý thành công tại Gateway/backend.
+
+### Kiểm tra import bổ sung — 2026-10-10
+
+Đã import vào nhóm mới trong cùng instance NiFi và kiểm tra:
+- JPEG thật đi đến queue multipart với trạng thái VALID/ready=true.
+- Base64 sai được ghi vào quarantine/INVALID_BASE64,
+  đối chiếu đúng request ID.
+
+Đạt cho hai tình huống trên. Chưa kiểm chứng instance sạch,
+Gateway forwarding, service token, dedup hoặc retry.
+Chi tiết nằm trong docs/nifi/nifi_runbook.md.
 
 ## 4. Hướng dẫn kiểm tra lại
 
