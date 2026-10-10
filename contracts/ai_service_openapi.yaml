@@ -1,75 +1,90 @@
 openapi: 3.0.3
+
 info:
   title: AURA AI Analysis Service API
   description: >
-    Hợp đồng giao tiếp API (Module M4 - Computer Vision & AI Service) cho hệ thống AURA.
-    Cung cấp các endpoint phục vụ suy luận phân vùng mạch máu võng mạc, trích xuất đặc trưng hình học
-    và tính toán chỉ số nguy cơ tim mạch/đột quỵ theo thuật toán Heuristic.
-  version: 1.0.0
+    AI API nội bộ của AURA. Runtime hiện là Mock Service phục vụ
+    kiểm thử giao tiếp; chưa tích hợp thuật toán phân vùng thật.
+    WARNING có kết quả hợp lệ không tự đồng nghĩa LOW_QUALITY.
+    API_VERSION không phải phiên bản public Analysis contract.
+  version: 1.1.0
   contact:
     name: Dao Duy Quan (M4 Lead)
     email: quandd2937@ut.edu.vn
 
 servers:
   - url: http://localhost:8000
-    description: Local development / Docker container
+    description: Local development
   - url: http://ai-core:8000
-    description: Internal Docker network (Analysis Worker -> AI Core)
+    description: Internal Docker network
 
 tags:
   - name: Health
-    description: Kiểm tra tình trạng hoạt động của service
+    description: Kiểm tra tình trạng service
   - name: Platform
-    description: Kiểm tra kết nối ping và thông tin nền tảng
+    description: Kiểm tra kết nối
   - name: Analysis
-    description: Phân tích hình ảnh võng mạc và đánh giá chỉ số
+    description: Phân tích ảnh giả lập phục vụ kiểm thử
 
 paths:
   /health:
     get:
-      tags:
-        - Health
-      summary: Kiểm tra trạng thái hoạt động của AI Service
+      tags: [Health]
+      summary: Kiểm tra trạng thái AI Service
       operationId: checkHealth
       responses:
         '200':
-          description: Service hoạt động bình thường
+          description: Service đang hoạt động
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
               example:
-                status: "ok"
-                version: "0.1.0"
-                service: "AURA.AiCore"
-                device: "cpu"
+                status: ok
+                version: 0.1.0
+                service: AURA.AiCore
+                device: cpu
                 model_loaded: false
                 uptime_seconds: 124.8
 
   /api/v1/platform/ping:
     get:
-      tags:
-        - Platform
-      summary: Kiểm tra kết nối ping đến AI Core Service
+      tags: [Platform]
+      summary: Kiểm tra kết nối AI Core
       operationId: pingService
       responses:
         '200':
-          description: Kết nối hoạt động bình thường
+          description: Kết nối hoạt động
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PingResponse'
               example:
-                service: "AURA.AiCore"
-                message: "AI Core template is running"
-                timestamp: "2026-10-09T08:00:00+00:00"
+                service: AURA.AiCore
+                message: AI Core template is running
+                timestamp: '2026-10-10T03:00:00Z'
 
   /api/v1/analyze:
     post:
-      tags:
-        - Analysis
-      summary: Phân tích ảnh võng mạc (JSON payload Base64)
-      description: Nhận ảnh dưới dạng Base64 cùng thông tin bệnh nhân, thực hiện phân vùng mạch máu và trích xuất chỉ số.
+      tags: [Analysis]
+      summary: Nhận ảnh Base64 và trả kết quả mock
+      description: |
+        Endpoint nội bộ dành cho Analysis Worker.
+
+        Runtime chưa tích hợp Frangi hoặc U-Net. Các chỉ số,
+        mask và overlay là dữ liệu giả lập.
+
+        Cấu hình kiểm thử phía server:
+        - AURA_MOCK_SCENARIO=SUCCESS: mặc định.
+        - AURA_MOCK_SCENARIO=WARNING và
+          AURA_MOCK_SCENARIOS_ENABLED=true: trả WARNING với kết quả đầy đủ.
+        - Scenario không hợp lệ hoặc chưa được bật: trả lỗi 500.
+
+        Không chọn scenario bằng request_id hoặc tham số client.
+        WARNING không tự đồng nghĩa LOW_QUALITY.
+
+        Example dùng PNG RGB tổng hợp 64x48, không phải ảnh đáy mắt.
+        processing_time_ms trong example chỉ minh họa cấu trúc.
       operationId: analyzeRetinaBase64
       requestBody:
         required: true
@@ -78,87 +93,157 @@ paths:
             schema:
               $ref: '#/components/schemas/AnalysisRequest'
             example:
-              request_id: "req_aura_20261005_001"
-              patient_id: "PAT-88231"
-              eye_side: "right"
-              mode: "retina_vessels"
-              modality: "FUNDUS"
-              image_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-              include_mask: true
-              include_overlay: true
+              request_id: demo-ai-001
+              patient_id: null
+              eye_side: unknown
+              mode: retina_vessels
+              modality: FUNDUS
+              image_base64: "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAIAAAAuKetIAAAAZUlEQVR4nO3PUQkAIBTAwBfCEMaxfxpD+HEIgwW4zdnr64YLGtCCBrSgAS1oQAsa0IIGtKABLWhACxrQgga0oAEtaEALGtCCBrSgAS1oQAsa0IIGtKABLWhACxrQgga0oAEteOwCadmQWyWfhSMAAAAASUVORK5CYII="
+              include_mask: false
+              include_overlay: false
       responses:
         '200':
-          description: Phân tích thành công
+          description: >
+            SUCCESS hoặc WARNING với kết quả giả lập hợp lệ.
+            WARNING vẫn giữ metrics và risk_assessment.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AnalysisResponse'
-              example:
-                request_id: "req_aura_20261005_001"
-                patient_id: "PAT-88231"
-                timestamp: "2026-10-05T17:59:00Z"
-                status: "SUCCESS"
-                processing_time_ms: 142.5
-                image_info:
-                  width: 512
-                  height: 512
-                  channels: 3
-                  eye_side: "right"
-                  modality: "FUNDUS"
-                metrics:
-                  vessel_density: 0.1428
-                  tortuosity_index: 1.185
-                  av_ratio: 0.672
-                  fractal_dimension: 1.482
-                  branching_points: 64
-                risk_assessment:
-                  risk_score: 0.35
-                  risk_level: "LOW"
-                  confidence_score: 0.88
-                  indicators:
-                    - "Mật độ mạch máu trong giới hạn bình thường (14.28%)"
-                    - "Chỉ số xoắn mạch (Tortuosity) ổn định"
-                  disclaimer: "Kết quả ước lượng dựa trên hình học mạch máu võng mạc (Heuristic). Không thay thế chẩn đoán y khoa chính thức."
-                segmentation:
-                  mask_format: "png_base64"
-                  mask_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-                  overlay_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+              examples:
+                success:
+                  summary: Kết quả mock thành công
+                  value:
+                    request_id: demo-ai-001
+                    patient_id: null
+                    timestamp: '2026-10-10T03:00:00Z'
+                    status: SUCCESS
+                    warnings: []
+                    is_mock: true
+                    model_version: mock-v0.1
+                    threshold_version: v0.1
+                    config_version: v0.1
+                    limitations: Kết quả giả lập, chưa tích hợp phân vùng thật.
+                    processing_time_ms: 10.0
+                    image_info:
+                      width: 64
+                      height: 48
+                      channels: 3
+                      eye_side: unknown
+                      modality: FUNDUS
+                    metrics:
+                      vessel_density: 0.1485
+                      tortuosity_index: 1.165
+                      av_ratio: 0.672
+                      fractal_dimension: 1.475
+                      branching_points: 62
+                    risk_assessment:
+                      risk_score: 0.32
+                      risk_level: LOW
+                      confidence_score: 0.91
+                      indicators:
+                        - '[MOCK] Chỉ số cố định phục vụ kiểm thử.'
+                      disclaimer: Kết quả giả lập, không phải chẩn đoán.
+                    segmentation: null
+
+                warning:
+                  summary: Cảnh báo nhưng vẫn có kết quả mock
+                  value:
+                    request_id: demo-ai-001
+                    patient_id: null
+                    timestamp: '2026-10-10T03:00:00Z'
+                    status: WARNING
+                    warnings:
+                      - code: AI_WARNING
+                        message: '[MOCK] Cảnh báo kỹ thuật, không xác nhận ảnh kém chất lượng.'
+                    is_mock: true
+                    model_version: mock-v0.1
+                    threshold_version: v0.1
+                    config_version: v0.1
+                    limitations: Kết quả giả lập, chưa tích hợp phân vùng thật.
+                    processing_time_ms: 10.0
+                    image_info:
+                      width: 64
+                      height: 48
+                      channels: 3
+                      eye_side: unknown
+                      modality: FUNDUS
+                    metrics:
+                      vessel_density: 0.1485
+                      tortuosity_index: 1.165
+                      av_ratio: 0.672
+                      fractal_dimension: 1.475
+                      branching_points: 62
+                    risk_assessment:
+                      risk_score: 0.32
+                      risk_level: LOW
+                      confidence_score: 0.91
+                      indicators:
+                        - '[MOCK] Chỉ số cố định phục vụ kiểm thử.'
+                      disclaimer: Kết quả giả lập, không phải chẩn đoán.
+                    segmentation: null
+
         '400':
-          description: Dữ liệu đầu vào không hợp lệ (Base64 sai, không phải ảnh, vượt kích thước)
+          description: Base64 sai, ảnh hỏng hoặc vượt giới hạn
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                error_code: "INVALID_IMAGE_PAYLOAD"
-                message: "Không thể giải mã dữ liệu ảnh Base64 được gửi lên."
+                error_code: INVALID_IMAGE_PAYLOAD
+                message: Dữ liệu ảnh không hợp lệ.
                 details:
-                  supported_formats: ["PNG", "JPEG", "WEBP"]
-                timestamp: "2026-10-09T08:00:00Z"
+                  supported_formats: [PNG, JPEG, WEBP]
+                timestamp: '2026-10-10T03:00:00Z'
+
         '422':
-          description: Lỗi định dạng JSON, thiếu trường bắt buộc, hoặc modality/mode không được hỗ trợ
+          description: Sai schema hoặc modality/mode không được hỗ trợ
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-              example:
-                error_code: "UNSUPPORTED_MODALITY"
-                message: "unsupported_modality: Định dạng ảnh OCT chưa được hỗ trợ trong phiên bản hiện tại (chỉ hỗ trợ FUNDUS)."
-                details:
-                  supported_modalities: ["FUNDUS"]
-                  received_modality: "OCT"
-                timestamp: "2026-10-09T08:00:00Z"
+              examples:
+                unsupportedModality:
+                  value:
+                    error_code: UNSUPPORTED_MODALITY
+                    message: OCT chưa được hỗ trợ; chỉ chấp nhận FUNDUS.
+                    details:
+                      supported_modalities: [FUNDUS]
+                      received_modality: OCT
+                    timestamp: '2026-10-10T03:00:00Z'
+                unsupportedMode:
+                  value:
+                    error_code: UNSUPPORTED_MODE
+                    message: Chỉ hỗ trợ retina_vessels.
+                    details:
+                      supported_modes: [retina_vessels]
+                    timestamp: '2026-10-10T03:00:00Z'
+                invalidModality:
+                  value:
+                    error_code: INVALID_MODALITY
+                    message: Modality không hợp lệ.
+                    details:
+                      supported_modalities: [FUNDUS]
+                    timestamp: '2026-10-10T03:00:00Z'
+                schemaValidation:
+                  value:
+                    error_code: SCHEMA_VALIDATION_ERROR
+                    message: Sai định dạng hoặc thiếu trường bắt buộc.
+                    details:
+                      errors: []
+                    timestamp: '2026-10-10T03:00:00Z'
+
         '500':
-          description: Lỗi nội bộ trong quá trình xử lý AI
+          description: Lỗi nội bộ hoặc cấu hình mock không hợp lệ
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                error_code: "INFERENCE_RUNTIME_ERROR"
-                message: "Lỗi nội bộ khi xử lý mô hình AI: Out of memory"
+                error_code: INFERENCE_RUNTIME_ERROR
+                message: Lỗi nội bộ khi xử lý AI.
                 details: null
-                timestamp: "2026-10-09T08:00:00Z"
+                timestamp: '2026-10-10T03:00:00Z'
 
 components:
   schemas:
@@ -174,119 +259,105 @@ components:
       properties:
         status:
           type: string
-          example: "ok"
+          example: ok
         version:
           type: string
-          example: "0.1.0"
+          example: 0.1.0
         service:
           type: string
-          example: "AURA.AiCore"
+          example: AURA.AiCore
         device:
           type: string
-          example: "cpu"
+          example: cpu
         model_loaded:
           type: boolean
           example: false
         uptime_seconds:
           type: number
-          format: float
           example: 124.8
 
     PingResponse:
       type: object
-      required:
-        - service
-        - message
-        - timestamp
+      required: [service, message, timestamp]
       properties:
         service:
           type: string
-          example: "AURA.AiCore"
         message:
           type: string
-          example: "AI Core template is running"
         timestamp:
           type: string
           format: date-time
-          example: "2026-10-09T08:00:00+00:00"
 
     EyeSide:
       type: string
       enum: [left, right, unknown]
-      example: "right"
+      default: unknown
 
     AnalysisMode:
       type: string
       enum: [retina_vessels]
       default: retina_vessels
-      example: "retina_vessels"
-      description: "Chế độ phân tích (phiên bản v0.1 chỉ hỗ trợ retina_vessels)"
 
     RiskLevel:
       type: string
       enum: [LOW, MODERATE, HIGH]
-      example: "LOW"
+
+    AnalysisStatus:
+      type: string
+      enum: [SUCCESS, WARNING, FAILED]
+      default: SUCCESS
+      description: >
+        Runtime mock hiện trả SUCCESS hoặc WARNING cho HTTP 200.
+        Lỗi xử lý hiện được trả bằng ErrorResponse với HTTP 4xx/5xx.
 
     AnalysisRequest:
       type: object
-      required:
-        - request_id
-        - image_base64
+      required: [request_id, image_base64]
       properties:
         request_id:
           type: string
-          description: Mã định danh duy nhất của yêu cầu (tạo từ M1/M2)
-          example: "req_aura_20261005_001"
+          description: ID yêu cầu do bên gọi cung cấp; không dùng chọn mock scenario.
         patient_id:
           type: string
           nullable: true
-          description: Mã định danh bệnh nhân (tùy chọn)
-          example: "PAT-88231"
+          default: null
         eye_side:
           $ref: '#/components/schemas/EyeSide'
         mode:
           $ref: '#/components/schemas/AnalysisMode'
         modality:
           type: string
-          default: "FUNDUS"
-          example: "FUNDUS"
-          description: "Loại ảnh y tế: FUNDUS (OCT chưa được hỗ trợ, sẽ trả về lỗi 422)"
+          default: FUNDUS
+          description: FUNDUS; OCT bị từ chối với HTTP 422.
         image_base64:
           type: string
-          description: Chuỗi ảnh mã hóa Base64 (PNG, JPEG, WebP hợp lệ)
-          example: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+          description: >
+            Ảnh PNG/JPEG/WEBP hợp lệ của AI nội bộ.
+            Giới hạn dữ liệu giải mã 10 MiB và 16 triệu pixel.
+            Không tự mở rộng định dạng public Analysis API.
         include_mask:
           type: boolean
           default: true
-          description: Trả về ảnh mặt nạ nhị phân (Binary Mask)
         include_overlay:
           type: boolean
           default: true
-          description: Trả về ảnh phủ viền mạch lên ảnh gốc (Overlay Visual)
 
     ImageInfo:
       type: object
-      required:
-        - width
-        - height
-        - channels
-        - eye_side
+      required: [width, height]
       properties:
         width:
           type: integer
-          example: 512
         height:
           type: integer
-          example: 512
         channels:
           type: integer
-          example: 3
+          default: 3
         eye_side:
           $ref: '#/components/schemas/EyeSide'
         modality:
           type: string
-          example: "FUNDUS"
-          description: "Loại ảnh chụp y tế"
+          default: FUNDUS
 
     VesselMetrics:
       type: object
@@ -296,31 +367,23 @@ components:
         - av_ratio
         - fractal_dimension
         - branching_points
+      description: Các giá trị hiện là hằng số mock, không phải đo từ ảnh.
       properties:
         vessel_density:
           type: number
-          format: float
-          description: Tỷ lệ diện tích mạch máu trên tổng diện tích vùng võng mạc (0.0 -> 1.0)
-          example: 0.1428
+          example: 0.1485
         tortuosity_index:
           type: number
-          format: float
-          description: Chỉ số xoắn của mạng lưới mạch máu (Arc-length / Chord-length)
-          example: 1.185
+          example: 1.165
         av_ratio:
           type: number
-          format: float
-          description: Tỷ lệ đường kính động mạch / tĩnh mạch (Arteriole-to-Venule Ratio)
           example: 0.672
         fractal_dimension:
           type: number
-          format: float
-          description: Số chiều Fractal biểu thị độ phức tạp phân nhánh
-          example: 1.482
+          example: 1.475
         branching_points:
           type: integer
-          description: Tổng số điểm phân nhánh của hệ mạch phát hiện được
-          example: 64
+          example: 62
 
     RiskAssessment:
       type: object
@@ -329,58 +392,59 @@ components:
         - risk_level
         - confidence_score
         - indicators
-        - disclaimer
+      description: Phân tầng giả lập phục vụ kiểm thử, chưa có giá trị lâm sàng.
       properties:
         risk_score:
           type: number
-          format: float
-          description: "Điểm rủi ro tổng hợp chuẩn hóa (0.0: rất thấp, 1.0: rất cao)"
-          example: 0.35
+          example: 0.32
         risk_level:
           $ref: '#/components/schemas/RiskLevel'
         confidence_score:
           type: number
-          format: float
-          description: "Độ tin cậy của thuật toán phân vùng và ước lượng (0.0 -> 1.0)"
-          example: 0.88
+          example: 0.91
         indicators:
           type: array
           items:
             type: string
-          description: Danh sách các nhận định chi tiết dựa trên từng thông số
-          example:
-            - "Mật độ mạch máu bình thường"
-            - "Độ xoắn mạch trong ngưỡng an toàn"
         disclaimer:
           type: string
-          description: Tuyên bố miễn trừ trách nhiệm y khoa bắt buộc theo quy định
-          example: "Kết quả mang tính chất tham khảo kỹ thuật, không thay thế chẩn đoán y khoa."
+          description: Runtime luôn trả cảnh báo không thay thế chẩn đoán.
 
     SegmentationResult:
       type: object
       properties:
         mask_format:
           type: string
-          example: "png_base64"
+          default: png_base64
         mask_base64:
           type: string
           nullable: true
-          description: Ảnh nhị phân mạch máu (trắng = mạch máu, đen = nền)
+          default: null
+          description: PNG mock mode L, pixel 0/255, cùng kích thước ảnh đầu vào.
         overlay_base64:
           type: string
           nullable: true
-          description: Ảnh gốc kèm viền mạch máu màu đỏ/xanh lá để hiển thị cho bác sĩ
+          default: null
+          description: PNG mock RGB cùng kích thước; không phủ trên ảnh gốc.
+
+    AnalysisWarning:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          example: AI_WARNING
+        message:
+          type: string
+          minLength: 1
+          description: Không tự đồng nghĩa LOW_QUALITY.
 
     AnalysisResponse:
       type: object
       required:
         - request_id
         - timestamp
-        - status
-        - is_mock
-        - model_version
-        - threshold_version
-        - config_version
         - processing_time_ms
         - image_info
         - metrics
@@ -388,43 +452,38 @@ components:
       properties:
         request_id:
           type: string
-          example: "req_aura_20261005_001"
         patient_id:
           type: string
           nullable: true
-          example: "PAT-88231"
+          default: null
         timestamp:
           type: string
           format: date-time
-          example: "2026-10-05T17:59:00Z"
         status:
-          type: string
-          enum: [SUCCESS, WARNING, FAILED]
-          example: "SUCCESS"
+          $ref: '#/components/schemas/AnalysisStatus'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysisWarning'
+          description: Danh sách cảnh báo của kết quả hợp lệ; mặc định rỗng.
         is_mock:
           type: boolean
-          example: true
-          description: Cờ xác nhận kết quả là Mock Engine tuần 1
+          default: true
         model_version:
           type: string
-          example: "mock-v0.1"
-          description: Phiên bản mô hình suy luận
+          default: mock-v0.1
         threshold_version:
           type: string
-          example: "v0.1"
-          description: Phiên bản ngưỡng đánh giá rủi ro
+          default: v0.1
         config_version:
           type: string
-          example: "v0.1"
-          description: Phiên bản cấu hình thuật toán
+          default: v0.1
         limitations:
           type: string
-          example: "Kết quả mô phỏng (Mock Engine) phục vụ tích hợp giao diện M5 và Backend M2."
-          description: Giới hạn kỹ thuật của phiên bản hiện tại
+          description: Giới hạn kỹ thuật của kết quả mock.
         processing_time_ms:
           type: number
-          format: float
-          example: 142.5
+          description: Thời gian xử lý runtime, không phải latency toàn hệ thống.
         image_info:
           $ref: '#/components/schemas/ImageInfo'
         metrics:
@@ -432,21 +491,18 @@ components:
         risk_assessment:
           $ref: '#/components/schemas/RiskAssessment'
         segmentation:
-          $ref: '#/components/schemas/SegmentationResult'
+          allOf:
+            - $ref: '#/components/schemas/SegmentationResult'
+          nullable: true
 
     ErrorResponse:
       type: object
-      required:
-        - error_code
-        - message
-        - timestamp
+      required: [error_code, message, timestamp]
       properties:
         error_code:
           type: string
-          example: "INVALID_IMAGE_PAYLOAD"
         message:
           type: string
-          example: "Không thể giải mã dữ liệu ảnh Base64 được gửi lên."
         details:
           type: object
           nullable: true
@@ -454,4 +510,3 @@ components:
         timestamp:
           type: string
           format: date-time
-          example: "2026-10-05T17:59:00Z"
