@@ -30,7 +30,9 @@ Chưa triển khai hoặc chưa xác minh:
 - Retry/backoff khi HTTP 429, 503 hoặc timeout.
 - Xử lý phản hồi backend và lưu lỗi sau khi gửi.
 - Kiểm thử toàn luồng và NFR end-to-end.
-- Import lại flow export vào một nhóm mới.
+- Triển khai flow trên instance NiFi hoàn toàn mới và kiểm tra đầy đủ
+  các tình huống; import nhóm mới trong cùng instance đã đạt hai ca
+  ngày 2026-10-10, xem mục 8.
 
 HTTP 200 từ ListenHTTP chỉ xác nhận tiếp nhận dữ liệu vào NiFi;
 không có nghĩa backend đã tạo analysis.
