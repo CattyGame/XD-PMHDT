@@ -186,6 +186,95 @@ Ràng buộc:
 - Hiển thị phân biệt pending, thành công, thất bại và hoàn tiền.
 - Số dư cache cần có chiến lược invalidation sau thay đổi.
 
+### 5.6. Chính sách Billing trong Sprint 2 — SCRUM-305
+
+**Trạng thái:** Draft for review
+**Phạm vi:** Credit, reservation, capture/release, Billing Owner, price snapshot, idempotency và payment provider.
+
+#### 5.6.1. Đơn vị credit và điều kiện tính phí
+
+- Một ảnh FUNDUS được xử lý hợp lệ cho một lượt phân tích tiêu thụ 1 credit.
+- Credit sử dụng đơn vị nguyên.
+- Yêu cầu ảnh trùng lặp không được reserve hoặc capture thêm credit.
+- Sprint 2 chỉ hỗ trợ FUNDUS qua public API. Ảnh OCT hoặc định dạng không hợp lệ phải bị từ chối trước bước reserve.
+- Nếu số credit khả dụng không đủ, trả `402 ERR_INSUFFICIENT_CREDIT`.
+
+#### 5.6.2. Billing Owner
+
+- Billing Owner của tenant cá nhân có loại `ACCOUNT`.
+- Billing Owner của yêu cầu thuộc phòng khám có loại `CLINIC` hợp lệ.
+- Billing Owner được xác định từ Profile và phạm vi tenant đã xác thực; client không được tự chọn ví thuộc chủ thể khác.
+- Các thao tác Billing phải kiểm tra tenant, actor và Billing Owner tương ứng.
+
+#### 5.6.3. Reservation lifecycle
+
+**Reserve**
+
+- Billing phải reserve credit trước khi Analysis trả `202 Accepted`.
+- Thông tin reserve tối thiểu theo contract gồm `analysisId`, `tenantId`, `actorAccountId`, `patientId`, `billingOwner`, `units` và `generation`.
+- Việc reserve phải chống xử lý trùng và không được làm số credit bị giữ vượt quá số dư khả dụng.
+
+**Capture**
+
+- Chỉ capture khi Analysis hoàn tất hợp lệ với trạng thái `SUCCESS` hoặc `WARNING`.
+- Capture cùng một thao tác nhiều lần không được trừ credit nhiều lần.
+
+**Release**
+
+- Release khi Analysis có trạng thái cuối cùng `FAILED` hoặc `LOW_QUALITY` mà không có kết quả phân tích.
+- Nếu lỗi còn có thể retry, giữ reservation trong thời gian luồng xử lý vẫn tiếp tục retry.
+- Nếu người dùng retry thủ công sau khi reservation đã release, yêu cầu mới phải reserve lại với `generation` mới.
+
+**Trạng thái kết thúc**
+
+- Capture và release là hai trạng thái kết thúc loại trừ lẫn nhau.
+- Thao tác lặp hợp lệ phải được xử lý idempotent.
+- Chuyển trạng thái mâu thuẫn phải trả `409 ERR_RESERVATION_STATE_CONFLICT`.
+
+#### 5.6.4. API nội bộ theo contract
+
+Các endpoint nội bộ được quy định trong contract chung:
+
+- `POST /internal/v1/billing/reservations`
+- `GET /internal/v1/billing/reservations/{reservationId}`
+- `POST /internal/v1/billing/reservations/{reservationId}/capture`
+- `POST /internal/v1/billing/reservations/{reservationId}/release`
+
+Quy tắc idempotency:
+
+- Cùng key và cùng payload: trả lại kết quả của thao tác trước.
+- Cùng key nhưng payload khác: trả `409 Conflict`.
+- Không tự thay đổi contract Analysis hiện có theo thiết kế Billing này; mọi khác biệt phải được thống nhất giữa các bên phụ trách.
+
+#### 5.6.5. Ledger và price snapshot
+
+- Ledger là nguồn dữ liệu có thẩm quyền để xác định các biến động credit.
+- Redis chỉ là cache catalog, không phải nguồn chuẩn của số dư.
+- Giá gói và phiên bản giá liên quan phải được snapshot cho giao dịch lịch sử; cập nhật catalog không được làm thay đổi giá đã snapshot.
+- Cần kiểm tra schema và code hiện tại trước khi xác nhận các quy tắc này đã được triển khai.
+
+#### 5.6.6. Hoàn credit và payment provider
+
+- Release reservation chưa capture là giải phóng credit đã giữ, không đồng nghĩa với hoàn tiền thanh toán.
+- Chính sách hoàn credit sau capture cần được người có thẩm quyền xác nhận trước khi triển khai.
+- Sprint 2 chưa tích hợp payment provider thật; không được giả lập một giao dịch thanh toán thành công như thể provider đã xác nhận.
+- AI mock chỉ được sử dụng ví/ledger `TEST` được cô lập. Event có `isMock=true` không được capture credit từ ví `LIVE`.
+
+#### 5.6.7. Kiểm tra khi review
+
+- [ ] Reserve trước `202 Accepted`.
+- [ ] Capture đúng `SUCCESS`/`WARNING` hợp lệ.
+- [ ] Release đúng `FAILED` cuối cùng/`LOW_QUALITY` không có kết quả.
+- [ ] Retry tạm thời và retry thủ công được xử lý khác nhau.
+- [ ] Yêu cầu trùng không phát sinh charge trùng.
+- [ ] Billing Owner và tenant được kiểm tra.
+- [ ] Idempotency và trạng thái kết thúc loại trừ lẫn nhau được kiểm tra.
+- [ ] Ledger và price snapshot được đối chiếu với triển khai.
+- [ ] TEST và LIVE được cô lập.
+- [ ] Chính sách hoàn credit sau capture đã được xác nhận hoặc được ghi rõ là còn chờ quyết định.
+
+Các mục chưa có bằng chứng kiểm thử phải giữ trạng thái chưa kiểm tra. Việc hoàn thành tài liệu không đồng nghĩa với việc đã triển khai hoặc nghiệm thu các API.
+
 ## 6. Notification
 
 ### 6.1. Mô hình dữ liệu đề xuất
@@ -381,6 +470,7 @@ Hoàn thành tài liệu không đồng nghĩa đã triển khai toàn bộ modu
 | Phiên bản | Ngày | Nội dung |
 | --- | --- | --- |
 | 0.1 | 2026-10-11 | Hoàn thành thiết kế Profile, Billing và Notification |
+| 0.2 | 2026-10-17 | Bổ sung chính sách Billing Sprint 2 theo SCRUM-305; chờ review và xác nhận contract |
 
 ## Cập nhật Notification sau đợt sửa M2–M5
 
