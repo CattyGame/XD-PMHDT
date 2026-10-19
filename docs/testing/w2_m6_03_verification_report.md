@@ -1,9 +1,9 @@
 # AURA — Báo cáo Kiểm chứng Toàn diện Task W2-M6-03 (SCRUM-316)
 ## Cập nhật Khắc phục Toàn bộ Feedback Review Sprint 2 (M6-01, M6-02, M6-03)
 
-**Phiên bản:** 2.0 — Cập nhật sau khi khắc phục triệt để các nhận định P0/P1 từ Trưởng nhóm (Sprint 2 Review v1.1).  
-**Ngày cập nhật:** 19/10/2026.  
-**Thành viên thực hiện:** M6 — Dung Hoang.  
+**Phiên bản:** 2.0 — Cập nhật sau khi khắc phục triệt để các nhận định P0/P1 từ Trưởng nhóm (Sprint 2 Review v1.1).
+**Ngày cập nhật:** 19/10/2026.
+**Thành viên thực hiện:** M6 — Dung Hoang.
 **Các Task Jira liên quan:**
 - **SCRUM-314**: Identity / Account Linking / Service Token Issuance (M6-01)
 - **SCRUM-315**: Profile Service / Phân quyền & Quản lý Tổ chức (M6-02)
