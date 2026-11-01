@@ -1,0 +1,354 @@
+{
+  "benchmark_id": "inspire_avr_benchmark_v1.0",
+  "timestamp": "2026-11-01T21:55:00Z",
+  "dataset": "INSPIRE-AVR",
+  "total_evaluated_samples": 29,
+  "successful_evaluations": 29,
+  "unavailable_evaluations": 0,
+  "success_rate": 1.0,
+  "performance_latency": {
+    "median_p50_ms": 638.74,
+    "p95_ms": 720.64,
+    "max_ms": 885.07
+  },
+  "biological_metrics": {
+    "mean_avr": 0.9658,
+    "std_avr": 0.1201,
+    "min_avr": 0.5294,
+    "max_avr": 1.1844,
+    "mean_crae_px": 16.8,
+    "mean_crve_px": 17.32
+  },
+  "risk_stratification_distribution": {
+    "NORMAL": 28,
+    "BORDERLINE": 0,
+    "HYPERTENSION_RISK": 1,
+    "RISK_UNAVAILABLE": 0
+  },
+  "sample_evaluations": [
+    {
+      "case_id": "IM000167",
+      "split": "validation",
+      "latency_ms": 463.79,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9617,
+      "crae_px": 15.875,
+      "crve_px": 16.507,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM000333",
+      "split": "validation",
+      "latency_ms": 654.41,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.7419,
+      "crae_px": 17.794,
+      "crve_px": 23.985,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM000389",
+      "split": "test",
+      "latency_ms": 649.98,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9688,
+      "crae_px": 16.568,
+      "crve_px": 17.101,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM000390",
+      "split": "test",
+      "latency_ms": 650.54,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9245,
+      "crae_px": 15.633,
+      "crve_px": 16.909,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM000678",
+      "split": "test",
+      "latency_ms": 631.75,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9691,
+      "crae_px": 17.282,
+      "crve_px": 17.833,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM001031",
+      "split": "test",
+      "latency_ms": 638.74,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9762,
+      "crae_px": 16.155,
+      "crve_px": 16.549,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM001069",
+      "split": "test",
+      "latency_ms": 674.8,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9188,
+      "crae_px": 16.67,
+      "crve_px": 18.143,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM001192",
+      "split": "validation",
+      "latency_ms": 631.58,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.019,
+      "crae_px": 17.576,
+      "crve_px": 17.248,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM001246",
+      "split": "validation",
+      "latency_ms": 633.15,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0603,
+      "crae_px": 18.807,
+      "crve_px": 17.737,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM001686",
+      "split": "test",
+      "latency_ms": 617.33,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9978,
+      "crae_px": 18.807,
+      "crve_px": 18.849,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM001749",
+      "split": "test",
+      "latency_ms": 627.87,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9998,
+      "crae_px": 17.399,
+      "crve_px": 17.403,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM001858",
+      "split": "test",
+      "latency_ms": 618.77,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0705,
+      "crae_px": 18.076,
+      "crve_px": 16.886,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM002348",
+      "split": "validation",
+      "latency_ms": 604.25,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.035,
+      "crae_px": 18.251,
+      "crve_px": 17.633,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM002422",
+      "split": "test",
+      "latency_ms": 638.6,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.1844,
+      "crae_px": 16.825,
+      "crve_px": 14.206,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM002587",
+      "split": "validation",
+      "latency_ms": 657.75,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0025,
+      "crae_px": 18.586,
+      "crve_px": 18.539,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM003024",
+      "split": "test",
+      "latency_ms": 609.89,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9205,
+      "crae_px": 14.778,
+      "crve_px": 16.055,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM003537",
+      "split": "validation",
+      "latency_ms": 885.07,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.5294,
+      "crae_px": 3.553,
+      "crve_px": 6.711,
+      "risk_level": "HYPERTENSION_RISK"
+    },
+    {
+      "case_id": "IM004162",
+      "split": "validation",
+      "latency_ms": 619.16,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0549,
+      "crae_px": 18.063,
+      "crve_px": 17.123,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM004516",
+      "split": "test",
+      "latency_ms": 620.05,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0535,
+      "crae_px": 18.039,
+      "crve_px": 17.123,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM004538",
+      "split": "test",
+      "latency_ms": 629.44,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.8332,
+      "crae_px": 15.875,
+      "crve_px": 19.054,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM004539",
+      "split": "test",
+      "latency_ms": 670.85,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0348,
+      "crae_px": 17.849,
+      "crve_px": 17.248,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM004564",
+      "split": "validation",
+      "latency_ms": 662.0,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0553,
+      "crae_px": 17.415,
+      "crve_px": 16.503,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM005093",
+      "split": "validation",
+      "latency_ms": 641.0,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0028,
+      "crae_px": 17.399,
+      "crve_px": 17.35,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM005190",
+      "split": "test",
+      "latency_ms": 638.53,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0117,
+      "crae_px": 18.66,
+      "crve_px": 18.444,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM005321",
+      "split": "validation",
+      "latency_ms": 713.39,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.8136,
+      "crae_px": 15.584,
+      "crve_px": 19.154,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM005456",
+      "split": "validation",
+      "latency_ms": 725.47,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.9171,
+      "crae_px": 16.824,
+      "crve_px": 18.345,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM005489",
+      "split": "validation",
+      "latency_ms": 649.58,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 0.8823,
+      "crae_px": 15.868,
+      "crve_px": 17.985,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM005524",
+      "split": "validation",
+      "latency_ms": 658.08,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0612,
+      "crae_px": 18.147,
+      "crve_px": 17.101,
+      "risk_level": "NORMAL"
+    },
+    {
+      "case_id": "IM006105",
+      "split": "validation",
+      "latency_ms": 642.0,
+      "status": "SUCCESS",
+      "risk_available": true,
+      "avr": 1.0073,
+      "crae_px": 18.807,
+      "crve_px": 18.67,
+      "risk_level": "NORMAL"
+    }
+  ],
+  "master_audit_compliance": {
+    "no_artificial_clamping": true,
+    "no_mock_numbers": true,
+    "risk_unavailable_handled_cleanly": true
+  }
+}

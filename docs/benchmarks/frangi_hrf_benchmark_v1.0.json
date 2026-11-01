@@ -1,0 +1,276 @@
+{
+  "benchmark_name": "AURA_HRF_FRANGI_2D_V0_2_BENCHMARK",
+  "task": "SCRUM-371 / W5-M4-01",
+  "timestamp_utc": "2026-11-01T14:50:30.003545Z",
+  "dataset": "HRF (High-Resolution Fundus Image Database)",
+  "split": "test",
+  "sample_count": 9,
+  "environment": {
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.12.14",
+    "cpu_cores": 8,
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "scikit_image": "0.26.0",
+    "pillow": "12.3.0"
+  },
+  "configuration": {
+    "clahe_clip_limit": 0.02,
+    "tile_grid_size": [
+      8,
+      8
+    ],
+    "max_processing_width": 1400,
+    "frangi_sigmas": [
+      1.0,
+      2.0,
+      3.0
+    ],
+    "frangi_alpha": 0.5,
+    "frangi_beta": 0.5,
+    "frangi_gamma": 15.0,
+    "binary_threshold": 0.05
+  },
+  "accuracy_metrics": {
+    "mean_dice": 0.400981,
+    "median_dice": 0.428208,
+    "mean_iou": 0.260324,
+    "median_iou": 0.272433,
+    "mean_sensitivity": 0.299701,
+    "mean_specificity": 0.986654
+  },
+  "runtime_latency_ms": {
+    "sla_target_ms": 1500.0,
+    "mean_ms": 1342.0,
+    "median_p50_ms": 1343.95,
+    "p95_ms": 1407.72,
+    "max_ms": 1424.32,
+    "mean_clahe_ms": 242.24,
+    "mean_frangi_ms": 879.51,
+    "meets_sla_under_1_5s": true
+  },
+  "memory_telemetry": {
+    "baseline_rss_mb": 0.0,
+    "mean_rss_mb": 0.0,
+    "peak_rss_mb": 0.0,
+    "tracemalloc_peak_heap_mb": 182.58
+  },
+  "samples": [
+    {
+      "patient_id": "hrf_dr_02",
+      "category": "dr",
+      "image": "02_dr.JPG",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1400,
+        933
+      ],
+      "downsample_scale": 0.3995,
+      "total_latency_ms": 1328.5,
+      "clahe_latency_ms": 229.61,
+      "frangi_latency_ms": 872.71,
+      "upsample_latency_ms": 34.21,
+      "vessel_density": 0.016459,
+      "dice": 0.229276,
+      "iou": 0.129482,
+      "sensitivity": 0.139594,
+      "specificity": 0.993612,
+      "peak_rss_mb": 0.0
+    },
+    {
+      "patient_id": "hrf_dr_09",
+      "category": "dr",
+      "image": "09_dr.JPG",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1400,
+        933
+      ],
+      "downsample_scale": 0.3995,
+      "total_latency_ms": 1424.32,
+      "clahe_latency_ms": 279.09,
+      "frangi_latency_ms": 902.8,
+      "upsample_latency_ms": 38.96,
+      "vessel_density": 0.010084,
+      "dice": 0.152286,
+      "iou": 0.082418,
+      "sensitivity": 0.085677,
+      "specificity": 0.996537,
+      "peak_rss_mb": 0.0
+    },
+    {
+      "patient_id": "hrf_dr_14",
+      "category": "dr",
+      "image": "14_dr.JPG",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1400,
+        933
+      ],
+      "downsample_scale": 0.3995,
+      "total_latency_ms": 1331.73,
+      "clahe_latency_ms": 224.99,
+      "frangi_latency_ms": 882.11,
+      "upsample_latency_ms": 35.8,
+      "vessel_density": 0.051128,
+      "dice": 0.371502,
+      "iou": 0.228125,
+      "sensitivity": 0.290487,
+      "specificity": 0.97274,
+      "peak_rss_mb": 0.0
+    },
+    {
+      "patient_id": "hrf_g_02",
+      "category": "g",
+      "image": "02_g.jpg",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1400,
+        933
+      ],
+      "downsample_scale": 0.3995,
+      "total_latency_ms": 1361.59,
+      "clahe_latency_ms": 241.97,
+      "frangi_latency_ms": 892.99,
+      "upsample_latency_ms": 36.48,
+      "vessel_density": 0.06646,
+      "dice": 0.523048,
+      "iou": 0.35414,
+      "sensitivity": 0.45818,
+      "specificity": 0.971517,
+      "peak_rss_mb": 0.0
+    },
+    {
+      "patient_id": "hrf_g_09",
+      "category": "g",
+      "image": "09_g.jpg",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1400,
+        933
+      ],
+      "downsample_scale": 0.3995,
+      "total_latency_ms": 1382.81,
+      "clahe_latency_ms": 256.1,
+      "frangi_latency_ms": 905.85,
+      "upsample_latency_ms": 38.0,
+      "vessel_density": 0.045721,
+      "dice": 0.522286,
+      "iou": 0.353442,
+      "sensitivity": 0.413019,
+      "specificity": 0.985618,
+      "peak_rss_mb": 0.0
+    },
+    {
+      "patient_id": "hrf_g_14",
+      "category": "g",
+      "image": "14_g.jpg",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1400,
+        933
+      ],
+      "downsample_scale": 0.3995,
+      "total_latency_ms": 1343.95,
+      "clahe_latency_ms": 263.19,
+      "frangi_latency_ms": 854.97,
+      "upsample_latency_ms": 36.25,
+      "vessel_density": 0.01904,
+      "dice": 0.292185,
+      "iou": 0.171087,
+      "sensitivity": 0.179239,
+      "specificity": 0.995635,
+      "peak_rss_mb": 0.0
+    },
+    {
+      "patient_id": "hrf_h_02",
+      "category": "h",
+      "image": "02_h.jpg",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1400,
+        933
+      ],
+      "downsample_scale": 0.3995,
+      "total_latency_ms": 1298.25,
+      "clahe_latency_ms": 233.9,
+      "frangi_latency_ms": 849.03,
+      "upsample_latency_ms": 35.31,
+      "vessel_density": 0.07064,
+      "dice": 0.589857,
+      "iou": 0.418296,
+      "sensitivity": 0.472452,
+      "specificity": 0.982786,
+      "peak_rss_mb": 0.0
+    },
+    {
+      "patient_id": "hrf_h_09",
+      "category": "h",
+      "image": "09_h.jpg",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1400,
+        933
+      ],
+      "downsample_scale": 0.3995,
+      "total_latency_ms": 1380.12,
+      "clahe_latency_ms": 244.17,
+      "frangi_latency_ms": 931.78,
+      "upsample_latency_ms": 32.49,
+      "vessel_density": 0.029252,
+      "dice": 0.428208,
+      "iou": 0.272433,
+      "sensitivity": 0.281873,
+      "specificity": 0.996472,
+      "peak_rss_mb": 0.0
+    },
+    {
+      "patient_id": "hrf_h_14",
+      "category": "h",
+      "image": "14_h.jpg",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1400,
+        933
+      ],
+      "downsample_scale": 0.3995,
+      "total_latency_ms": 1226.76,
+      "clahe_latency_ms": 207.18,
+      "frangi_latency_ms": 823.31,
+      "upsample_latency_ms": 34.74,
+      "vessel_density": 0.052557,
+      "dice": 0.500181,
+      "iou": 0.333495,
+      "sensitivity": 0.376788,
+      "specificity": 0.984973,
+      "peak_rss_mb": 0.0
+    }
+  ]
+}
