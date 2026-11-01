@@ -1,0 +1,92 @@
+{
+  "benchmark_id": "dr_screening_hrf_v1.0",
+  "timestamp": "2026-11-01T21:50:00Z",
+  "model_architecture": "Standardized Multi-Scale Retinal Linear/Logistic Classifier",
+  "dataset": "HRF (High-Resolution Fundus Image Database)",
+  "split_strategy": "Deterministic Patient-Level Stratified (seed=42)",
+  "ac_target": "AUC-ROC >= 0.88 on validation split",
+  "ac_status": "PASS",
+  "train_metrics": {
+    "auc_roc": 0.9506,
+    "accuracy": 0.8889,
+    "sensitivity": 0.8889,
+    "specificity": 0.8889,
+    "tp": 8,
+    "tn": 8,
+    "fp": 1,
+    "fn": 1,
+    "probabilities": [
+      0.8809,
+      0.8761,
+      0.2982,
+      0.6786,
+      0.9552,
+      0.5198,
+      0.5975,
+      0.9215,
+      0.8011,
+      0.0717,
+      0.2142,
+      0.4741,
+      0.0982,
+      0.2721,
+      0.3731,
+      0.2765,
+      0.1422,
+      0.5486
+    ]
+  },
+  "validation_metrics": {
+    "auc_roc": 0.8889,
+    "accuracy": 0.8333,
+    "sensitivity": 0.6667,
+    "specificity": 1.0,
+    "tp": 2,
+    "tn": 3,
+    "fp": 0,
+    "fn": 1,
+    "probabilities": [
+      0.9543,
+      0.3077,
+      0.9356,
+      0.0649,
+      0.4619,
+      0.1473
+    ]
+  },
+  "test_metrics": {
+    "auc_roc": 1.0,
+    "accuracy": 1.0,
+    "sensitivity": 1.0,
+    "specificity": 1.0,
+    "tp": 3,
+    "tn": 3,
+    "fp": 0,
+    "fn": 0,
+    "probabilities": [
+      0.8691,
+      0.9964,
+      0.9877,
+      0.2343,
+      0.2275,
+      0.1594
+    ]
+  },
+  "sample_manifest": {
+    "validation_dr": [
+      "hrf_dr_01",
+      "hrf_dr_04",
+      "hrf_dr_06"
+    ],
+    "validation_h": [
+      "hrf_dr_07",
+      "hrf_dr_08",
+      "hrf_dr_10"
+    ]
+  },
+  "master_audit_compliance": {
+    "no_fabricated_icdr_5_stage": true,
+    "disclaimer_enforced": true,
+    "gradcam_explainability_enabled": true
+  }
+}

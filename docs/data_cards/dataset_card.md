@@ -372,3 +372,106 @@ và [M4 integration status](../integration/M4_Sprint2_integration_status.md).
   - Tuyệt đối không nạp hoặc chạm tới tập `test` (`test_images_loaded: 0`, `test_split_touched: false`, `subject_leakage_detected: false`).
   - Hàm mất mát `train_weighted_bce_loss` giảm đều qua 5 epoch (`0.653302` → `0.598443`).
   - Không tổng hợp hoặc suy diễn nhãn rủi ro lâm sàng (`risk_labels_used: false`, `replaces_runtime_frangi: false`).
+
+
+---
+
+## 13. Tối ưu hóa Thuật toán Frangi 2D v0.2 & Benchmark Đa độ phân giải trên Tập HRF (Sprint 5)
+
+> **Mã Jira**: SCRUM-371 (`W5-M4-01`) · **Tác giả**: Đào Duy Quân (M4 — AI Engineer) · **Cập nhật**: 2026-11-01
+
+### 13.1. Đặc tính Kỹ thuật & Tập dữ liệu HRF
+- Tập dữ liệu: High-Resolution Fundus (HRF) Image Database gồm 45 ảnh chụp võng mạc siêu phân giải ($3504 \times 2336$ pixel), bao gồm 15 ca Bệnh võng mạc đái tháo đường (`dr`), 15 ca Mắt khỏe mạnh (`h`), và 15 ca Glôcôm (`g`).
+- Lưu trữ cục bộ: `datasets/HRF` (được giải nén an toàn từ `data-assets/HRF/HRF.zip`, tuân thủ `.gitignore`).
+- Phân chia tập dữ liệu: Xác định bằng giải thuật giả ngẫu nhiên cố định (`seed=42`) ở cấp độ bệnh nhân:
+  - `train`: 27 ảnh (9 dr, 9 h, 9 g)
+  - `validation`: 9 ảnh (3 dr, 3 h, 3 g)
+  - `test`: 9 ảnh (3 dr, 3 h, 3 g)
+- Chi tiết manifest và báo cáo xác thực:
+  - `docs/datasets/hrf/manifest.csv`
+  - `docs/datasets/hrf/validation_report.json`
+
+### 13.2. Pipeline Tối ưu hóa Tiền xử lý & Đo lường
+- File triển khai: `src/ai-core/app/services/image_preprocessor.py`
+- Bộ nâng cao độ tương phản: CLAHE (`clipLimit=0.02`, `tileGridSize=(8,8)`).
+- Trích xuất vùng hữu dụng (FOV mask): Thuật toán tối ưu hóa đa tỷ lệ bằng morphological hole-filling và separable boundary erosion (< 60ms).
+- Xử lý đa độ phân giải (Smart Multi-Resolution Processing):
+  - Kích thước xử lý giới hạn ở chiều rộng 1200 pixel để kiểm soát bộ nhớ RAM < 200 MiB và độ trễ CPU.
+  - Phân vùng mạch máu bằng bộ lọc Frangi Hessian vector hóa đa tỷ lệ (`sigmas=[1.0, 2.0, 3.0]`).
+  - Phục hồi hình học gốc: Mặt nạ phân vùng nhị phân được nội suy (Nearest-Neighbor) trở lại đúng kích thước gốc $3504 \times 2336$ pixel.
+- Báo cáo Benchmark: `docs/benchmarks/frangi_hrf_benchmark_v1.0.json` (kiểm thử độc lập trên 9 ảnh tập `test`):
+  - **Độ trễ trung vị (p50)**: `1343.95 ms` (< 1.5s SLA — **ĐẠT**)
+  - **Độ trễ phân vị 95 (p95)**: `1407.72 ms` (< 1.5s SLA — **ĐẠT**)
+  - **Độ đặc hiệu trung bình (Mean Specificity)**: `0.9867` (98.67%)
+  - **Mean Dice**: `0.4010`
+
+---
+
+## 14. Mô hình Sàng lọc Bệnh Võng Mạc Đái Tháo Đường (DR Screening) & Explainable AI Grad-CAM (Sprint 5)
+
+> **Mã Jira**: SCRUM-372 (`W5-M4-02`) · **Tác giả**: Đào Duy Quân (M4 — AI Engineer) · **Cập nhật**: 2026-11-01
+
+### 14.1. Cam kết Tuân thủ Master Audit & Giới hạn Lâm sàng
+- **Cam kết phạm vi chẩn đoán**: Mô hình được thiết kế thuần túy cho mục đích **Sàng lọc Nhị phân (Binary DR Screening — Referable DR vs Low Risk)** giữa ca bệnh đái tháo đường (`dr`) và ca bình thường (`h`).
+- **Tuyệt đối KHÔNG giả lập phân loại 5 giai đoạn ICDR**: Do tập HRF chỉ cung cấp nhãn danh mục nhị phân và không có nhãn giai đoạn lâm sàng (ICDR Severity Levels 0–4), hệ thống không tạo lập hoặc suy diễn các số liệu chẩn đoán giai đoạn thiếu cơ sở khoa học.
+- Mọi kết quả phân tích đều đính kèm thông cáo miễn trừ trách nhiệm y khoa:
+  > *"DISCLAIMER: Binary Diabetic Retinopathy screening tool (Referable DR vs Low Risk). NOT an ICDR 5-stage clinical diagnosis. HRF dataset lacks multi-stage ground truth. Clinical diagnosis must be confirmed by an ophthalmologist."*
+
+### 14.2. Huấn luyện Mô hình & Đánh giá Tiêu chí Nghiệm thu (AC)
+- File huấn luyện: `src/ai-core/scripts/train_dr_screening.py`
+- Trọng số mô hình: `src/ai-core/config/dr_screening_weights.json`
+- Báo cáo Benchmark: `docs/benchmarks/dr_screening_hrf_benchmark_v1.0.json`
+- **Kết quả nghiệm thu AC1**:
+  - **AUC-ROC trên tập Validation**: `0.8889` (Mục tiêu AC1: $\ge 0.88$ — **ĐẠT**)
+  - **AUC-ROC trên tập Test**: `1.0000`
+  - **Độ đặc hiệu (Specificity)**: `1.0000` (100% không báo động nhầm trên mắt khỏe mạnh)
+  - **Độ chính xác tổng thể (Accuracy)**: `83.33%` trên validation, `100%` trên test
+
+### 14.3. Trích xuất Bản đồ Nhiệt Giải thích Grad-CAM (AC2 & NFR-22)
+- File dịch vụ: `src/ai-core/app/services/dr_screening_service.py`
+- Thuật toán Grad-CAM / Retinal Saliency làm nổi bật trực tiếp các tổn thương vi phình mạch (microaneurysms), xuất huyết điểm (hemorrhages) và xuất tiết cứng (hard exudates).
+- Bản đồ nhiệt được phối màu chuẩn JET/Warm và hòa trộn (alpha blending) với ảnh gốc, xuất ra định dạng chuỗi Base64 PNG kèm tọa độ tâm cụm tổn thương phục vụ hiển thị trực quan trên Doctor Workspace.
+
+---
+
+## 15. Pipeline Phân loại Động/Tĩnh Mạch & Đo Tỷ Số AVR trên Tập INSPIRE-AVR (Sprint 5)
+
+> **Mã Jira**: SCRUM-373 (`W5-M4-03`) · **Tác giả**: Đào Duy Quân (M4 — AI Engineer) · **Cập nhật**: 2026-11-01
+
+### 15.1. Nguồn dữ liệu & Cấu trúc Phân đoạn
+- Tập dữ liệu: INSPIRE-AVR (100 ca chụp đáy mắt chuẩn y khoa tại `datasets/INSPIRE_AVR`), cung cấp cặp mặt nạ chuẩn vàng Động mạch (`--arteries.jpg` / `--artry.jpg`) và Tĩnh mạch (`--veins.jpg`).
+- Phân chia tập dữ liệu (`docs/datasets/inspire_avr/manifest.csv`):
+  - `train`: 70 ca (trong đó 65 ca có đầy đủ cặp nhãn AV)
+  - `validation`: 15 ca (14 ca có nhãn AV)
+  - `test`: 14 ca (đầy đủ nhãn AV)
+
+### 15.2. Thuật toán Đo Khẩu kính Mạch máu & Tỷ số AVR Knudtson
+- File dịch vụ: `src/ai-core/app/services/avr_service.py`
+- Định vị Đĩa thị (Optic Disc Landmark): Xác định tâm $(cx, cy)$ và bán kính $R_{\text{OD}}$ bằng Gaussian contrast-centroid.
+- Vùng khảo sát chuẩn lâm sàng (Zone B Annulus ROI): Vành khuyên đồng tâm từ $2.0 \cdot R_{\text{OD}}$ đến $3.0 \cdot R_{\text{OD}}$ (Knudtson et al., 2003).
+- Công thức phối hợp khẩu kính:
+  - Khẩu kính Động mạch tương đương (CRAE):
+    $$CRAE = \sqrt{0.87 \cdot w_1^2 + 1.01 \cdot w_2^2 - 0.22 \cdot w_1 \cdot w_2}$$
+  - Khẩu kính Tĩnh mạch tương đương (CRVE):
+    $$CRVE = \sqrt{0.72 \cdot w_1^2 + 0.91 \cdot w_2^2}$$
+  - Tỷ số Động/Tĩnh mạch ($AVR$):
+    $$AVR = \frac{CRAE}{CRVE}$$
+- Phân tầng nguy cơ bệnh võng mạc tăng huyết áp:
+  - `NORMAL`: $AVR \ge 0.65$
+  - `BORDERLINE`: $0.60 \le AVR < 0.65$
+  - `HYPERTENSION_RISK`: $AVR < 0.60$ (co hẹp động mạch lan tỏa — Generalized Arteriolar Narrowing)
+
+### 15.3. Xóa bỏ Giới hạn Cứng & Cơ chế Báo động Graceful Degraded Fallback
+- **Tuân thủ Master Audit**: Hệ thống **loại bỏ hoàn toàn ràng buộc gán ép nhân tạo $AVR \in [0.40, 0.85]$**.
+- Khi ảnh bị suy giảm chất lượng nghiêm trọng, không thể định vị đĩa thị, hoặc số lượng mạch máu trong Zone B không đủ điều kiện đo lường tin cậy:
+  - Trả về `status: "WARNING"`
+  - `risk_available: false`
+  - `avr: null`, `crae_px: null`, `crve_px: null`
+  - `risk_level: "RISK_UNAVAILABLE"`
+  - `warning_code: "RISK_UNAVAILABLE"`
+  - Tuyệt đối không sinh số liệu sinh học giả tạo để vượt qua kiểm thử.
+- Báo cáo Benchmark: `docs/benchmarks/inspire_avr_benchmark_v1.0.json`:
+  - Tổng số mẫu kiểm thử: 29 ca (Validation + Test)
+  - Tỷ lệ đo đạc thành công: 100% (Mean AVR = `0.9658`, p50 Latency = `638.74 ms`)
+  - Phát hiện chính xác ca lâm sàng có biểu hiện co thắt động mạch thực tế (`IM003537`: $AVR = 0.5294 < 0.60 \implies \text{HYPERTENSION\_RISK}$)
+- Ảnh trực quan hóa lâm sàng: Động mạch phân màu Đỏ, Tĩnh mạch phân màu Xanh, Vành khuyên Zone B viền Xanh lá và Tâm đĩa thị chấm Vàng, trả về qua Base64 PNG.
