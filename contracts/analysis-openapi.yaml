@@ -98,6 +98,11 @@ paths:
         '202':
           description: Đã nhận, đang xếp hàng
           headers:
+            Location:
+              description: URL theo dõi batch đã tiếp nhận.
+              schema:
+                type: string
+                format: uri-reference
             Idempotent-Replayed:
               description: true nếu đây là phản hồi phát lại
               schema:
@@ -105,7 +110,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AnalysisAccepted'
+                $ref: '#/components/schemas/BatchResponse'
               examples:
                 accepted:
                   value:
@@ -600,56 +605,135 @@ paths:
       - DOCTOR
       x-resource-scopes:
         DOCTOR: ASSIGNED
-  /api/v1/analyses/{analysisId}/report:
-    get:
+  /api/v1/analyses/batches:
+    post:
+      tags: [Analyses]
+      operationId: createAnalysisBatch
+      summary: Tiếp nhận batch tối đa 100 ảnh
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/CreateAnalysisRequest' }
+            encoding:
+              images: { contentType: 'image/jpeg, image/png' }
+      responses:
+        '202':
+          description: Batch đã được tiếp nhận
+          headers:
+            Location: { schema: { type: string, format: uri-reference } }
+            Idempotent-Replayed: { schema: { type: boolean } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/InsufficientCredit' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /api/v1/batches:
+    post:
+      tags: [Analyses]
+      operationId: createBatch
+      summary: Tiếp nhận batch tối đa 100 ảnh (alias)
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/CreateAnalysisRequest' }
+            encoding:
+              images: { contentType: 'image/jpeg, image/png' }
+      responses:
+        '202':
+          description: Batch đã được tiếp nhận
+          headers:
+            Location: { schema: { type: string, format: uri-reference } }
+            Idempotent-Replayed: { schema: { type: boolean } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/InsufficientCredit' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /api/v1/analyses/{analysisId}/reports:
+    post:
       tags:
       - Reports
-      operationId: getReport
-      summary: Xuất báo cáo theo phạm vi quyền
-      description: 'Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang hoạt động và OWN/ASSIGNED/TENANT
-        trên từng resource. Role bị cấm trả 403; tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
-        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này. PDF hoặc CSV (NFR-20). Báo cáo
-        ghi phiên bản model và ngưỡng (BR-07, NFR-23).
-
-        Bệnh nhân chỉ báo cáo của mình; bác sĩ trong phạm vi phân công; clinic trong tenant.
-
-        '
+      operationId: createAnalysisReport
+      summary: Tạo PDF bệnh án cho một ca phân tích
       parameters:
       - $ref: '#/components/parameters/AnalysisId'
-      - name: format
-        in: query
-        required: true
-        schema:
-          type: string
-          enum:
-          - pdf
-          - csv
+      - $ref: '#/components/parameters/ClinicContext'
       - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalysisReportExportRequest' }
       responses:
-        '200':
-          description: Tệp báo cáo
+        '201':
+          description: Báo cáo riêng tư đã lưu; liên kết tải có thời hạn
           content:
-            application/pdf:
-              schema:
-                type: string
-                format: binary
-            text/csv:
-              schema:
-                type: string
-        '400':
-          $ref: '#/components/responses/ValidationError'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportDownloadResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
       x-roles:
       - PATIENT
       - DOCTOR
       - CLINIC_ADMIN
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
+  /api/v1/batches/{batchId}/reports:
+    post:
+      tags: [Reports]
+      operationId: createBatchReport
+      summary: Tạo báo cáo tổng hợp PDF hoặc CSV cho batch
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - name: batchId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MedicalReportExportRequest' }
+      responses:
+        '201':
+          description: Báo cáo đã lưu trong vùng riêng tư; URL tải có thời hạn
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportDownloadResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+      x-roles: [PATIENT, DOCTOR, CLINIC_ADMIN]
       x-resource-scopes:
         PATIENT: OWN
         DOCTOR: ASSIGNED
@@ -859,10 +943,11 @@ components:
         images:
           type: array
           minItems: 1
+          maxItems: 100
           items:
             type: string
             format: binary
-          description: 1..N ảnh đáy mắt (JPEG/PNG). Mỗi ảnh tạo một analysis riêng, cùng một batchId. Ảnh lưu object
+          description: 1..100 ảnh đáy mắt (JPEG/PNG). Mỗi ảnh tạo một analysis riêng, cùng một batchId. Ảnh lưu object
             storage, DB chỉ giữ tham chiếu.
         modality:
           type: string
@@ -901,6 +986,66 @@ components:
         statusUrl:
           type: string
           description: URL batch; mỗi item có URL analysis riêng /api/v1/analyses/{analysisId}
+    BatchResponse:
+      type: object
+      required: [batchId, items, createdAt, statusUrl]
+      properties:
+        batchId: { type: string, format: uuid }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/AcceptedBatchItem' }
+        createdAt: { type: string, format: date-time }
+        statusUrl:
+          type: string
+          format: uri-reference
+          description: URL để lấy trạng thái batch.
+    AcceptedBatchItem:
+      type: object
+      required: [analysisId, fileName, processingStatus]
+      properties:
+        analysisId: { type: string, format: uuid }
+        fileName: { type: string }
+        processingStatus: { $ref: '#/components/schemas/ProcessingStatus' }
+        error: { $ref: '#/components/schemas/ItemError' }
+        existingAnalysisId:
+          type: string
+          format: uuid
+          description: Có khi ảnh trùng; không tự cấp quyền đọc ca gốc.
+    ItemError:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        retryable: { type: boolean }
+    AnalysisReportExportRequest:
+      type: object
+      required: [format]
+      additionalProperties: false
+      properties:
+        format:
+          type: string
+          enum: [pdf]
+          description: Xuất PDF cho một ca phân tích.
+    MedicalReportExportRequest:
+      type: object
+      required: [format]
+      additionalProperties: false
+      properties:
+        format:
+          type: string
+          enum: [pdf, csv]
+          description: Định dạng báo cáo tổng hợp batch.
+    ReportDownloadResponse:
+      type: object
+      required: [reportId, format, downloadUrl, expiresAt]
+      properties:
+        reportId: { type: string, format: uuid }
+        format: { type: string, enum: [pdf, csv] }
+        downloadUrl: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
     AnalysisResult:
       type: object
       required:

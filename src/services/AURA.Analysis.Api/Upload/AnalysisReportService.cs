@@ -8,7 +8,7 @@ using SkiaSharp;
 
 namespace AURA.Analysis.Api.Upload;
 
-public sealed record ReportFormatRequest(string Format);
+public sealed record MedicalReportExportRequest(string Format);
 public sealed record ReportDownloadResponse(Guid ReportId, string Format, string DownloadUrl, DateTime ExpiresAt);
 public sealed record DoctorReportReview(Guid DoctorId, bool IsApproved, string? CorrectedRiskLevel,
     string? IcdrLevel, string? Reason, string? Notes, DateTime CreatedAt);

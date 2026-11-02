@@ -105,7 +105,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AnalysisAccepted'
+                $ref: '#/components/schemas/BatchResponse'
               examples:
                 accepted:
                   value:
@@ -547,12 +547,17 @@ paths:
         content:
           multipart/form-data:
             schema: { $ref: '#/components/schemas/CreateAnalysisRequest' }
+            encoding:
+              images: { contentType: 'image/jpeg, image/png' }
       responses:
         '202':
           description: Batch đã được tiếp nhận
+          headers:
+            Location: { schema: { type: string, format: uri-reference } }
+            Idempotent-Replayed: { schema: { type: boolean } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AnalysisAccepted' }
+              schema: { $ref: '#/components/schemas/BatchResponse' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '409': { description: Xung đột idempotency hoặc upload đang xử lý }
         '503': { description: Dependency tạm thời không khả dụng }
@@ -591,7 +596,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ReportFormatRequest' }
+            schema: { $ref: '#/components/schemas/MedicalReportExportRequest' }
       responses:
         '201':
           description: Báo cáo đã tạo
@@ -724,7 +729,7 @@ paths:
           multipart/form-data:
             schema: { $ref: '#/components/schemas/CreateAnalysisRequest' }
             encoding:
-              images: { contentType: image/jpeg, image/png }
+              images: { contentType: 'image/jpeg, image/png' }
       responses:
         '202':
           description: Batch được nhận trong transaction trước khi phát các job
@@ -734,7 +739,7 @@ paths:
               description: URL theo dõi tiến độ
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AnalysisAccepted' }
+              schema: { $ref: '#/components/schemas/BatchResponse' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '409': { $ref: '#/components/responses/Conflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
@@ -802,7 +807,7 @@ components:
         type: string
         maxLength: 64
   schemas:
-    ReportFormatRequest:
+    MedicalReportExportRequest:
       type: object
       required: [format]
       properties:
@@ -885,6 +890,7 @@ components:
         images:
           type: array
           minItems: 1
+          maxItems: 100
           items:
             type: string
             format: binary
@@ -927,6 +933,34 @@ components:
         statusUrl:
           type: string
           description: URL batch status; hỗ trợ /api/v1/analyses/batches/{batchId} và alias /api/v1/batches/{batchId}.
+    BatchResponse:
+      type: object
+      required: [batchId, items, createdAt, statusUrl]
+      properties:
+        batchId: { type: string, format: uuid }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/AcceptedBatchItem' }
+        createdAt: { type: string, format: date-time }
+        statusUrl: { type: string, format: uri-reference }
+    AcceptedBatchItem:
+      type: object
+      required: [analysisId, fileName, processingStatus]
+      properties:
+        analysisId: { type: string, format: uuid }
+        fileName: { type: string }
+        processingStatus: { $ref: '#/components/schemas/ProcessingStatus' }
+        error: { $ref: '#/components/schemas/ItemError' }
+        existingAnalysisId: { type: string, format: uuid }
+    ItemError:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        retryable: { type: boolean }
     AnalysisResult:
       type: object
       required:
