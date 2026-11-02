@@ -426,6 +426,56 @@ public sealed class OrderRepository(
             reader.GetDateTime(14),
             reader.GetDateTime(15));
     }
+
+    public async Task<(bool Allowed, string Code, string Message)> VerifyClinicAdminAuthorityAsync(
+        Guid clinicId,
+        Guid actorId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+
+        const string clinicSql = "SELECT status FROM profile.clinics WHERE clinic_id = @clinic_id LIMIT 1;";
+        await using (var clinicCmd = new NpgsqlCommand(clinicSql, connection))
+        {
+            clinicCmd.Parameters.AddWithValue("clinic_id", clinicId);
+            var clinicStatusObj = await clinicCmd.ExecuteScalarAsync(cancellationToken);
+            if (clinicStatusObj is not string clinicStatus)
+            {
+                return (false, "ERR_CLINIC_NOT_FOUND", "Không tìm thấy phòng khám.");
+            }
+            if (!string.Equals(clinicStatus, "ACTIVE", StringComparison.OrdinalIgnoreCase))
+            {
+                return (false, "ERR_FORBIDDEN", $"Phòng khám đang ở trạng thái '{clinicStatus}', không thể thực hiện giao dịch.");
+            }
+        }
+
+        const string memberSql = """
+            SELECT role, status
+            FROM profile.memberships
+            WHERE clinic_id = @clinic_id AND account_id = @actor_id
+            LIMIT 1;
+            """;
+        await using var memberCmd = new NpgsqlCommand(memberSql, connection);
+        memberCmd.Parameters.AddWithValue("clinic_id", clinicId);
+        memberCmd.Parameters.AddWithValue("actor_id", actorId);
+        await using var reader = await memberCmd.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return (false, "ERR_FORBIDDEN", "Người dùng không phải là thành viên của phòng khám này.");
+        }
+        var role = reader.GetString(0);
+        var status = reader.GetString(1);
+        if (!string.Equals(status, "ACTIVE", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, "ERR_FORBIDDEN", "Tài khoản thành viên trong phòng khám không hoạt động.");
+        }
+        if (!string.Equals(role, "CLINIC_ADMIN", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, "ERR_FORBIDDEN", "Chỉ ClinicAdmin mới có quyền quản lý và mua gói credit cho phòng khám.");
+        }
+
+        return (true, string.Empty, string.Empty);
+    }
 }
 
 public sealed record PackagePriceVersionRecord(

@@ -229,6 +229,12 @@ public sealed class OrderService
         using var sha = SHA256.Create();
         return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
     }
+
+    public Task<(bool Allowed, string Code, string Message)> VerifyClinicAdminAuthorityAsync(
+        Guid clinicId,
+        Guid actorId,
+        CancellationToken cancellationToken) =>
+        _repository.VerifyClinicAdminAuthorityAsync(clinicId, actorId, cancellationToken);
 }
 
 public enum OrderOperationStatus
