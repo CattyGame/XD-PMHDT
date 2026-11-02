@@ -35,7 +35,14 @@ public static class AnalysisRuntime
         if(options.MaxImageBytes is <1 or >10485760||options.MaxImagePixels is <1 or >16000000||options.MaxImagesPerRequest is <1 or >100
             ||options.MaxRequestBytes<options.MaxImageBytes||options.MaxRequestBytes>1101004800||options.OriginalsContainer!="aura-originals")
             throw new InvalidOperationException("Invalid Analysis upload limits.");
+        var reportOptions=configuration.GetSection("Analysis:Report").Get<AnalysisReportOptions>()??new();
+        if(!Uri.TryCreate(reportOptions.PublicApiBaseUrl,UriKind.Absolute,out var publicApi)
+            ||publicApi.Scheme is not ("http" or "https")||publicApi.AbsolutePath!="/"
+            ||publicApi.UserInfo.Length>0||publicApi.Query.Length>0||publicApi.Fragment.Length>0
+            ||(!environment.IsDevelopment()&&publicApi.Scheme!="https"))
+            throw new InvalidOperationException("A safe public Analysis API origin is required for authenticated report QR links.");
         services.AddSingleton(options);services.AddSingleton(configuration.GetSection(StorageOptions.SectionName).Get<StorageOptions>()??new());
+        services.AddSingleton(reportOptions);
         services.AddSingleton(new AnalysisUploadGate(capacity));services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton(_=>NpgsqlDataSource.Create(db.ConnectionString));
         services.AddSingleton<IConnectionMultiplexer>(_=>ConnectionMultiplexer.Connect(redisConnection));

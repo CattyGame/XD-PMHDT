@@ -1,11 +1,14 @@
 using AURA.Analysis.Api;
 using AURA.Analysis.Api.Http;
 using AURA.Analysis.Api.Outbox.Adapters;
+using QuestPDF.Infrastructure;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 
 var builder = WebApplication.CreateBuilder(args);
+
+QuestPDF.Settings.License = LicenseType.Community;
 
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();

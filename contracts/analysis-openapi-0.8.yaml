@@ -561,6 +561,7 @@ paths:
       tags: [Reports]
       operationId: createAnalysisReport
       summary: Tạo PDF cho analysis đã hoàn tất
+      description: PDF A4 nén dưới 1.2 MB, gồm ảnh gốc/mask cạnh nhau, ba chỉ số định lượng, phiên bản model AI và review đã lưu. ICDR chỉ hiện khi bác sĩ đã duyệt và ghi nhận; QR mở API case yêu cầu xác thực, không chứa token hoặc PHI.
       parameters:
       - { name: analysisId, in: path, required: true, schema: { type: string, format: uuid } }
       - $ref: '#/components/parameters/ClinicContext'
@@ -572,7 +573,7 @@ paths:
             schema: { $ref: '#/components/schemas/AnalysisReportFormatRequest' }
       responses:
         '201':
-          description: Báo cáo đã tạo, URL tải xuống ngắn hạn
+          description: Báo cáo riêng tư trong Blob; URL đọc SAS hết hạn sau 15 phút, blob không truy cập công khai.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ReportDownload' }
@@ -598,6 +599,25 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ReportDownload' }
         '400': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/campaigns/{campaignId}/export:
+    get:
+      tags: [Reports]
+      operationId: exportCampaignReportCsv
+      summary: Tải CSV tổng kết campaign
+      description: CSV chỉ xuất mã ca ẩn danh, không xuất patient ID hoặc tên file. Mọi ô động đều được quote và escape formula injection.
+      parameters:
+      - { name: campaignId, in: path, required: true, schema: { type: string, format: uuid } }
+      - $ref: '#/components/parameters/ClinicContext'
+      responses:
+        '200':
+          description: CSV tổng hợp và các ca đã ẩn danh
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+        '404': { description: Campaign không tồn tại trong tenant hiện hành }
   /api/v1/doctor/worklist:
     get:
       tags: [Reviews]
@@ -809,6 +829,10 @@ components:
         correctedRiskLevel: { $ref: '#/components/schemas/RiskLevel' }
         reason: { type: string, maxLength: 1000 }
         doctorNotes: { type: string, maxLength: 2000 }
+        icdrLevel:
+          type: string
+          enum: [NO_DR, MILD_NPDR, MODERATE_NPDR, SEVERE_NPDR, PROLIFERATIVE_DR]
+          description: Bác sĩ ghi nhận trực tiếp; chỉ chấp nhận khi isApproved=true, không suy diễn từ kết quả AI.
     DoctorReview:
       type: object
       required: [reviewId, analysisId, version, isApproved, doctorId, createdAt, aiResultVersion]
@@ -823,6 +847,9 @@ components:
         createdAt: { type: string, format: date-time }
         reason: { type: string }
         aiResultVersion: { type: integer, minimum: 1 }
+        icdrLevel:
+          type: string
+          enum: [NO_DR, MILD_NPDR, MODERATE_NPDR, SEVERE_NPDR, PROLIFERATIVE_DR]
     InternalResolveRequest:
       type: object
       additionalProperties: true

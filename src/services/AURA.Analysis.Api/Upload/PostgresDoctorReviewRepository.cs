@@ -53,10 +53,10 @@ public sealed class PostgresDoctorReviewRepository(NpgsqlDataSource dataSource) 
         await using (var insert = new NpgsqlCommand("""
             INSERT INTO analysis.doctor_reviews
                 (id, tenant_id, image_id, analysis_result_id, doctor_id, version, base_version,
-                 is_approved, corrected_risk_level, reason, doctor_notes)
-            SELECT $1, $2, $3, r.id, $4, $5, $6, $7, $8, $9, $10
+                 is_approved, corrected_risk_level, reason, doctor_notes, icdr_level)
+            SELECT $1, $2, $3, r.id, $4, $5, $6, $7, $8, $9, $10, $11
             FROM analysis.analysis_results r
-            WHERE r.tenant_id = $2 AND r.image_id = $3 AND r.version = $11
+            WHERE r.tenant_id = $2 AND r.image_id = $3 AND r.version = $12
             RETURNING created_at;
             """, connection, transaction))
         {
@@ -70,6 +70,7 @@ public sealed class PostgresDoctorReviewRepository(NpgsqlDataSource dataSource) 
             insert.Parameters.AddWithValue((object?)request.CorrectedRiskLevel ?? DBNull.Value);
             insert.Parameters.AddWithValue((object?)request.Reason ?? DBNull.Value);
             insert.Parameters.AddWithValue((object?)request.DoctorNotes ?? DBNull.Value);
+            insert.Parameters.AddWithValue((object?)request.IcdrLevel ?? DBNull.Value);
             insert.Parameters.AddWithValue(aiResultVersion);
             var value = await insert.ExecuteScalarAsync(ct);
             if (value is not DateTime created)
@@ -98,7 +99,8 @@ public sealed class PostgresDoctorReviewRepository(NpgsqlDataSource dataSource) 
             request.IsApproved,
             request.CorrectedRiskLevel,
             request.Reason,
-            request.DoctorNotes
+            request.DoctorNotes,
+            request.IcdrLevel
         });
         await using (var audit = new NpgsqlCommand("""
             INSERT INTO analysis.audit_logs
@@ -120,6 +122,6 @@ public sealed class PostgresDoctorReviewRepository(NpgsqlDataSource dataSource) 
         }
         await transaction.CommitAsync(ct);
         return new(reviewId, request.AnalysisId, version, request.IsApproved, request.CorrectedRiskLevel,
-            request.DoctorNotes, request.DoctorId, createdAt, request.Reason, aiResultVersion);
+            request.DoctorNotes, request.DoctorId, createdAt, request.Reason, aiResultVersion, request.IcdrLevel);
     }
 }

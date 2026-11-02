@@ -33,7 +33,7 @@ public sealed class DoctorReviewServiceTests
             if (Failure is not null) throw Failure;
             return Task.FromResult(new DoctorReviewDto(Guid.NewGuid(), command.AnalysisId,
                 command.BaseVersion + 1, command.IsApproved, command.CorrectedRiskLevel, command.DoctorNotes,
-                command.DoctorId, DateTimeOffset.UtcNow, command.Reason, 1));
+                command.DoctorId, DateTimeOffset.UtcNow, command.Reason, 1, command.IcdrLevel));
         }
     }
 
@@ -62,7 +62,43 @@ public sealed class DoctorReviewServiceTests
         Assert.Equal("HIGH", repo.LastCommand.CorrectedRiskLevel);
         Assert.Equal("Reconcile fundus image", repo.LastCommand.Reason);
         Assert.Equal("Clinical note", repo.LastCommand.DoctorNotes);
+        Assert.Null(repo.LastCommand.IcdrLevel);
         Assert.Equal(doctor, repo.LastCommand.DoctorId);
+    }
+
+    [Fact]
+    public async Task SubmitAsync_ApprovedDoctorReviewStoresExplicitIcdrGrade()
+    {
+        var doctor = Guid.NewGuid();
+        var clinic = Guid.NewGuid();
+        var analysisId = Guid.NewGuid();
+        var patient = Guid.NewGuid();
+        var repo = new ReviewRepository();
+        var service = new DoctorReviewService(
+            new AnalysisRepository(new AnalysisIdentity(analysisId, Guid.NewGuid(), FakeAccess.Tenant, patient, clinic)),
+            new AccessResolver(true), repo);
+
+        var response = await service.SubmitAsync(doctor, clinic, analysisId,
+            new DoctorReviewRequest(true, 0, DoctorNotes: "Reviewed by ophthalmologist", IcdrLevel: "mild_npdr"),
+            "scrum368", CancellationToken.None);
+
+        Assert.Equal("MILD_NPDR", repo.LastCommand!.IcdrLevel);
+        Assert.Equal("MILD_NPDR", response.IcdrLevel);
+    }
+
+    [Fact]
+    public async Task SubmitAsync_NeverAcceptsIcdrGradeWithoutDoctorApproval()
+    {
+        var repo = new ReviewRepository();
+        var service = new DoctorReviewService(
+            new AnalysisRepository(new AnalysisIdentity(Guid.NewGuid(), Guid.NewGuid(), FakeAccess.Tenant, Guid.NewGuid(), Guid.NewGuid())),
+            new AccessResolver(true), repo);
+
+        var error = await Assert.ThrowsAsync<UploadFailure>(() => service.SubmitAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+            new DoctorReviewRequest(false, 0, "HIGH", "reason", IcdrLevel: "MILD_NPDR"), "scrum368", CancellationToken.None));
+
+        Assert.Equal(400, error.Status);
+        Assert.Null(repo.LastCommand);
     }
 
     [Fact]

@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text;
 using AURA.Analysis.Api.Auth;
+using AURA.Analysis.Api.Campaign;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
-using QRCoder;
 using SkiaSharp;
 
 namespace AURA.Analysis.Api.Upload;
@@ -11,7 +11,12 @@ namespace AURA.Analysis.Api.Upload;
 public sealed record ReportFormatRequest(string Format);
 public sealed record ReportDownloadResponse(Guid ReportId, string Format, string DownloadUrl, DateTime ExpiresAt);
 public sealed record DoctorReportReview(Guid DoctorId, bool IsApproved, string? CorrectedRiskLevel,
-    string? Reason, string? Notes, DateTime CreatedAt);
+    string? IcdrLevel, string? Reason, string? Notes, DateTime CreatedAt);
+
+public sealed class AnalysisReportOptions
+{
+    public string PublicApiBaseUrl { get; set; } = "http://localhost:5000";
+}
 
 /// <summary>Generates authorized, de-identified batch exports and single-case PDF reports in private Blob storage.</summary>
 public sealed class AnalysisReportService(
@@ -20,6 +25,7 @@ public sealed class AnalysisReportService(
     IFileAccessRepository files,
     IPrivateFileStorage storage,
     StorageOptions storageOptions,
+    AnalysisReportOptions reportOptions,
     NpgsqlDataSource dataSource,
     TimeProvider clock)
 {
@@ -42,17 +48,32 @@ public sealed class AnalysisReportService(
 
         await using var originalStream = await storage.OpenReadAsync(storageOptions.OriginalContainer, original.ObjectKey, ct);
         await using var overlayStream = await storage.OpenReadAsync(storageOptions.AnnotationContainer, overlay.ObjectKey, ct);
-        using var originalBitmap = SKBitmap.Decode(originalStream);
-        using var overlayBitmap = SKBitmap.Decode(overlayStream);
-        if (originalBitmap is null || overlayBitmap is null)
-            throw UploadFailure.Dependency("Report image decoder");
+        var originalBytes = await ReadImageBytesAsync(originalStream, ct);
+        var overlayBytes = await ReadImageBytesAsync(overlayStream, ct);
 
         var reportId = Guid.NewGuid();
-        await using var pdf = new MemoryStream();
-        RenderSinglePdf(pdf, reportId, detail, review, originalBitmap, overlayBitmap, clock.GetUtcNow());
-        pdf.Position = 0;
+        var metrics = detail.Result.Metrics;
+        var secureAnalysisUrl = new Uri(new Uri(reportOptions.PublicApiBaseUrl.TrimEnd('/') + "/"),
+            $"api/v1/analyses/{detail.AnalysisId:D}").AbsoluteUri;
+        var pdfBytes = MedicalReportPdfRenderer.Render(new MedicalReportPdfData(
+            reportId, detail.AnalysisId, detail.BatchId, detail.PatientId, clinicId,
+            review?.DoctorId, DateTime.SpecifyKind(detail.CreatedAt, DateTimeKind.Utc), detail.ReviewStatus,
+            detail.Result.ModelVersion, detail.Result.RiskLevel, review?.IsApproved == true,
+            review?.IsApproved == true ? review.IcdrLevel : null, review?.Notes, review?.Reason,
+            metrics.VesselDensity, metrics.TortuosityIndex, metrics.AvRatio, detail.Result.Disclaimer,
+            secureAnalysisUrl, originalBytes, overlayBytes));
+        await using var pdf = new MemoryStream(pdfBytes, writable: false);
         return await StoreAndSignAsync(reportId, "pdf", original.TenantId, detail.BatchId, detail.AnalysisId,
             "application/pdf", pdf, ct);
+    }
+
+    private static async Task<byte[]> ReadImageBytesAsync(Stream stream, CancellationToken ct)
+    {
+        await using var output = new MemoryStream();
+        await stream.CopyToAsync(output, ct);
+        if (output.Length is < 1 or > 10_485_760)
+            throw UploadFailure.Dependency("Report image size");
+        return output.ToArray();
     }
 
     public async Task<ReportDownloadResponse> CreateBatchReportAsync(Guid requesterId, Guid? clinicId, Guid batchId,
@@ -89,7 +110,7 @@ public sealed class AnalysisReportService(
     private async Task<DoctorReportReview?> ReadReviewAsync(Guid analysisId, Guid tenantId, CancellationToken ct)
     {
         await using var command = dataSource.CreateCommand("""
-            SELECT doctor_id,is_approved,corrected_risk_level,reason,doctor_notes,created_at
+            SELECT doctor_id,is_approved,corrected_risk_level,icdr_level,reason,doctor_notes,created_at
             FROM analysis.doctor_reviews
             WHERE tenant_id=$1 AND image_id=$2
             ORDER BY version DESC LIMIT 1;
@@ -100,7 +121,7 @@ public sealed class AnalysisReportService(
         if (!await reader.ReadAsync(ct)) return null;
         return new(reader.GetGuid(0), reader.GetBoolean(1), reader.IsDBNull(2) ? null : reader.GetString(2),
             reader.IsDBNull(3) ? null : reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4),
-            reader.GetDateTime(5));
+            reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetDateTime(6));
     }
 
     private async Task<ReportDownloadResponse> StoreAndSignAsync(Guid reportId, string format, Guid tenantId,
@@ -144,54 +165,7 @@ public sealed class AnalysisReportService(
         return output.ToArray();
     }
 
-    private static string CsvRow(params object?[] values) => string.Join(',', values.Select(value =>
-    {
-        var text = Convert.ToString(value, CultureInfo.InvariantCulture) ?? "";
-        return "\"" + text.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
-    }));
-
-    private static void RenderSinglePdf(Stream output, Guid reportId, AnalysisDetailResponse detail,
-        DoctorReportReview? review, SKBitmap original, SKBitmap overlay, DateTimeOffset generatedAt)
-    {
-        using var document = SKDocument.CreatePdf(output);
-        var canvas = document.BeginPage(595, 842);
-        DrawText(canvas, "AURA - Fundus Analysis Report", 36, 42, 22, bold: true);
-        DrawText(canvas, $"Report: {reportId:D}", 36, 70);
-        DrawText(canvas, $"Patient ID: {detail.PatientId:D}", 36, 96);
-        DrawText(canvas, $"Analysis: {detail.AnalysisId:D}    Batch: {detail.BatchId:D}", 36, 120);
-        DrawText(canvas, $"Generated (UTC): {generatedAt:yyyy-MM-dd HH:mm:ss}", 36, 144);
-        DrawText(canvas, $"AI result: {detail.Result!.RiskLevel ?? "Not classified"}    Review: {detail.ReviewStatus}", 36, 171, 13, true);
-        DrawText(canvas, "Original fundus image", 36, 204, 12, true);
-        DrawText(canvas, "Vessel overlay", 310, 204, 12, true);
-        DrawImage(canvas, original, new SKRect(36, 214, 286, 405));
-        DrawImage(canvas, overlay, new SKRect(310, 214, 560, 405));
-
-        DrawText(canvas, "Vessel metrics", 36, 438, 14, true);
-        var metrics = detail.Result.Metrics;
-        var values = new (string Name, double Value)[]
-        {
-            ("Vessel density", metrics.VesselDensity ?? 0),
-            ("Tortuosity", metrics.TortuosityIndex ?? 0),
-            ("A/V ratio", metrics.AvRatio ?? 0),
-            ("Fractal dimension", metrics.FractalDimension ?? 0),
-            ("Branching points", metrics.BranchingPoints ?? 0)
-        };
-        DrawBars(canvas, values, 36, 454, 300);
-
-        DrawText(canvas, "Doctor review", 36, 630, 14, true);
-        if (review is null) DrawText(canvas, "No doctor review has been recorded.", 36, 654);
-        else
-        {
-            DrawText(canvas, $"Doctor: {review.DoctorId:D}    Approved: {review.IsApproved}", 36, 654);
-            DrawText(canvas, $"Corrected risk: {review.CorrectedRiskLevel ?? "None"}    Reason: {review.Reason ?? "None"}", 36, 678);
-            DrawWrapped(canvas, review.Notes ?? "", 36, 702, 380, 16, 4);
-        }
-        DrawText(canvas, detail.Result.Disclaimer, 36, 798, 9);
-        DrawQr(canvas, $"AURA-REPORT:{reportId:D}:ANALYSIS:{detail.AnalysisId:D}", 476, 700, 84);
-        DrawText(canvas, "Reconciliation QR", 465, 796, 9);
-        document.EndPage();
-        document.Close();
-    }
+    private static string CsvRow(params object?[] values) => CampaignCsvWriter.Row(values);
 
     private static byte[] RenderBatchPdf(BatchStatusResponse report, Guid reportId, DateTimeOffset generatedAt)
     {
@@ -246,54 +220,4 @@ public sealed class AnalysisReportService(
         canvas.DrawText(text, x, y, SKTextAlign.Left, font, paint);
     }
 
-    private static void DrawImage(SKCanvas canvas, SKBitmap bitmap, SKRect bounds)
-    {
-        using var paint = new SKPaint { IsAntialias = true };
-        canvas.DrawBitmap(bitmap, bounds, new SKSamplingOptions(), paint);
-    }
-
-    private static void DrawBars(SKCanvas canvas, IReadOnlyList<(string Name, double Value)> values, float x, float y, float width)
-    {
-        for (var index = 0; index < values.Count; index++)
-        {
-            var rowY = y + index * 30;
-            DrawText(canvas, values[index].Name, x, rowY + 12, 9);
-            var value = double.IsFinite(values[index].Value) ? Math.Clamp(Math.Abs(values[index].Value), 0, 1) : 0;
-            using var bar = new SKPaint { Color = new SKColor(45, 112, 164), IsAntialias = true };
-            canvas.DrawRect(new SKRect(x + 116, rowY, x + 116 + (float)(value * width), rowY + 16), bar);
-            DrawText(canvas, values[index].Value.ToString("F3", CultureInfo.InvariantCulture), x + 126 + (float)(value * width), rowY + 12, 8);
-        }
-    }
-
-    private static void DrawWrapped(SKCanvas canvas, string text, float x, float y, float width, float lineHeight, int maxLines)
-    {
-        var words = (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var lines = new List<string>();
-        var current = new StringBuilder();
-        foreach (var word in words)
-        {
-            var candidate = current.Length == 0 ? word : current + " " + word;
-            using var typeface = SKTypeface.FromFamilyName("Arial");
-            using var font = new SKFont(typeface, 9);
-            if (font.MeasureText(candidate) > width && current.Length > 0)
-            {
-                lines.Add(current.ToString());
-                current.Clear();
-            }
-            if (current.Length > 0) current.Append(' ');
-            current.Append(word);
-        }
-        if (current.Length > 0) lines.Add(current.ToString());
-        for (var i = 0; i < Math.Min(lines.Count, maxLines); i++)
-            DrawText(canvas, lines[i], x, y + i * lineHeight, 9);
-    }
-
-    private static void DrawQr(SKCanvas canvas, string payload, float x, float y, float size)
-    {
-        using var generator = new QRCodeGenerator();
-        using var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.Q);
-        using var renderer = new PngByteQRCode(data);
-        using var bitmap = SKBitmap.Decode(renderer.GetGraphic(6));
-        if (bitmap is not null) DrawImage(canvas, bitmap, new SKRect(x, y, x + size, y + size));
-    }
 }

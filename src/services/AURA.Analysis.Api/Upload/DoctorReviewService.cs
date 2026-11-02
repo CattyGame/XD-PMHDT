@@ -11,7 +11,8 @@ public sealed record DoctorReviewRequest(
     int BaseVersion,
     string? CorrectedRiskLevel = null,
     string? Reason = null,
-    string? DoctorNotes = null);
+    string? DoctorNotes = null,
+    string? IcdrLevel = null);
 
 public sealed record DoctorReviewDto(
     Guid ReviewId,
@@ -23,7 +24,8 @@ public sealed record DoctorReviewDto(
     Guid DoctorId,
     DateTimeOffset CreatedAt,
     string? Reason,
-    int AiResultVersion);
+    int AiResultVersion,
+    string? IcdrLevel = null);
 
 public sealed record DoctorReviewCommand(
     Guid AnalysisId,
@@ -35,6 +37,7 @@ public sealed record DoctorReviewCommand(
     string? CorrectedRiskLevel,
     string? Reason,
     string? DoctorNotes,
+    string? IcdrLevel,
     string CorrelationId);
 
 public interface IDoctorReviewRepository
@@ -65,7 +68,7 @@ public sealed class DoctorReviewService(
         return await reviews.SubmitAsync(new DoctorReviewCommand(
             analysisId, identity.TenantId, identity.PatientId, doctorId, request.BaseVersion,
             request.IsApproved, request.CorrectedRiskLevel?.Trim().ToUpperInvariant(),
-            request.Reason?.Trim(), request.DoctorNotes?.Trim(), correlationId), ct);
+            request.Reason?.Trim(), request.DoctorNotes?.Trim(), request.IcdrLevel?.Trim().ToUpperInvariant(), correlationId), ct);
     }
 
     private static void Validate(DoctorReviewRequest request)
@@ -74,12 +77,17 @@ public sealed class DoctorReviewService(
             throw UploadFailure.Validation(new ErrorDetail("baseVersion", "must_be_non_negative"));
         if (request.DoctorNotes?.Length > 2000)
             throw UploadFailure.Validation(new ErrorDetail("doctorNotes", "max_length_2000"));
+        var icdrLevel = request.IcdrLevel?.Trim().ToUpperInvariant();
+        if (icdrLevel is not null && icdrLevel is not ("NO_DR" or "MILD_NPDR" or "MODERATE_NPDR" or "SEVERE_NPDR" or "PROLIFERATIVE_DR"))
+            throw UploadFailure.Validation(new ErrorDetail("icdrLevel", "must_be_a_valid_icdr_grade"));
         if (request.IsApproved)
         {
             if (request.CorrectedRiskLevel is not null || request.Reason is not null)
                 throw UploadFailure.Validation(new ErrorDetail("review", "approval_cannot_include_correction"));
             return;
         }
+        if (icdrLevel is not null)
+            throw UploadFailure.Validation(new ErrorDetail("icdrLevel", "requires_approved_doctor_review"));
         var level = request.CorrectedRiskLevel?.Trim().ToUpperInvariant();
         if (level is not ("LOW" or "MODERATE" or "HIGH"))
             throw UploadFailure.Validation(new ErrorDetail("correctedRiskLevel", "required_valid_risk_level"));

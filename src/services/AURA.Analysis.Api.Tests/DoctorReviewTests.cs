@@ -31,7 +31,7 @@ public sealed class DoctorReviewTests
             try
             {
                 var response = await repository.SubmitAsync(new DoctorReviewCommand(analysisId, tenant, patient,
-                    doctor, 0, true, null, null, $"concurrent review {i}", $"scrum345-{requestId:N}"), timeout.Token);
+                    doctor, 0, true, null, null, $"concurrent review {i}", null, $"scrum345-{requestId:N}"), timeout.Token);
                 return (Success: true, Error: (string?)null, Version: response.Version);
             }
             catch (UploadFailure error) when (error.Status == 409)
@@ -57,6 +57,31 @@ public sealed class DoctorReviewTests
         Assert.Equal(1, reader.GetInt32(0));
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
+    }
+
+    [PostgresFact]
+    public async Task Approved_review_persists_only_the_doctor_supplied_icdr_grade()
+    {
+        if (string.IsNullOrWhiteSpace(ConnectionString)) return;
+
+        await using var dataSource = NpgsqlDataSource.Create(ConnectionString);
+        var tenant = Guid.NewGuid();
+        var patient = Guid.NewGuid();
+        var owner = Guid.NewGuid();
+        var doctor = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var analysisId = Guid.NewGuid();
+        var jobId = Guid.NewGuid();
+        var resultId = Guid.NewGuid();
+        await SeedCompletedAnalysis(dataSource, tenant, patient, owner, requestId, analysisId, jobId, resultId);
+
+        var review = await new PostgresDoctorReviewRepository(dataSource).SubmitAsync(new DoctorReviewCommand(
+            analysisId, tenant, patient, doctor, 0, true, null, null, "approved note", "MILD_NPDR", "scrum368-test"), default);
+
+        Assert.Equal("MILD_NPDR", review.IcdrLevel);
+        await using var command = dataSource.CreateCommand("SELECT icdr_level FROM analysis.doctor_reviews WHERE id=$1;");
+        command.Parameters.AddWithValue(review.ReviewId);
+        Assert.Equal("MILD_NPDR", await command.ExecuteScalarAsync());
     }
 
     private static async Task SeedCompletedAnalysis(NpgsqlDataSource dataSource, Guid tenant, Guid patient,

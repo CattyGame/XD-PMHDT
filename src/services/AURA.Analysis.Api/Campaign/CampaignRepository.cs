@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using AURA.Analysis.Api.Upload;
 using Npgsql;
@@ -273,12 +274,13 @@ public sealed class CampaignRepository(NpgsqlDataSource dataSource)
         // 2. Thống kê lâm sàng từ analysis.images và analysis_results
         await using var clinicalCmd = dataSource.CreateCommand("""
             SELECT
-                COUNT(DISTINCT i.patient_id) AS unique_patients,
+                COUNT(DISTINCT r.patient_id) AS unique_patients,
                 COUNT(CASE WHEN ar.risk_level = 'LOW' THEN 1 END) AS normal_cases,
                 COUNT(CASE WHEN ar.risk_level IN ('MODERATE', 'HIGH') THEN 1 END) AS suspected_cases,
                 COUNT(CASE WHEN ar.risk_level = 'HIGH' THEN 1 END) AS high_risk_cases
             FROM analysis.batches b
             JOIN analysis.images i ON i.tenant_id = b.tenant_id AND (i.batch_id = b.id OR i.analysis_request_id = b.id)
+            JOIN analysis.analysis_requests r ON r.tenant_id = i.tenant_id AND r.id = i.analysis_request_id
             LEFT JOIN LATERAL (
                 SELECT x.risk_assessment->>'riskLevel' AS risk_level
                 FROM analysis.analysis_results x
@@ -334,10 +336,6 @@ public sealed class CampaignRepository(NpgsqlDataSource dataSource)
         // Lấy danh sách ảnh chi tiết thuộc chiến dịch
         await using var cmd = dataSource.CreateCommand("""
             SELECT
-                i.id AS analysis_id,
-                b.id AS batch_id,
-                i.patient_id,
-                i.source_file_name,
                 i.processing_status,
                 i.review_status,
                 ar.risk_level,
@@ -358,57 +356,25 @@ public sealed class CampaignRepository(NpgsqlDataSource dataSource)
         cmd.Parameters.AddWithValue(campaignId);
 
         var sb = new StringBuilder();
-
-        // 1. Header tổng kết chiến dịch
-        sb.AppendLine("# BAO CAO TONG KET CHIEN DICH TAM SOAT SUC KHOE MAT");
-        sb.AppendLine($"Ten chien dich,{EscapeCsv(summary.CampaignName)}");
-        sb.AppendLine($"Trang thai,{EscapeCsv(summary.Status)}");
-        sb.AppendLine($"Chi tieu nguoi kham,{summary.TargetPatientCount}");
-        sb.AppendLine($"Tong so ca chup,{summary.TotalImages}");
-        sb.AppendLine($"So ca hoan thanh,{summary.CompletedImages}");
-        sb.AppendLine($"Ty le hoan thanh,{summary.CompletionRatePercent}%");
-        sb.AppendLine($"So ca binh thuong,{summary.NormalCases}");
-        sb.AppendLine($"So ca nghi ngo bat thuong,{summary.SuspectedCases}");
-        sb.AppendLine($"So ca nguy co cao,{summary.HighRiskCases}");
-        sb.AppendLine($"So luong benh nhan thuc te,{summary.UniquePatients}");
-        sb.AppendLine();
-
-        // 2. Bảng dữ liệu chi tiết
-        sb.AppendLine("AnalysisId,BatchId,PatientId,FileName,ProcessingStatus,ReviewStatus,RiskLevel,CreatedAt");
+        sb.AppendLine(CampaignCsvWriter.Row("recordType", "caseCode", "campaignName", "campaignStatus",
+            "targetPatients", "totalBatches", "totalImages", "completedImages", "pendingImages", "failedImages",
+            "completionRatePercent", "normalCases", "suspectedCases", "highRiskCases", "uniquePatients",
+            "processingStatus", "reviewStatus", "riskLevel", "createdAtUtc"));
+        sb.AppendLine(CampaignCsvWriter.Row("summary", "", summary.CampaignName, summary.Status,
+            summary.TargetPatientCount, summary.TotalBatches, summary.TotalImages, summary.CompletedImages,
+            summary.PendingImages, summary.FailedImages, summary.CompletionRatePercent, summary.NormalCases,
+            summary.SuspectedCases, summary.HighRiskCases, summary.UniquePatients, "", "", "", ""));
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var index = 0;
         while (await reader.ReadAsync(ct))
         {
-            var analysisId = reader.GetGuid(0).ToString();
-            var batchId = reader.GetGuid(1).ToString();
-            var patientId = reader.GetGuid(2).ToString();
-            var fileName = reader.IsDBNull(3) ? "unnamed.jpg" : reader.GetString(3);
-            var processingStatus = reader.GetString(4);
-            var reviewStatus = reader.GetString(5);
-            var riskLevel = reader.IsDBNull(6) ? "UNKNOWN" : reader.GetString(6);
-            var createdAt = reader.GetDateTime(7).ToString("o");
-
-            sb.AppendLine($"{analysisId},{batchId},{patientId},{EscapeCsv(fileName)},{processingStatus},{reviewStatus},{riskLevel},{createdAt}");
+            index++;
+            sb.AppendLine(CampaignCsvWriter.Row("case", $"CASE-{index:D4}", "", "", "", "", "", "", "", "", "", "", "", "", "",
+                reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? "UNKNOWN" : reader.GetString(2),
+                reader.GetDateTime(3).ToString("O", CultureInfo.InvariantCulture)));
         }
 
         return sb.ToString();
-    }
-
-    private static string EscapeCsv(string? value)
-    {
-        if (string.IsNullOrEmpty(value)) return "";
-
-        // Chống lỗ hổng CSV Formula Injection (bắt đầu bằng =, +, -, @)
-        var sanitized = value;
-        if (sanitized.StartsWith('=') || sanitized.StartsWith('+') || sanitized.StartsWith('-') || sanitized.StartsWith('@'))
-        {
-            sanitized = "'" + sanitized;
-        }
-
-        if (sanitized.Contains(',') || sanitized.Contains('"') || sanitized.Contains('\n') || sanitized.Contains('\r'))
-        {
-            return $"\"{sanitized.Replace("\"", "\"\"")}\"";
-        }
-        return sanitized;
     }
 }
