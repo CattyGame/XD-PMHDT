@@ -1,4 +1,6 @@
 using System.Data;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using AURA.Billing.Api.Models;
 using Npgsql;
@@ -266,6 +268,268 @@ public sealed class CreditReservationRepository(
     public Task<ReservationOperationResult> ReleaseAsync(
         Guid reservationId, Guid idempotencyKey, string fingerprint, string reason, CancellationToken cancellationToken) =>
         TransitionAsync(reservationId, idempotencyKey, fingerprint, "RELEASE", reason, cancellationToken);
+
+    /// <summary>
+    /// SCRUM-366: Executes an atomic, high-performance batch partial refund for large batches (>= 100 items).
+    /// Enforces pessimistic locking (SELECT FOR UPDATE) on wallets, deterministic lock ordering by ReservationId,
+    /// differentiates between RELEASE (held reservations) and REFUND (captured reservations via ADJUSTMENT),
+    /// and ensures strict idempotent deduplication via SHA256(batchIdempotencyKey | reservationId).
+    /// </summary>
+    public async Task<BatchRefundResponse> ExecuteBatchRefundAsync(
+        BatchRefundRequest request,
+        Guid batchIdempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        if (request.Items is null || request.Items.Count == 0)
+        {
+            return new BatchRefundResponse(request.TenantId, request.BatchId, 0, 0, 0, Array.Empty<BatchRefundItemResult>());
+        }
+
+        // Sort items by ReservationId to eliminate deadlock risk across concurrent transactions
+        var indexedItems = request.Items
+            .Select((item, idx) => (item, idx))
+            .OrderBy(x => x.item.ReservationId)
+            .ToList();
+
+        var itemResults = new BatchRefundItemResult[request.Items.Count];
+        var totalRefundedCount = 0;
+        var totalCreditsRefunded = 0;
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+
+        try
+        {
+            foreach (var (item, originalIndex) in indexedItems)
+            {
+                if (item.ReservationId == Guid.Empty)
+                {
+                    itemResults[originalIndex] = new BatchRefundItemResult(item.ReservationId, "INVALID_ID", false, "ReservationId rỗng.");
+                    continue;
+                }
+
+                var itemReason = string.IsNullOrWhiteSpace(item.Reason) ? "BATCH_PARTIAL_REFUND" : item.Reason.Trim().ToUpperInvariant();
+                var validReleaseReasons = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "VALIDATION_ABORT",
+                    "STORAGE_ABORT",
+                    "ANALYSIS_ABORT",
+                    "FINAL_FAILURE",
+                    "LOW_QUALITY",
+                    "STALE_RESERVATION_AUTO_REFUND",
+                    "BATCH_PARTIAL_REFUND"
+                };
+                var dbReleaseReason = validReleaseReasons.Contains(itemReason)
+                    ? itemReason
+                    : "BATCH_PARTIAL_REFUND";
+
+                var itemKeyBytes = SHA256.HashData(
+                    Encoding.UTF8.GetBytes($"{batchIdempotencyKey:D}|{item.ReservationId:D}"));
+                var itemGuidBytes = new byte[16];
+                Array.Copy(itemKeyBytes, itemGuidBytes, 16);
+                var itemKey = new Guid(itemGuidBytes);
+                var fingerprint = ReservationFingerprint.ForRelease(item.ReservationId, dbReleaseReason);
+
+                // 1. Check idempotency in credit_ledger_entries
+                await using (var checkKeyCmd = new NpgsqlCommand("""
+                    SELECT entry_type, request_fingerprint
+                    FROM billing.credit_ledger_entries
+                    WHERE tenant_id = @tenant_id AND idempotency_key = @idempotency_key
+                    LIMIT 1;
+                    """, connection, transaction))
+                {
+                    checkKeyCmd.Parameters.AddWithValue("tenant_id", request.TenantId);
+                    checkKeyCmd.Parameters.AddWithValue("idempotency_key", itemKey);
+                    await using var keyReader = await checkKeyCmd.ExecuteReaderAsync(cancellationToken);
+                    if (await keyReader.ReadAsync(cancellationToken))
+                    {
+                        var entryType = keyReader.GetString(0);
+                        await keyReader.DisposeAsync();
+                        itemResults[originalIndex] = new BatchRefundItemResult(
+                            item.ReservationId,
+                            entryType == "ADJUSTMENT" ? "ALREADY_REFUNDED" : "ALREADY_RELEASED",
+                            false,
+                            "Đã được hoàn credit trước đó (Replayed).");
+                        continue;
+                    }
+                }
+
+                // 2. Lock reservation row with FOR UPDATE
+                ReservationStoredRecord? stored;
+                await using (var resCmd = new NpgsqlCommand("""
+                    SELECT id, tenant_id, analysis_id, generation, wallet_id, units,
+                           environment, is_mock, state, release_reason, created_at
+                    FROM billing.credit_reservations
+                    WHERE id = @id
+                    FOR UPDATE;
+                    """, connection, transaction))
+                {
+                    resCmd.Parameters.AddWithValue("id", item.ReservationId);
+                    await using var reader = await resCmd.ExecuteReaderAsync(cancellationToken);
+                    stored = await reader.ReadAsync(cancellationToken) ? ReadStoredRecord(reader) : null;
+                }
+
+                if (stored is null)
+                {
+                    itemResults[originalIndex] = new BatchRefundItemResult(item.ReservationId, "NOT_FOUND", false, "Không tìm thấy reservation.");
+                    continue;
+                }
+
+                // Multi-tenant check: ensure reservation belongs to the requesting tenant
+                if (stored.TenantId != request.TenantId)
+                {
+                    itemResults[originalIndex] = new BatchRefundItemResult(item.ReservationId, "FORBIDDEN", false, "Reservation không thuộc tenant này.");
+                    continue;
+                }
+
+                // Branch A: State is RESERVED -> Normal RELEASE
+                if (string.Equals(stored.State, "RESERVED", StringComparison.OrdinalIgnoreCase))
+                {
+                    await using (var updateResCmd = new NpgsqlCommand("""
+                        UPDATE billing.credit_reservations
+                        SET state = 'RELEASED',
+                            release_reason = @release_reason,
+                            updated_at = now(),
+                            released_at = now(),
+                            captured_at = NULL
+                        WHERE id = @id AND state = 'RESERVED';
+                        """, connection, transaction))
+                    {
+                        updateResCmd.Parameters.Add("release_reason", NpgsqlDbType.Varchar).Value = dbReleaseReason;
+                        updateResCmd.Parameters.AddWithValue("id", item.ReservationId);
+                        var updated = await updateResCmd.ExecuteNonQueryAsync(cancellationToken);
+                        if (updated != 1)
+                        {
+                            itemResults[originalIndex] = new BatchRefundItemResult(item.ReservationId, "CONFLICT", false, "Tranh chấp trạng thái reservation.");
+                            continue;
+                        }
+                    }
+
+                    // Update wallet balance with pessimistic lock
+                    int balanceAfter;
+                    await using (var updateWalletCmd = new NpgsqlCommand("""
+                        UPDATE billing.credit_wallets
+                        SET balance = balance + @units, updated_at = now()
+                        WHERE id = @wallet_id
+                        RETURNING balance;
+                        """, connection, transaction))
+                    {
+                        updateWalletCmd.Parameters.AddWithValue("units", stored.Units);
+                        updateWalletCmd.Parameters.AddWithValue("wallet_id", stored.WalletId);
+                        var balObj = await updateWalletCmd.ExecuteScalarAsync(cancellationToken);
+                        balanceAfter = (int)balObj!;
+                    }
+
+                    // Insert ledger entry: RELEASE
+                    await using (var insertLedgerCmd = new NpgsqlCommand("""
+                        INSERT INTO billing.credit_ledger_entries
+                            (wallet_id, tenant_id, reservation_id, entry_type, amount,
+                             balance_after, idempotency_key, request_fingerprint, metadata)
+                        VALUES
+                            (@wallet_id, @tenant_id, @reservation_id, 'RELEASE', @amount,
+                             @balance_after, @idempotency_key, @request_fingerprint, @metadata::jsonb);
+                        """, connection, transaction))
+                    {
+                        insertLedgerCmd.Parameters.AddWithValue("wallet_id", stored.WalletId);
+                        insertLedgerCmd.Parameters.AddWithValue("tenant_id", stored.TenantId);
+                        insertLedgerCmd.Parameters.AddWithValue("reservation_id", item.ReservationId);
+                        insertLedgerCmd.Parameters.AddWithValue("amount", stored.Units);
+                        insertLedgerCmd.Parameters.AddWithValue("balance_after", balanceAfter);
+                        insertLedgerCmd.Parameters.AddWithValue("idempotency_key", itemKey);
+                        insertLedgerCmd.Parameters.AddWithValue("request_fingerprint", fingerprint);
+                        insertLedgerCmd.Parameters.AddWithValue("metadata", JsonSerializer.Serialize(new
+                        {
+                            operation = "RELEASE",
+                            batch_id = request.BatchId,
+                            releaseReason = itemReason,
+                            environment = stored.Environment,
+                            isMock = stored.IsMock
+                        }));
+                        await insertLedgerCmd.ExecuteNonQueryAsync(cancellationToken);
+                    }
+
+                    totalRefundedCount++;
+                    totalCreditsRefunded += stored.Units;
+                    itemResults[originalIndex] = new BatchRefundItemResult(item.ReservationId, "RELEASED", true);
+                }
+                // Branch B: State is CAPTURED -> Post-analysis REFUND via ADJUSTMENT
+                else if (string.Equals(stored.State, "CAPTURED", StringComparison.OrdinalIgnoreCase) &&
+                         itemReason.Contains("REFUND", StringComparison.OrdinalIgnoreCase))
+                {
+                    int balanceAfter;
+                    await using (var updateWalletCmd = new NpgsqlCommand("""
+                        UPDATE billing.credit_wallets
+                        SET balance = balance + @units, updated_at = now()
+                        WHERE id = @wallet_id
+                        RETURNING balance;
+                        """, connection, transaction))
+                    {
+                        updateWalletCmd.Parameters.AddWithValue("units", stored.Units);
+                        updateWalletCmd.Parameters.AddWithValue("wallet_id", stored.WalletId);
+                        var balObj = await updateWalletCmd.ExecuteScalarAsync(cancellationToken);
+                        balanceAfter = (int)balObj!;
+                    }
+
+                    // Insert ledger entry: ADJUSTMENT (Refund)
+                    await using (var insertLedgerCmd = new NpgsqlCommand("""
+                        INSERT INTO billing.credit_ledger_entries
+                            (wallet_id, tenant_id, reservation_id, entry_type, amount,
+                             balance_after, idempotency_key, request_fingerprint, metadata)
+                        VALUES
+                            (@wallet_id, @tenant_id, @reservation_id, 'ADJUSTMENT', @amount,
+                             @balance_after, @idempotency_key, @request_fingerprint, @metadata::jsonb);
+                        """, connection, transaction))
+                    {
+                        insertLedgerCmd.Parameters.AddWithValue("wallet_id", stored.WalletId);
+                        insertLedgerCmd.Parameters.AddWithValue("tenant_id", stored.TenantId);
+                        insertLedgerCmd.Parameters.AddWithValue("reservation_id", item.ReservationId);
+                        insertLedgerCmd.Parameters.AddWithValue("amount", stored.Units);
+                        insertLedgerCmd.Parameters.AddWithValue("balance_after", balanceAfter);
+                        insertLedgerCmd.Parameters.AddWithValue("idempotency_key", itemKey);
+                        insertLedgerCmd.Parameters.AddWithValue("request_fingerprint", fingerprint);
+                        insertLedgerCmd.Parameters.AddWithValue("metadata", JsonSerializer.Serialize(new
+                        {
+                            operation = "REFUND",
+                            batch_id = request.BatchId,
+                            refundReason = itemReason,
+                            environment = stored.Environment,
+                            isMock = stored.IsMock
+                        }));
+                        await insertLedgerCmd.ExecuteNonQueryAsync(cancellationToken);
+                    }
+
+                    totalRefundedCount++;
+                    totalCreditsRefunded += stored.Units;
+                    itemResults[originalIndex] = new BatchRefundItemResult(item.ReservationId, "REFUNDED", true);
+                }
+                else if (string.Equals(stored.State, "RELEASED", StringComparison.OrdinalIgnoreCase))
+                {
+                    itemResults[originalIndex] = new BatchRefundItemResult(item.ReservationId, "ALREADY_RELEASED", false, "Reservation đã ở trạng thái RELEASED.");
+                }
+                else
+                {
+                    itemResults[originalIndex] = new BatchRefundItemResult(item.ReservationId, "CONFLICT", false, $"Trạng thái '{stored.State}' không cho phép hoàn credit.");
+                }
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+
+            return new BatchRefundResponse(
+                request.TenantId,
+                request.BatchId,
+                request.Items.Count,
+                totalRefundedCount,
+                totalCreditsRefunded,
+                itemResults);
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            logger.LogError(ex, "Failed to execute batch refund for TenantId: {TenantId}, BatchId: {BatchId}",
+                request.TenantId, request.BatchId);
+            throw;
+        }
+    }
 
     /// <summary>
     /// Applies a capture using a caller-owned connection and transaction. The caller is

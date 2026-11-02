@@ -253,6 +253,49 @@ app.MapPost("/api/v1/billing/orders", async Task<IResult> (
             "PackageId phải lớn hơn 0 và BillingOwner (ACCOUNT hoặc CLINIC) là bắt buộc.");
     }
 
+    // SCRUM-365: Multi-Tenant & Role-Based Authorization Guard for Clinic Orders
+    if (string.Equals(request.BillingOwner.Type, "CLINIC", StringComparison.OrdinalIgnoreCase))
+    {
+        // 1. Cross-clinic header mismatch check (IDOR Protection)
+        if (context.Request.Headers.TryGetValue("X-Clinic-ID", out var clinicHeaderValues) &&
+            Guid.TryParse(clinicHeaderValues.FirstOrDefault(), out var headerClinicId))
+        {
+            if (headerClinicId != request.BillingOwner.Id)
+            {
+                return BillingError(context, StatusCodes.Status403Forbidden, "ERR_FORBIDDEN",
+                    "X-Clinic-ID không khớp với BillingOwner của phòng khám.");
+            }
+        }
+
+        // 2. Caller role check
+        if (context.Request.Headers.TryGetValue("X-Actor-Role", out var roleValues) ||
+            context.Request.Headers.TryGetValue("X-Role", out roleValues))
+        {
+            var actorRole = roleValues.FirstOrDefault()?.Trim().ToUpperInvariant();
+            if (!string.IsNullOrWhiteSpace(actorRole) &&
+                actorRole != "CLINIC_ADMIN" &&
+                actorRole != "SYSTEM_ADMIN")
+            {
+                return BillingError(context, StatusCodes.Status403Forbidden, "ERR_FORBIDDEN",
+                    "Chỉ ClinicAdmin mới có quyền tạo đơn hàng cho phòng khám.");
+            }
+        }
+
+        // 3. Explicit actor membership check if actor id provided
+        if ((context.Request.Headers.TryGetValue("X-Actor-ID", out var actorValues) ||
+             context.Request.Headers.TryGetValue("X-Account-ID", out actorValues)) &&
+            Guid.TryParse(actorValues.FirstOrDefault(), out var actorId))
+        {
+            var (allowed, errCode, errMsg) = await orderService.VerifyClinicAdminAuthorityAsync(
+                request.BillingOwner.Id, actorId, cancellationToken);
+            if (!allowed)
+            {
+                var statusCode = errCode == "ERR_CLINIC_NOT_FOUND" ? StatusCodes.Status404NotFound : StatusCodes.Status403Forbidden;
+                return BillingError(context, statusCode, errCode, errMsg);
+            }
+        }
+    }
+
     var result = await orderService.CreateOrderAsync(
         request, idempotencyKey, runtimeOptions, cancellationToken);
 
@@ -292,9 +335,56 @@ app.MapGet("/api/v1/billing/orders/{orderId:guid}", async Task<IResult> (
     CancellationToken cancellationToken) =>
 {
     var order = await repository.GetOrderByIdAsync(orderId, cancellationToken);
-    return order is null
-        ? BillingError(context, StatusCodes.Status404NotFound, "ERR_NOT_FOUND", "Không tìm thấy đơn hàng.")
-        : Results.Ok(order);
+    if (order is null)
+    {
+        return BillingError(context, StatusCodes.Status404NotFound, "ERR_NOT_FOUND", "Không tìm thấy đơn hàng.");
+    }
+
+    // SCRUM-365: Multi-Tenant & IDOR Protection - Check X-Clinic-ID
+    if (context.Request.Headers.TryGetValue("X-Clinic-ID", out var clinicHeaderValues) &&
+        Guid.TryParse(clinicHeaderValues.FirstOrDefault(), out var headerClinicId))
+    {
+        if (string.Equals(order.BillingOwnerType, "CLINIC", StringComparison.OrdinalIgnoreCase))
+        {
+            if (order.BillingOwnerId != headerClinicId)
+            {
+                return BillingError(context, StatusCodes.Status403Forbidden, "ERR_FORBIDDEN",
+                    "Bạn không có quyền truy cập đơn hàng của phòng khám khác.");
+            }
+        }
+        else
+        {
+            return BillingError(context, StatusCodes.Status403Forbidden, "ERR_FORBIDDEN",
+                "Phòng khám không có quyền truy cập đơn hàng cá nhân.");
+        }
+    }
+
+    // SCRUM-365: IDOR Protection - Check X-Actor-ID
+    if ((context.Request.Headers.TryGetValue("X-Actor-ID", out var actorHeaderValues) ||
+         context.Request.Headers.TryGetValue("X-Account-ID", out actorHeaderValues)) &&
+        Guid.TryParse(actorHeaderValues.FirstOrDefault(), out var actorId))
+    {
+        if (string.Equals(order.BillingOwnerType, "ACCOUNT", StringComparison.OrdinalIgnoreCase))
+        {
+            if (order.BillingOwnerId != actorId)
+            {
+                return BillingError(context, StatusCodes.Status403Forbidden, "ERR_FORBIDDEN",
+                    "Bạn không có quyền truy cập đơn hàng của tài khoản khác.");
+            }
+        }
+        else if (string.Equals(order.BillingOwnerType, "CLINIC", StringComparison.OrdinalIgnoreCase))
+        {
+            var (allowed, errCode, errMsg) = await repository.VerifyClinicAdminAuthorityAsync(
+                order.BillingOwnerId, actorId, cancellationToken);
+            if (!allowed)
+            {
+                var statusCode = errCode == "ERR_CLINIC_NOT_FOUND" ? StatusCodes.Status404NotFound : StatusCodes.Status403Forbidden;
+                return BillingError(context, statusCode, errCode, errMsg);
+            }
+        }
+    }
+
+    return Results.Ok(order);
 })
 .WithName("GetBillingOrder")
 .WithTags("Billing Orders")
@@ -362,12 +452,63 @@ app.MapPost("/api/v1/billing/sandbox/pay", async Task<IResult> (
     SandboxPaymentRequest request,
     HttpContext context,
     OrderService orderService,
+    OrderRepository repository,
     CancellationToken cancellationToken) =>
 {
     if (request.OrderId == Guid.Empty)
     {
         return BillingError(context, StatusCodes.Status400BadRequest, "ERR_VALIDATION",
             "OrderId là bắt buộc.");
+    }
+
+    var order = await repository.GetOrderByIdAsync(request.OrderId, cancellationToken);
+    if (order is null)
+    {
+        return BillingError(context, StatusCodes.Status404NotFound, "ERR_NOT_FOUND", "Không tìm thấy đơn hàng.");
+    }
+
+    // SCRUM-365: Multi-Tenant & IDOR Protection - Check X-Clinic-ID
+    if (context.Request.Headers.TryGetValue("X-Clinic-ID", out var clinicHeaderValues) &&
+        Guid.TryParse(clinicHeaderValues.FirstOrDefault(), out var headerClinicId))
+    {
+        if (string.Equals(order.BillingOwnerType, "CLINIC", StringComparison.OrdinalIgnoreCase))
+        {
+            if (order.BillingOwnerId != headerClinicId)
+            {
+                return BillingError(context, StatusCodes.Status403Forbidden, "ERR_FORBIDDEN",
+                    "Bạn không có quyền thanh toán cho đơn hàng của phòng khám khác.");
+            }
+        }
+        else
+        {
+            return BillingError(context, StatusCodes.Status403Forbidden, "ERR_FORBIDDEN",
+                "Phòng khám không có quyền thanh toán đơn hàng cá nhân.");
+        }
+    }
+
+    // SCRUM-365: IDOR Protection - Check X-Actor-ID
+    if ((context.Request.Headers.TryGetValue("X-Actor-ID", out var actorHeaderValues) ||
+         context.Request.Headers.TryGetValue("X-Account-ID", out actorHeaderValues)) &&
+        Guid.TryParse(actorHeaderValues.FirstOrDefault(), out var actorId))
+    {
+        if (string.Equals(order.BillingOwnerType, "ACCOUNT", StringComparison.OrdinalIgnoreCase))
+        {
+            if (order.BillingOwnerId != actorId)
+            {
+                return BillingError(context, StatusCodes.Status403Forbidden, "ERR_FORBIDDEN",
+                    "Bạn không có quyền thanh toán cho đơn hàng của tài khoản khác.");
+            }
+        }
+        else if (string.Equals(order.BillingOwnerType, "CLINIC", StringComparison.OrdinalIgnoreCase))
+        {
+            var (allowed, errCode, errMsg) = await repository.VerifyClinicAdminAuthorityAsync(
+                order.BillingOwnerId, actorId, cancellationToken);
+            if (!allowed)
+            {
+                var statusCode = errCode == "ERR_CLINIC_NOT_FOUND" ? StatusCodes.Status404NotFound : StatusCodes.Status403Forbidden;
+                return BillingError(context, statusCode, errCode, errMsg);
+            }
+        }
     }
 
     var result = await orderService.SimulateSandboxPaymentAsync(request, cancellationToken);
@@ -661,56 +802,7 @@ app.MapPost("/internal/v1/billing/reservations/batch-refund", async Task<IResult
             "TenantId và danh sách items cần hoàn credit không được rỗng.");
     }
 
-    var results = new List<BatchRefundItemResult>();
-    var refundedCount = 0;
-    var creditsRefunded = 0;
-
-    foreach (var item in request.Items)
-    {
-        if (item.ReservationId == Guid.Empty)
-        {
-            results.Add(new BatchRefundItemResult(item.ReservationId, "INVALID_ID", false, "ReservationId rỗng."));
-            continue;
-        }
-
-        var itemReason = string.IsNullOrWhiteSpace(item.Reason) ? "BATCH_PARTIAL_REFUND" : item.Reason.Trim().ToUpperInvariant();
-        var itemKeyBytes = System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes($"{batchIdempotencyKey:D}|{item.ReservationId:D}"));
-        var itemGuidBytes = new byte[16];
-        Array.Copy(itemKeyBytes, itemGuidBytes, 16);
-        var itemKey = new Guid(itemGuidBytes);
-
-        var fingerprint = ReservationFingerprint.ForRelease(item.ReservationId, itemReason);
-        var result = await repository.ReleaseAsync(item.ReservationId, itemKey, fingerprint, itemReason, cancellationToken);
-
-        if (result.Status == ReservationOperationStatus.Changed && result.Reservation is not null)
-        {
-            refundedCount++;
-            creditsRefunded += result.Reservation.Units;
-            results.Add(new BatchRefundItemResult(item.ReservationId, "RELEASED", true));
-        }
-        else if (result.Status == ReservationOperationStatus.Replayed && result.Reservation is not null)
-        {
-            results.Add(new BatchRefundItemResult(item.ReservationId, "ALREADY_RELEASED", false, "Đã được hoàn credit trước đó (Replayed)."));
-        }
-        else if (result.Status == ReservationOperationStatus.NotFound)
-        {
-            results.Add(new BatchRefundItemResult(item.ReservationId, "NOT_FOUND", false, "Không tìm thấy reservation."));
-        }
-        else
-        {
-            results.Add(new BatchRefundItemResult(item.ReservationId, "CONFLICT", false, "Trạng thái không cho phép hoàn credit."));
-        }
-    }
-
-    var response = new BatchRefundResponse(
-        request.TenantId,
-        request.BatchId,
-        request.Items.Count,
-        refundedCount,
-        creditsRefunded,
-        results);
-
+    var response = await repository.ExecuteBatchRefundAsync(request, batchIdempotencyKey, cancellationToken);
     return Results.Ok(response);
 })
 .WithName("BatchRefundReservations")
