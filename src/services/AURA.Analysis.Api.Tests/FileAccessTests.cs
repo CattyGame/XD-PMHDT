@@ -41,6 +41,7 @@ public class FileAccessTests
         Assert.Equal("t/b/a", rig.Storage.LastReadAccess!.Value.Key);
         Assert.Equal(TimeSpan.FromSeconds(120), rig.Storage.LastReadAccess!.Value.Ttl);
         Assert.Equal("FILE_READ", rig.Access.LastAction);
+        Assert.Equal(AnalysisId, rig.Access.LastRequest!.AnalysisId);
         var secondsLeft = (r.ExpiresAt - DateTime.UtcNow).TotalSeconds;
         Assert.True(secondsLeft > 100 && secondsLeft <= 121);
     }

@@ -22,7 +22,12 @@ public sealed record UploadCommand(
     IReadOnlyList<IUploadedFile> Files);
 
 // ---- Profile (M6): POST /internal/v1/profile/access/resolve ----
-public sealed record PatientAccessRequest(Guid RequesterId, Guid? ClinicId, Guid PatientId, string Action)
+public sealed record PatientAccessRequest(
+    Guid RequesterId,
+    Guid? ClinicId,
+    Guid PatientId,
+    string Action,
+    Guid? AnalysisId = null)
 {
     public string? CorrelationId { get; init; }
 }

@@ -77,7 +77,8 @@ public sealed class AnalysisQueryService(IAnalysisQueryRepository repository, IP
             var identity = await repository.FindIdentityAsync(analysisId, ct);
             if (identity is null) throw NotFound();
 
-            var decision = await access.ResolveAsync(new PatientAccessRequest(requesterId, clinicId, identity.PatientId, action)
+            var decision = await access.ResolveAsync(new PatientAccessRequest(
+                requesterId, clinicId, identity.PatientId, action, analysisId)
             {
                 CorrelationId = correlationId
             }, ct);

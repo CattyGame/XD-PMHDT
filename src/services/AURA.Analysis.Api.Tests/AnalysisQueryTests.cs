@@ -56,6 +56,7 @@ public sealed class AnalysisQueryTests
         var response = await service.GetAsync(requesterId, null, analysisId, CancellationToken.None);
 
         Assert.Equal(analysisId, response.AnalysisId);
+        Assert.Equal(analysisId, access.LastRequest!.AnalysisId);
         Assert.Equal("COMPLETED", response.ProcessingStatus);
         Assert.NotNull(response.Result);
         Assert.False(response.Result.RiskAvailable);

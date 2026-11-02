@@ -67,6 +67,20 @@ public class ProfileAccessClientTests
     }
 
     [Fact]
+    public async Task Analysis_scope_is_forwarded_to_Profile_for_case_level_assignments()
+    {
+        var (client, handler) = Make();
+        handler.Respond = (_, _) => Json("{\"allowed\":false,\"permissionVersion\":1}");
+        var analysisId = Guid.NewGuid();
+        var request = new PatientAccessRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "DOCTOR_REVIEW", analysisId);
+
+        await client.ResolveAsync(request, default);
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        Assert.Equal(analysisId, body.RootElement.GetProperty("analysisId").GetGuid());
+    }
+
+    [Fact]
     public async Task Duoc_phep_anh_xa_tenant_va_billing_owner()
     {
         var (c, h) = Make();

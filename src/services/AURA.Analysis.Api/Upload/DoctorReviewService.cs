@@ -54,7 +54,8 @@ public sealed class DoctorReviewService(
         var identity = await analyses.FindIdentityAsync(analysisId, ct)
             ?? throw new UploadFailure(404, "ERR_NOT_FOUND", "Không tìm thấy tài nguyên.");
 
-        var decision = await access.ResolveAsync(new PatientAccessRequest(doctorId, clinicId, identity.PatientId, "DOCTOR_REVIEW")
+        var decision = await access.ResolveAsync(new PatientAccessRequest(
+            doctorId, clinicId, identity.PatientId, "DOCTOR_REVIEW", analysisId)
         {
             CorrelationId = correlationId
         }, ct);

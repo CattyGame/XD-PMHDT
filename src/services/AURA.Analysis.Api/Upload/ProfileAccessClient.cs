@@ -21,7 +21,8 @@ public sealed class ProfileAccessClient(HttpClient http, IServiceTokenProvider t
                 {
                     actorAccountId = request.RequesterId, request.PatientId,
                     clinicContextId = request.ClinicId,
-                    action = request.Action == "FILE_READ" ? "ANALYSIS_FILE_READ" : request.Action
+                    action = request.Action == "FILE_READ" ? "ANALYSIS_FILE_READ" : request.Action,
+                    analysisId = request.AnalysisId
                 })
             };
             ServiceHttp.SetBearer(message, await tokens.GetAsync("aura-profile", "profile:resolve", ct, request.CorrelationId));

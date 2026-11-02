@@ -56,6 +56,7 @@ public sealed class DoctorReviewServiceTests
             "corr-342", CancellationToken.None);
 
         Assert.Equal("DOCTOR_REVIEW", access.LastRequest!.Action);
+        Assert.Equal(analysisId, access.LastRequest.AnalysisId);
         Assert.Equal(4, result.Version);
         Assert.Equal(3, repo.LastCommand!.BaseVersion);
         Assert.Equal("HIGH", repo.LastCommand.CorrectedRiskLevel);

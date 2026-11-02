@@ -21,10 +21,12 @@ internal sealed class FakeAccess : IPatientAccessResolver
     public int Calls;
     public Guid TenantOverride = Guid.Empty;
     public string? LastAction;
+    public PatientAccessRequest? LastRequest;
     public Task<AccessDecision> ResolveAsync(PatientAccessRequest request, CancellationToken ct)
     {
         Calls++;
         LastAction = request.Action;
+        LastRequest = request;
         if (Down) throw new HttpRequestException("profile down");
         var tenant = TenantOverride == Guid.Empty ? Tenant : TenantOverride;
         return Task.FromResult(new AccessDecision(Allowed, tenant, "CLINIC", request.RequesterId, "CLINIC:" + tenant, 1));

@@ -24,6 +24,7 @@ var connectionString = builder.Configuration.GetConnectionString("Postgres")
 var redisConnection = builder.Configuration.GetConnectionString("Redis") ?? "redis:6379";
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnection));
 builder.Services.AddSingleton<IBatchRedisProgressService, BatchRedisProgressService>();
+builder.Services.AddSingleton<RabbitMqConnectionProvider>();
 builder.Services.AddSingleton<IBatchCompletedEventPublisher, BatchCompletedEventPublisher>();
 builder.Services.AddDbContext<WorkerDbContext>(options =>
 {
