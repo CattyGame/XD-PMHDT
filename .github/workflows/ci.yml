@@ -24,6 +24,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate Analysis OpenAPI 0.8 against controller routes
+        run: python3 scripts/validate_openapi.py
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
@@ -249,6 +252,24 @@ jobs:
           ALTER ROLE aura_analysis_app LOGIN PASSWORD 'replace_with_analysis_runtime_password';
           ALTER ROLE aura_billing_app LOGIN PASSWORD 'ci-placeholder-not-a-real-password';
           SQL
+
+      - name: Run SCRUM-345 PostgreSQL concurrency integration tests
+        env:
+          AURA_SCRUM345_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=aura_dev;Username=aura_analysis_app;Password=replace_with_analysis_runtime_password;Timeout=5;Command Timeout=25
+        run: >-
+          dotnet test src/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj
+          --configuration Release
+          --filter "FullyQualifiedName~BatchIntegrationTests|FullyQualifiedName~DoctorReviewTests"
+          --logger "trx;LogFileName=scrum-345-integration.trx"
+          --results-directory "$RUNNER_TEMP/scrum-345-test-results"
+
+      - name: Upload SCRUM-345 automated test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrum-345-integration-test-report
+          path: ${{ runner.temp }}/scrum-345-test-results/*.trx
+          if-no-files-found: warn
 
       - name: Build and start applications
         run: |
