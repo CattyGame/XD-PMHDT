@@ -8,12 +8,15 @@ public sealed record BatchProgressSnapshot(Guid BatchId, int Total, int Processi
 
 public sealed record BatchImageCompletionResult(Guid BatchId, int Total, int Completed, int Failed, int Processing,
     bool IsBatchFinished, string BatchStatus);
+public sealed record BatchImageOutcome(Guid ImageId, bool IsSuccess);
 
 public interface IBatchRedisProgressService
 {
     Task InitializeBatchAsync(Guid batchId, int totalImages, TimeSpan? expiry = null);
     Task<BatchProgressSnapshot?> GetProgressAsync(Guid batchId);
     Task<BatchImageCompletionResult> RecordImageOutcomeAsync(Guid batchId, Guid imageId, bool isSuccess);
+    Task RebuildBatchAsync(Guid batchId, int totalImages, IReadOnlyList<BatchImageOutcome> outcomes,
+        string status, TimeSpan? expiry = null);
 }
 
 public sealed class BatchRedisProgressService : IBatchRedisProgressService
@@ -55,6 +58,23 @@ public sealed class BatchRedisProgressService : IBatchRedisProgressService
         redis.call('HSET', KEYS[1], 'completed', completed, 'failed', failed, 'processing', processing,
             'status', status, 'updatedAt', ARGV[3])
         return {completed, failed, processing, total, status, 1}
+        """;
+
+    private const string RebuildScript = """
+        redis.call('DEL', KEYS[1], KEYS[2])
+        local total = tonumber(ARGV[2])
+        local completed = 0
+        local failed = 0
+        for i = 8, #ARGV, 2 do
+            redis.call('SADD', KEYS[2], ARGV[i])
+            if ARGV[i + 1] == '1' then completed = completed + 1 else failed = failed + 1 end
+        end
+        local processing = total - completed - failed
+        redis.call('HSET', KEYS[1], 'batchId', ARGV[1], 'total', total, 'processing', processing,
+            'completed', completed, 'failed', failed, 'status', ARGV[5], 'createdAt', ARGV[6], 'updatedAt', ARGV[6])
+        redis.call('EXPIRE', KEYS[1], ARGV[7])
+        redis.call('EXPIRE', KEYS[2], ARGV[7])
+        return {completed, failed, processing}
         """;
 
     public BatchRedisProgressService(IConnectionMultiplexer redis) =>
@@ -107,6 +127,32 @@ public sealed class BatchRedisProgressService : IBatchRedisProgressService
         var processing = (int)raw[2];
         var status = (string?)raw[4] ?? "IN_PROGRESS";
         return new(batchId, total, completed, failed, processing, (long)raw[5] == 1 && processing == 0, status);
+    }
+
+    public async Task RebuildBatchAsync(Guid batchId, int totalImages, IReadOnlyList<BatchImageOutcome> outcomes,
+        string status, TimeSpan? expiry = null)
+    {
+        if (batchId == Guid.Empty || totalImages is < 1 or > 100 || outcomes is null
+            || outcomes.Count > totalImages || outcomes.Any(x => x.ImageId == Guid.Empty)
+            || outcomes.Select(x => x.ImageId).Distinct().Count() != outcomes.Count
+            || status is not ("IN_PROGRESS" or "COMPLETED" or "PARTIAL_COMPLETED" or "FAILED"))
+            throw new ArgumentOutOfRangeException(nameof(totalImages), "Invalid durable batch progress snapshot.");
+        var ttl = expiry ?? DefaultTtl;
+        if (ttl <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(expiry));
+        var seconds = Math.Max(1, (long)Math.Ceiling(ttl.TotalSeconds));
+        var now = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+        var values = new List<RedisValue>
+        {
+            batchId.ToString("D"), totalImages, outcomes.Count(x => x.IsSuccess), outcomes.Count(x => !x.IsSuccess),
+            status, now, seconds
+        };
+        foreach (var outcome in outcomes)
+        {
+            values.Add(outcome.ImageId.ToString("D"));
+            values.Add(outcome.IsSuccess ? 1 : 0);
+        }
+        await _db.ScriptEvaluateAsync(RebuildScript,
+            [GetKey(batchId), CompletedImagesKey(batchId)], values.ToArray());
     }
 
     private static bool TryInt(IReadOnlyDictionary<string, string> values, string key, out int result) =>

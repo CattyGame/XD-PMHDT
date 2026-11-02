@@ -22,6 +22,7 @@ $migrations = @(
     "infra/postgres/migrations/analysis/004_batch_processing.sql",
     "infra/postgres/migrations/analysis/005_doctor_review_concurrency.sql",
     "infra/postgres/migrations/analysis/006_screening_campaigns.sql",
+    "infra/postgres/migrations/analysis/007_batch_engine_progress.sql",
     "infra/postgres/migrations/005_camera_grants.sql",
     "infra/postgres/migrations/005_notification_inbox.sql",
     "infra/postgres/migrations/006_billing_settlement_inbox.sql",

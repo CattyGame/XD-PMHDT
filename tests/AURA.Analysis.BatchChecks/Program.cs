@@ -83,7 +83,7 @@ internal static class Program
             Console.WriteLine("PASS: isolated PostgreSQL 17 database and actual runtime login verified.");
             var writer = new PostgresUploadRepository(source);
             var repository = new PostgresBatchStatusRepository(source);
-            var scope = Scope(); var plan = Plan(scope, new string('a', 64));
+            var scope = Scope(); var plan = Plan(scope, new string('a', 64)) with { ClinicId = Guid.NewGuid() };
             await Commit(writer, scope, plan);
             var identity = new BatchIdentity(plan.BatchId, plan.TenantId, plan.PatientId, plan.OwnerId);
 
@@ -164,6 +164,17 @@ internal static class Program
                 Require(view.Items.Single(i=>i.ProcessingStatus=="DUPLICATE").ExistingAnalysisId==plan.Images[0].AnalysisId
                     && view.Items.Where(i=>i.ProcessingStatus!="DUPLICATE").All(i=>i.ExistingAnalysisId is null),
                     "Duplicate canonical reference missing or leaked to another status.");
+                await using var counters = source.CreateCommand("""
+                    SELECT total_items,completed_items,failed_images,status,clinic_id
+                    FROM analysis.batches WHERE tenant_id=$1 AND id=$2;
+                    """);
+                counters.Parameters.AddWithValue(mixed.TenantId);
+                counters.Parameters.AddWithValue(mixed.BatchId);
+                await using var reader = await counters.ExecuteReaderAsync();
+                Require(await reader.ReadAsync() && reader.GetInt32(0)==9 && reader.GetInt32(1)==2
+                    && reader.GetInt32(2)==2 && reader.GetString(3)=="IN_PROGRESS"
+                    && !reader.IsDBNull(4) && reader.GetGuid(4)==mixed.ClinicId,
+                    "Durable batch counters did not match the image/job states.");
             });
             await Check("Public JSON has contract count keys and no internal bindings, object keys or job diagnostics", async () =>
             {

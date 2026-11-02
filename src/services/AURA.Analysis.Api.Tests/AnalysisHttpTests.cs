@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Diagnostics;
 using AURA.Analysis.Api.Auth;
 using AURA.Analysis.Api.Http;
 using AURA.Analysis.Api.Upload;
@@ -74,6 +75,27 @@ public sealed class AnalysisHttpTests
     }
     [Fact] public async Task Multipart_binds_authenticated_actor_and_returns_202()
     {await using var r=await Rig.Start();using var request=r.Post();request.Headers.Add("X-Account-Id",Guid.NewGuid().ToString());request.Headers.Add("X-User-Id",Guid.NewGuid().ToString());using var result=await r.Client.SendAsync(request);Assert.Equal(HttpStatusCode.Accepted,result.StatusCode);Assert.Equal(r.Identity.Account,r.Upload.Last!.RequesterId);Assert.Equal(10,r.Upload.Length);Assert.NotNull(result.Headers.Location);}
+    [Fact] public async Task Analysis_batch_endpoint_accepts_100_images_and_returns_its_progress_url_under_1_5_seconds()
+    {
+        await using var r=await Rig.Start(images:100);
+        using var request=r.Post(path:"/api/v1/analyses/batches");
+        var form=(MultipartFormDataContent)request.Content!;
+        for(var i=1;i<100;i++)
+        {
+            var image=new ByteArrayContent(new byte[10]);image.Headers.ContentType=new("image/png");
+            form.Add(image,"images",$"synthetic-{i:D3}.png");
+        }
+        var timer=Stopwatch.StartNew();
+        using var response=await r.Client.SendAsync(request);
+        timer.Stop();
+        Assert.Equal(HttpStatusCode.Accepted,response.StatusCode);
+        Assert.Equal(100,r.Upload.Last!.Files.Count);
+        Assert.True(timer.Elapsed<TimeSpan.FromMilliseconds(1500),$"100-image request took {timer.Elapsed.TotalMilliseconds:F0} ms.");
+        var body=await response.Content.ReadFromJsonAsync<JsonElement>();
+        var expected=$"/api/v1/analyses/batches/{body.GetProperty("batchId").GetGuid():D}";
+        Assert.Equal(expected,body.GetProperty("statusUrl").GetString());
+        Assert.Equal(expected,response.Headers.Location!.ToString());
+    }
     [Fact] public async Task Replay_sets_header()
     {await using var r=await Rig.Start();r.Upload.Replay=true;using var request=r.Post();using var result=await r.Client.SendAsync(request);Assert.Equal("true",Assert.Single(result.Headers.GetValues("Idempotent-Replayed")));}
     [Fact] public async Task Duplicate_upload_exposes_the_canonical_analysis_reference()
@@ -115,6 +137,14 @@ public sealed class AnalysisHttpTests
     {await using var r=await Rig.Start();using var request=r.Post();request.Headers.Add("X-Correlation-Id","not valid");using var result=await r.Client.SendAsync(request);Assert.True(Guid.TryParse(r.Upload.Last!.CorrelationId,out _));}
     [Fact] public async Task Batch_authorizes_before_reading_items()
     {await using var r=await Rig.Start();var batch=Guid.NewGuid();r.Batch.Identity=new(batch,FakeAccess.Tenant,Guid.NewGuid(),r.Identity.Account);r.Access.Allowed=false;using var denied=await r.Client.GetAsync("/api/v1/batches/"+batch);await Code(denied,404,"ERR_NOT_FOUND");Assert.Equal(0,r.Batch.Reads);r.Access.Allowed=true;using var accepted=await r.Client.GetAsync("/api/v1/batches/"+batch);Assert.Equal(HttpStatusCode.OK,accepted.StatusCode);Assert.Equal(1,r.Batch.Reads);}
+    [Fact] public async Task Analysis_batch_progress_route_uses_the_authorized_durable_status_service()
+    {
+        await using var r=await Rig.Start();var batch=Guid.NewGuid();
+        r.Batch.Identity=new(batch,FakeAccess.Tenant,Guid.NewGuid(),r.Identity.Account);
+        using var response=await r.Client.GetAsync($"/api/v1/analyses/batches/{batch:D}");
+        Assert.Equal(HttpStatusCode.OK,response.StatusCode);
+        Assert.Equal(1,r.Batch.Reads);
+    }
     [Fact] public async Task Duplicate_batch_exposes_reference_only_after_resource_authorization()
     {
         await using var r=await Rig.Start();var batch=Guid.NewGuid();r.Batch.Identity=new(batch,FakeAccess.Tenant,Guid.NewGuid(),r.Identity.Account);

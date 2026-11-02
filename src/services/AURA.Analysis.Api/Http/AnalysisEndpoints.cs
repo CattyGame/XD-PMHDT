@@ -21,7 +21,14 @@ public static class AnalysisEndpoints
     public static void MapAnalysisEndpoints(this WebApplication app)
     {
         app.MapPost("/api/v1/analyses",(Func<HttpContext,Task<IResult>>)(c=>Handle(c,()=>Upload(c))));
+        app.MapPost("/api/v1/analyses/batches",(Func<HttpContext,Task<IResult>>)(c=>Handle(c,()=>Upload(c))));
         app.MapPost("/api/v1/batches",(Func<HttpContext,Task<IResult>>)(c=>Handle(c,()=>Upload(c))));
+        app.MapGet("/api/v1/analyses/batches/{batchId}",(HttpContext c,string batchId)=>Handle(c,async()=>
+        {
+            var user=await User(c);var clinic=Clinic(c);
+            return Results.Json(await c.RequestServices.GetRequiredService<BatchStatusService>().GetAsync(user.AccountId,clinic,
+                ResourceId(batchId),c.RequestAborted,Correlation(c)),UploadJson.Options);
+        }));
         app.MapGet("/api/v1/batches/{batchId}",(HttpContext c,string batchId)=>Handle(c,async()=>
         {
             var user=await User(c);var clinic=Clinic(c);
@@ -186,9 +193,12 @@ public static class AnalysisEndpoints
             fields.TryGetValue("patientId",out var patient);fields.TryGetValue("modality",out var modality);fields.TryGetValue("eyeSide",out var eye);
             var result=await c.RequestServices.GetRequiredService<IAnalysisUploadHandler>().CreateAsync(
                 new(user.AccountId,clinic,key,Correlation(c),patient,modality,eye,files),c.RequestAborted);
-            c.Response.Headers["Location"]=result.Response.StatusUrl;
+            var response=result.Response;
+            if(c.Request.Path.StartsWithSegments("/api/v1/analyses/batches"))
+                response=response with { StatusUrl=$"/api/v1/analyses/batches/{response.BatchId:D}" };
+            c.Response.Headers["Location"]=response.StatusUrl;
             if(result.Replayed)c.Response.Headers["Idempotent-Replayed"]="true";
-            return Results.Json(result.Response,UploadJson.Options,statusCode:202);
+            return Results.Json(response,UploadJson.Options,statusCode:202);
         }
         finally
         {

@@ -107,6 +107,14 @@ public sealed class DurableUploadTests
                     status));
         }
 
+        public async Task RebuildBatchAsync(Guid batchId, int totalImages, IReadOnlyList<BatchImageOutcome> outcomes,
+            string status, TimeSpan? expiry = null)
+        {
+            _states[batchId] = new BatchState(totalImages);
+            foreach (var outcome in outcomes)
+                await RecordImageOutcomeAsync(batchId, outcome.ImageId, outcome.IsSuccess);
+        }
+
         private static string GetStatus(BatchState state, int processing)
         {
             if (processing > 0)

@@ -128,23 +128,52 @@ public sealed class BatchStatusService(IBatchStatusRepository repository, IPatie
             if (snapshot is null) throw Missing();
             if (snapshot.BatchId != batchId) throw UploadFailure.Dependency("Analysis database");
             var response = BatchStatusProjection.Create(snapshot);
-            if (batchProgress is null) return response;
-            var progress = await batchProgress.GetProgressAsync(batchId);
-            if (progress is null || progress.Total != response.Summary.Total)
-                throw UploadFailure.Dependency("Redis batch progress");
-            var duplicates = response.Summary.Duplicate;
-            var summary = response.Summary with
+            if (batchProgress is not null)
             {
-                Total = progress.Total,
-                Active = progress.Processing,
-                Succeeded = Math.Max(0, progress.Completed - duplicates),
-                Failed = progress.Failed,
-                Duplicate = duplicates
-            };
-            return response with { BatchStatus = progress.Status, Summary = summary };
+                try
+                {
+                    var progress = await batchProgress.GetProgressAsync(batchId);
+                    if (!MatchesDatabase(progress, response))
+                    {
+                        var outcomes = response.Items
+                            .Where(i => i.ProcessingStatus is "COMPLETED" or "DUPLICATE"
+                                || (i.ProcessingStatus is "FAILED" or "LOW_QUALITY" or "REJECTED")
+                                    && i.Error?.Retryable != true)
+                            .Select(i => new BatchImageOutcome(i.AnalysisId,
+                                i.ProcessingStatus is "COMPLETED" or "DUPLICATE"))
+                            .ToArray();
+                        await batchProgress.RebuildBatchAsync(batchId, response.Summary.Total, outcomes,
+                            response.BatchStatus switch
+                            {
+                                "PARTIAL_FAILED" => "PARTIAL_COMPLETED",
+                                "PARTIAL_COMPLETED" => "PARTIAL_COMPLETED",
+                                var status => status
+                            });
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception)
+                {
+                    // Redis is only a cache. A cache outage must not hide PostgreSQL's durable batch state.
+                }
+            }
+            return response;
         }
         catch (UploadFailure) { throw; }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception) { throw UploadFailure.Dependency("batch read dependencies"); }
+    }
+
+    private static bool MatchesDatabase(BatchProgressSnapshot? progress, BatchStatusResponse response)
+    {
+        if (progress is null) return false;
+        var completed = response.Summary.Succeeded + response.Summary.Duplicate;
+        var expectedStatus = response.BatchStatus == "PARTIAL_FAILED" ? "PARTIAL_COMPLETED" : response.BatchStatus;
+        return progress.BatchId == response.BatchId
+            && progress.Total == response.Summary.Total
+            && progress.Completed == completed
+            && progress.Failed == response.Summary.Failed
+            && progress.Processing == response.Summary.Active
+            && progress.Status == expectedStatus;
     }
 }

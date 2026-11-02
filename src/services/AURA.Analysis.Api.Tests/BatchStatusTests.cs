@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AURA.Common.Cache;
 using AURA.Analysis.Api.Upload;
 using Xunit;
 
@@ -162,6 +163,44 @@ public sealed class BatchStatusTests
     }
 
     [Fact]
+    public async Task Missing_redis_progress_is_rebuilt_from_database_terminal_items()
+    {
+        var repository = new Repository { ProcessingStatus = "COMPLETED" };
+        var progress = new ProgressStub();
+        var service = new BatchStatusService(repository, new Access(), progress);
+
+        var response = await service.GetAsync(Actor, null, Identity.BatchId, default);
+
+        Assert.Equal("COMPLETED", response.BatchStatus);
+        Assert.Equal(1, response.Summary.Succeeded);
+        Assert.True(progress.RebuildCalled);
+        Assert.Equal(1, progress.Total);
+        Assert.Equal(new BatchImageOutcome(response.Items[0].AnalysisId, true), Assert.Single(progress.Outcomes));
+    }
+
+    [Fact]
+    public async Task Redis_rebuild_does_not_count_retryable_failed_attempt_as_terminal()
+    {
+        var repository = new Repository { ProcessingStatus = "FAILED", Retryable = true };
+        var progress = new ProgressStub();
+        var response = await new BatchStatusService(repository, new Access(), progress)
+            .GetAsync(Actor, null, Identity.BatchId, default);
+
+        Assert.Equal("IN_PROGRESS", response.BatchStatus);
+        Assert.Empty(progress.Outcomes);
+    }
+
+    [Fact]
+    public async Task Redis_outage_does_not_hide_durable_postgres_batch_status()
+    {
+        var response = await new BatchStatusService(new Repository(), new Access(), new ProgressStub { ThrowOnRead = true })
+            .GetAsync(Actor, null, Identity.BatchId, default);
+
+        Assert.Equal("IN_PROGRESS", response.BatchStatus);
+        Assert.Equal(1, response.Summary.Active);
+    }
+
+    [Fact]
     public async Task Resource_moved_after_permission_check_returns_404()
     {
         var repository = new Repository { ReadMissing = true };
@@ -194,11 +233,13 @@ public sealed class BatchStatusTests
     private sealed class Repository : IBatchStatusRepository
     {
         public bool Found = true, ReadMissing;
+        public string ProcessingStatus = "QUEUED";
+        public bool Retryable;
         public int IdentityCalls, ReadCalls;
         public Task<BatchIdentity?> FindIdentityAsync(Guid id, CancellationToken ct)
         { IdentityCalls++; return Task.FromResult<BatchIdentity?>(Found ? Identity : null); }
         public Task<BatchStatusSnapshot?> ReadAsync(BatchIdentity identity, CancellationToken ct)
-        { ReadCalls++; Assert.Equal(Identity, identity); return Task.FromResult<BatchStatusSnapshot?>(ReadMissing ? null : Snapshot(Row("QUEUED"))); }
+        { ReadCalls++; Assert.Equal(Identity, identity); return Task.FromResult<BatchStatusSnapshot?>(ReadMissing ? null : Snapshot(Row(ProcessingStatus, Retryable))); }
     }
     private sealed class Access : IPatientAccessResolver
     {
@@ -211,6 +252,27 @@ public sealed class BatchStatusTests
             Calls++; Last = request;
             if (Fail) throw new HttpRequestException("private dependency diagnostic");
             return Task.FromResult(new AccessDecision(Allowed, Tenant, "CLINIC", Owner, "CLINIC:" + Owner, 1));
+        }
+    }
+
+    private sealed class ProgressStub : IBatchRedisProgressService
+    {
+        public bool ThrowOnRead;
+        public bool RebuildCalled;
+        public int Total;
+        public IReadOnlyList<BatchImageOutcome> Outcomes = Array.Empty<BatchImageOutcome>();
+        public Task InitializeBatchAsync(Guid batchId, int totalImages, TimeSpan? expiry = null) => Task.CompletedTask;
+        public Task<BatchProgressSnapshot?> GetProgressAsync(Guid batchId) => ThrowOnRead
+            ? Task.FromException<BatchProgressSnapshot?>(new HttpRequestException("redis unavailable"))
+            : Task.FromResult<BatchProgressSnapshot?>(null);
+        public Task<BatchImageCompletionResult> RecordImageOutcomeAsync(Guid batchId, Guid imageId, bool isSuccess) =>
+            Task.FromResult(new BatchImageCompletionResult(batchId, 1, isSuccess ? 1 : 0, isSuccess ? 0 : 1, 0, true,
+                isSuccess ? "COMPLETED" : "FAILED"));
+        public Task RebuildBatchAsync(Guid batchId, int totalImages, IReadOnlyList<BatchImageOutcome> outcomes,
+            string status, TimeSpan? expiry = null)
+        {
+            RebuildCalled = true; Total = totalImages; Outcomes = outcomes;
+            return Task.CompletedTask;
         }
     }
 }

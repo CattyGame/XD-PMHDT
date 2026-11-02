@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: AURA Analysis API
   version: 0.8.0
-  description: 'Hợp đồng REST Analysis v0.8.0 — batch polling, doctor review concurrency, report downloads và error codes.
+  description: 'Hợp đồng REST Analysis v0.8.0 — batch engine 100 ảnh, resumable upload, doctor review concurrency và report downloads.
 
     Thay đổi so với v0.5.0: chỉ FUNDUS; review không nhận lý do toàn khoảng trắng; bổ sung version kết quả, attemptNo
     và tổng hợp batch; chuẩn hóa phạm vi idempotency.
@@ -688,6 +688,57 @@ paths:
         '200': { description: Notification context đã kiểm tra quyền }
         '401': { description: Service token không hợp lệ }
         '403': { description: Thiếu scope analysis:notify }
+  /api/v1/analyses/batches:
+    post:
+      tags: [Analyses]
+      operationId: createAnalysisBatch
+      summary: Tiếp nhận batch tối đa 100 ảnh, hỗ trợ lô 100 ảnh và resume idempotent
+      description: Dùng chung durable upload journal, bảng analysis.batches chuẩn và outbox hiện hữu. Lỗi xử lý một ảnh không chặn các ảnh khác; từng item được poll độc lập.
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/CreateAnalysisRequest' }
+            encoding:
+              images: { contentType: image/jpeg, image/png }
+      responses:
+        '202':
+          description: Batch được nhận trong transaction trước khi phát các job
+          headers:
+            Location:
+              schema: { type: string }
+              description: URL theo dõi tiến độ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisAccepted' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '503': { description: Dependency tạm thời không khả dụng; gửi lại cùng Idempotency-Key }
+  /api/v1/analyses/batches/{batchId}:
+    get:
+      tags: [Analyses]
+      operationId: getAnalysisBatchProgress
+      summary: Đọc tiến độ batch từ PostgreSQL; Redis được dựng lại khi thiếu hoặc sai lệch
+      parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Trạng thái và số item đang xử lý, thành công, lỗi và trùng lặp
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Batch' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: PostgreSQL không khả dụng }
 components:
   securitySchemes:
     bearerAuth:
@@ -848,7 +899,7 @@ components:
           format: date-time
         statusUrl:
           type: string
-          description: URL batch; mỗi item có URL analysis riêng /api/v1/analyses/{analysisId}
+          description: URL batch status; hỗ trợ /api/v1/analyses/batches/{batchId} và alias /api/v1/batches/{batchId}.
     AnalysisResult:
       type: object
       required:

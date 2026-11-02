@@ -393,7 +393,18 @@ public class JobProcessor : IJobProcessor
 
     private async Task RecordBatchOutcomeAsync(JobRunMessage message, AnalysisRecord analysis, bool isSuccess, CancellationToken cancellationToken)
     {
-        var result = await _batchProgress.RecordImageOutcomeAsync(analysis.BatchId, analysis.AnalysisId, isSuccess);
+        BatchImageCompletionResult result;
+        try
+        {
+            result = await _batchProgress.RecordImageOutcomeAsync(analysis.BatchId, analysis.AnalysisId, isSuccess);
+        }
+        catch (Exception ex)
+        {
+            // Result and job state are already committed. Redis is a rebuildable progress cache;
+            // a cache outage must not cause the worker to re-run a completed image.
+            _logger.LogWarning(ex, "Could not update Redis progress for batch {BatchId}; PostgreSQL remains authoritative", analysis.BatchId);
+            return;
+        }
         if (result.IsBatchFinished)
         {
             _logger.LogInformation("Batch {BatchId} finished: status={Status}, completed={Completed}, failed={Failed}",

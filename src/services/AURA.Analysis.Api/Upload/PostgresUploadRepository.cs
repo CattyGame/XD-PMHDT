@@ -135,8 +135,9 @@ public sealed class PostgresUploadRepository(NpgsqlDataSource dataSource) : IUpl
                 await PostgresUploadRecoveryRepository.RejectUnjournaledCommitAsync(connection, transaction, plan, ct);
             await using (var command = new NpgsqlCommand("""
                 INSERT INTO analysis.batches
-                    (id,tenant_id,owner_id,requester_id,patient_id,total_images,status,created_at,updated_at)
-                VALUES ($1,$2,$3,$4,$5,$6,'IN_PROGRESS',$7,$7);
+                    (id,tenant_id,owner_id,requester_id,patient_id,clinic_id,total_images,completed_images,
+                     failed_images,status,created_at,updated_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11);
                 """, connection, transaction))
             {
                 command.Parameters.AddWithValue(plan.BatchId);
@@ -144,7 +145,16 @@ public sealed class PostgresUploadRepository(NpgsqlDataSource dataSource) : IUpl
                 command.Parameters.AddWithValue(plan.OwnerId);
                 command.Parameters.AddWithValue(plan.RequesterId);
                 command.Parameters.AddWithValue(plan.PatientId);
+                command.Parameters.AddWithValue(NpgsqlDbType.Uuid, (object?)plan.ClinicId ?? DBNull.Value);
+                var initiallyCompleted = plan.Images.Count(i => i.ProcessingStatus is "COMPLETED" or "DUPLICATE");
+                var initiallyFailed = plan.Images.Count(i => i.ProcessingStatus is "FAILED" or "LOW_QUALITY" or "REJECTED");
+                var initiallyActive = plan.Images.Count - initiallyCompleted - initiallyFailed;
                 command.Parameters.AddWithValue(plan.Images.Count);
+                command.Parameters.AddWithValue(initiallyCompleted);
+                command.Parameters.AddWithValue(initiallyFailed);
+                command.Parameters.AddWithValue(initiallyActive > 0 ? "IN_PROGRESS"
+                    : initiallyFailed == 0 ? "COMPLETED"
+                    : initiallyCompleted == 0 ? "FAILED" : "PARTIAL_COMPLETED");
                 command.Parameters.AddWithValue(plan.CreatedAt.UtcDateTime);
                 await command.ExecuteNonQueryAsync(ct);
             }

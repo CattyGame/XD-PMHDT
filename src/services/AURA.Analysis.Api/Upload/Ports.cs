@@ -100,6 +100,7 @@ public sealed record BatchPlan(
 {
     /// <summary>Internal durable-upload fence; absent only for legacy/domain-only callers.</summary>
     public Guid? RecoveryAttemptId { get; init; }
+    public Guid? ClinicId { get; init; }
 }
 
 /// <summary>Một phiên giữ khóa idempotency (vd. pg advisory lock) cho tới khi Dispose.</summary>

@@ -179,7 +179,8 @@ public sealed partial class UploadPlanningService(UploadOptions options,IPatient
 
         var response = new AcceptedResponse(batchId, items, now.UtcDateTime, $"/api/v1/batches/{batchId:D}");
         return new BatchPlan(batchId, d.TenantId, d.OwnerPrincipalId, cmd.RequesterId, patientId, cmd.IdempotencyKey,
-            fingerprint, RequestFingerprint.Version, correlationId, now, response, images, outbox);
+            fingerprint, RequestFingerprint.Version, correlationId, now, response, images, outbox)
+        { ClinicId = cmd.ClinicId };
     }
 
     private static string SafeFileName(string name)
