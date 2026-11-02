@@ -4,12 +4,13 @@ docker start aura-postgres-1 aura-s3-reporting-postgres-1 aura-s3-rabbitmq-1 aur
 
 Write-Host "Dang khoi dong cac backend services (.NET)..." -ForegroundColor Cyan
 $env:GOOGLE_APPLICATION_CREDENTIALS = "$env:USERPROFILE\.aura\credentials\aura-dev-service-account.json"
-Start-Process dotnet -ArgumentList "run --launch-profile http" -WorkingDirectory "D:\XD-PMHDT\src\services\AURA.Identity.Api" -WindowStyle Hidden
-Start-Process dotnet -ArgumentList "run --launch-profile http" -WorkingDirectory "D:\XD-PMHDT\src\services\AURA.Profile.Api" -WindowStyle Hidden
-Start-Process dotnet -ArgumentList "run --launch-profile http" -WorkingDirectory "D:\XD-PMHDT\src\gateway\AURA.ApiGateway" -WindowStyle Hidden
+$repoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
+Start-Process dotnet -ArgumentList "run --launch-profile http" -WorkingDirectory "$repoRoot\src\services\AURA.Identity.Api" -WindowStyle Hidden
+Start-Process dotnet -ArgumentList "run --launch-profile http" -WorkingDirectory "$repoRoot\src\services\AURA.Profile.Api" -WindowStyle Hidden
+Start-Process dotnet -ArgumentList "run --launch-profile http" -WorkingDirectory "$repoRoot\src\gateway\AURA.ApiGateway" -WindowStyle Hidden
 
 Write-Host "Dang khoi dong Web Frontend..." -ForegroundColor Cyan
-Start-Process npm -ArgumentList "run dev" -WorkingDirectory "D:\XD-PMHDT\src\web\aura-web" -WindowStyle Hidden
+Start-Process npm -ArgumentList "run dev" -WorkingDirectory "$repoRoot\src\web\aura-web" -WindowStyle Hidden
 
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Green

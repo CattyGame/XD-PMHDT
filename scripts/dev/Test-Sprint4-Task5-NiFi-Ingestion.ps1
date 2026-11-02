@@ -7,7 +7,12 @@
 
 param(
     [string]$GatewayUrl = "http://localhost:5000",
-    [string]$DatasetPath = "D:\XD-PMHDT\datasets\CHASE_DB1\raw"
+    [string]$DatasetPath = ""
+)
+
+if ([string]::IsNullOrWhiteSpace($DatasetPath)) {
+    $DatasetPath = Join-Path (Resolve-Path "$PSScriptRoot\..\..").Path "datasets\CHASE_DB1\raw"
+}
 )
 
 $ErrorActionPreference = "Stop"
