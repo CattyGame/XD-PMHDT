@@ -1,12 +1,12 @@
 """
-AURA AI Core - Diabetic Retinopathy (DR) Screening Service & Grad-CAM Heatmap.
+AURA AI Core - Diabetic Retinopathy (DR) Screening Service & Heuristic Retinal Saliency Heatmap.
 Sprint 5 - Task W5-M4-02 (SCRUM-372).
 
 Master Audit & Clinical Guidelines:
 - Binary DR Screening ONLY (Referable DR vs Low Risk).
 - DOES NOT output 5-stage ICDR clinical grades (No ungrounded multi-stage claims).
-- Generates Grad-CAM explainability heatmap (NFR-22) highlighting microvascular lesions,
-  microaneurysms, hemorrhages, and exudates.
+- Generates Heuristic Retinal Saliency explainability heatmap (NFR-22) highlighting microvascular lesions,
+  microaneurysms, hemorrhages, and exudates based on retinal morphological & spectral priors.
 """
 
 from __future__ import annotations
@@ -22,9 +22,7 @@ from PIL import Image
 from scipy.ndimage import (
     binary_erosion,
     gaussian_filter,
-    label,
     maximum_filter,
-    minimum_filter,
     uniform_filter,
 )
 
@@ -45,7 +43,7 @@ def load_model_weights(weights_path: Optional[str] = None) -> Dict[str, Any]:
 
 
 def extract_features_from_rgb(rgb: np.ndarray) -> np.ndarray:
-    """Extract 13-element normalized feature vector from RGB image array."""
+    """Extract 13-element normalized multi-scale retinal feature vector from RGB image array."""
     im = Image.fromarray(rgb).resize((256, 170), Image.Resampling.BILINEAR)
     arr = np.asarray(im, dtype=np.float32) / 255.0
     r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
@@ -83,11 +81,14 @@ def extract_features_from_rgb(rgb: np.ndarray) -> np.ndarray:
     ], dtype=np.float32)
 
 
-def generate_gradcam_heatmap(rgb: np.ndarray) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+def generate_retinal_saliency_heatmap(
+    rgb: np.ndarray,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     """
-    Generate pixel-level Grad-CAM / lesion attention heatmap.
-    Detects focal microvascular abnormalities (microaneurysms, blot hemorrhages, hard exudates)
-    and smooths with a Gaussian receptive field.
+    Tạo bản đồ nhiệt tổn thương dựa trên đặc trưng hình thái học và màu sắc cục bộ:
+    - Vùng xuất tiết (Exudates): chênh lệch kênh Green cục bộ so với nền.
+    - Vùng xuất huyết (Hemorrhages): độ hấp thụ cao trên kênh Green và tỷ lệ R/G cao.
+    Ghi chú: Đây là bản đồ Heuristic Retinal Saliency, không phải Grad-CAM đạo hàm gradient.
     """
     orig_h, orig_w = rgb.shape[:2]
     # Work at standard analysis resolution for stable kernel scale
@@ -96,7 +97,7 @@ def generate_gradcam_heatmap(rgb: np.ndarray) -> Tuple[np.ndarray, List[Dict[str
     im_scaled = Image.fromarray(rgb).resize((dw, dh), Image.Resampling.BILINEAR)
     arr = np.asarray(im_scaled, dtype=np.float32) / 255.0
 
-    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    r, g, _ = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
     fov = (arr.max(axis=-1) > 0.05)
     fov_eroded = binary_erosion(fov, iterations=4)
 
@@ -126,9 +127,9 @@ def generate_gradcam_heatmap(rgb: np.ndarray) -> Tuple[np.ndarray, List[Dict[str
     hem_act[~roi] = 0
     hem_act = np.clip((hem_act - 0.02) / 0.08, 0, 1.0)
 
-    # Combined activation
+    # Combined heuristic saliency activation
     saliency = np.maximum(exudate_act * 1.2, hem_act)
-    # Receptive field diffusion (Grad-CAM Gaussian smoothing)
+    # Spatial Gaussian diffusion
     smoothed = gaussian_filter(saliency, sigma=6)
     smoothed[~fov] = 0
 
@@ -154,9 +155,12 @@ def generate_gradcam_heatmap(rgb: np.ndarray) -> Tuple[np.ndarray, List[Dict[str
     return heatmap_full, hotspots
 
 
-def render_gradcam_overlay_b64(rgb: np.ndarray, heatmap: np.ndarray, alpha: float = 0.42) -> str:
-    """Render blended RGB image with JET heatmap and export to Base64 PNG."""
-    h, w = rgb.shape[:2]
+# Backward-compatible alias
+generate_gradcam_heatmap = generate_retinal_saliency_heatmap
+
+
+def render_saliency_overlay_b64(rgb: np.ndarray, heatmap: np.ndarray, alpha: float = 0.42) -> str:
+    """Render blended RGB image with JET saliency heatmap and export to Base64 PNG."""
     # JET colormap
     r = np.clip(1.5 - np.abs(4.0 * heatmap - 3.0), 0.0, 1.0)
     g = np.clip(1.5 - np.abs(4.0 * heatmap - 2.0), 0.0, 1.0)
@@ -173,6 +177,10 @@ def render_gradcam_overlay_b64(rgb: np.ndarray, heatmap: np.ndarray, alpha: floa
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+# Backward-compatible alias
+render_gradcam_overlay_b64 = render_saliency_overlay_b64
+
+
 def screen_diabetic_retinopathy(
     rgb: np.ndarray,
     weights_path: Optional[str] = None,
@@ -182,7 +190,7 @@ def screen_diabetic_retinopathy(
     Complete inference pipeline for Diabetic Retinopathy screening:
     - Extracts multi-scale retinal feature vector.
     - Evaluates regularized screening model.
-    - Generates Explainable AI Grad-CAM lesion heatmap overlay.
+    - Generates Heuristic Retinal Saliency lesion heatmap overlay.
     - Enforces clinical non-ICDR disclaimer.
     """
     model = load_model_weights(weights_path)
@@ -204,9 +212,9 @@ def screen_diabetic_retinopathy(
     screening_class = "REFERABLE_DR" if is_referable else "LOW_RISK"
     confidence = round(prob_dr if is_referable else (1.0 - prob_dr), 4)
 
-    # Explainable AI Grad-CAM
-    heatmap, hotspots = generate_gradcam_heatmap(rgb)
-    overlay_b64 = render_gradcam_overlay_b64(rgb, heatmap) if generate_overlay else None
+    # Heuristic Retinal Saliency Heatmap
+    heatmap, hotspots = generate_retinal_saliency_heatmap(rgb)
+    overlay_b64 = render_saliency_overlay_b64(rgb, heatmap) if generate_overlay else None
 
     return {
         "status": "SUCCESS",
@@ -217,15 +225,21 @@ def screen_diabetic_retinopathy(
         "confidence": confidence,
         "disclaimer": DISCLAIMER_TEXT,
         "explainability": {
-            "method": "Grad-CAM / Retinal Saliency",
-            "top_lesion_hotspots": hotspots,
+            "method": "HEURISTIC_RETINAL_SALIENCY",
+            "description": "Bản đồ nhiệt tổn thương dựa trên quy luật hình thái học và màu sắc đáy mắt.",
             "has_overlay_image": overlay_b64 is not None,
             "overlay_base64_png": overlay_b64,
+            "salient_hotspots": hotspots,
+            "top_lesion_hotspots": hotspots,
         },
         "model_metadata": {
             "model_type": model["model_type"],
             "dataset_trained_on": "HRF (High-Resolution Fundus Image Database)",
-            "validation_auc_roc": 0.8889,
+            "validation_auc_roc": model.get("validation_auc_roc", 0.8889),
             "compliance_note": "Binary screening only; not 5-stage ICDR clinical grading",
-        }
+            "scope_change_note": model.get(
+                "scope_change_note",
+                "Approved CPU-optimized L2-regularized classifier with Data Augmentation for zero-GPU deterministic container execution.",
+            ),
+        },
     }

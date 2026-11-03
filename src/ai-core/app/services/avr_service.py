@@ -4,7 +4,14 @@ Sprint 5 - Task W5-M4-03 (SCRUM-373).
 
 Clinical & Audit Standards:
 - Zone B Annulus ROI: 2.0 to 3.0 optic disc radii from OD center (Knudtson et al., 2003).
-- CRAE and CRVE calculation via Knudtson / Parr-Hubbard revised formulas.
+- CRAE and CRVE calculation via Knudtson et al. (2003) revised pairing formulas:
+  * CRAE_pair = 0.88 * sqrt(w_1^2 + w_2^2)
+  * CRVE_pair = 0.95 * sqrt(w_1^2 + w_2^2)
+- Automated Artery/Vein branch classification using multi-feature physiological optical properties:
+  * Local background-normalized Red-to-Green contrast ratio (oxygenated hemoglobin reflectance).
+  * Green-channel Optical Density / absorption (venular deoxygenated blood absorption).
+  * Central Light Reflex (axial specular reflection along arteriolar centerlines).
+  * Connected-component branch-level voting for topological consistency.
 - Risk stratification:
   * NORMAL: AVR >= 0.65
   * BORDERLINE: 0.60 <= AVR < 0.65
@@ -24,12 +31,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import skimage.exposure as exp
 from PIL import Image
 from scipy.ndimage import (
-    binary_erosion,
     distance_transform_edt,
     gaussian_filter,
-    minimum_filter,
+    label,
     uniform_filter,
 )
 
@@ -88,8 +95,8 @@ def detect_optic_disc_center(rgb: np.ndarray, config: Optional[AVRConfig] = None
 
 def compute_knudtson_crae(calibers: List[float]) -> float:
     """
-    Central Retinal Arteriolar Equivalent (CRAE) via Knudtson et al. (2003) pairing formula.
-    Pairwise iteration of the widest arteriolar branches.
+    Central Retinal Arteriolar Equivalent (CRAE) via Knudtson et al. (2003) revised formula.
+    Iterative pairing: C_hat = 0.88 * sqrt(w_1^2 + w_2^2)
     """
     w = sorted([c for c in calibers if c > 0], reverse=True)
     if not w:
@@ -100,7 +107,7 @@ def compute_knudtson_crae(calibers: List[float]) -> float:
     while len(curr) > 1:
         w1 = curr.pop(0)  # largest
         w2 = curr.pop()   # smallest
-        comb = float(np.sqrt(np.maximum(0.0, 0.87 * (w1**2) + 1.01 * (w2**2) - 0.22 * w1 * w2)))
+        comb = float(0.88 * np.sqrt(w1**2 + w2**2))
         curr.append(comb)
         curr.sort(reverse=True)
     return round(float(curr[0]), 3)
@@ -108,8 +115,8 @@ def compute_knudtson_crae(calibers: List[float]) -> float:
 
 def compute_knudtson_crve(calibers: List[float]) -> float:
     """
-    Central Retinal Venular Equivalent (CRVE) via Knudtson et al. (2003) pairing formula.
-    Pairwise iteration of the widest venular branches.
+    Central Retinal Venular Equivalent (CRVE) via Knudtson et al. (2003) revised formula.
+    Iterative pairing: C_hat = 0.95 * sqrt(w_1^2 + w_2^2)
     """
     w = sorted([c for c in calibers if c > 0], reverse=True)
     if not w:
@@ -120,7 +127,7 @@ def compute_knudtson_crve(calibers: List[float]) -> float:
     while len(curr) > 1:
         w1 = curr.pop(0)
         w2 = curr.pop()
-        comb = float(np.sqrt(np.maximum(0.0, 0.72 * (w1**2) + 0.91 * (w2**2))))
+        comb = float(0.95 * np.sqrt(w1**2 + w2**2))
         curr.append(comb)
         curr.sort(reverse=True)
     return round(float(curr[0]), 3)
@@ -131,13 +138,17 @@ def segment_arteries_veins(
     vessel_mask: Optional[np.ndarray] = None,
     artery_gt_mask: Optional[np.ndarray] = None,
     vein_gt_mask: Optional[np.ndarray] = None,
+    roi_mask: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Classify vessel pixels into Artery vs Vein.
-    If ground truth is provided (e.g. from INSPIRE-AVR dataset), uses ground truth.
-    Otherwise, applies spectral color separation on segmented vessels:
-    - Arteries: brighter red reflex, higher Red/Green ratio, narrower calibers.
-    - Veins: darker crimson-purple, higher green/blue absorption, wider calibers.
+    If ground truth is explicitly provided, uses ground truth.
+    Otherwise, applies an automated multi-feature physiological branch classifier:
+    1. CLAHE + multi-scale Frangi 2D vessel segmentation (when vessel_mask is None).
+    2. Background-normalized Red/Green contrast ratio (oxygenated hemoglobin reflectance).
+    3. Green-channel Optical Density (venules exhibit stronger green absorption).
+    4. Central Light Reflex (bright axial centerline reflex in arterioles).
+    5. Connected-component branch-level voting for topological consistency.
     """
     h, w = rgb.shape[:2]
 
@@ -147,32 +158,84 @@ def segment_arteries_veins(
         combined = art_clean | vein_clean
         return art_clean, vein_clean, combined
 
+    r = rgb[:, :, 0].astype(np.float32)
+    g = rgb[:, :, 1].astype(np.float32)
+
     if vessel_mask is None:
-        # Fast Frangi vessel detection
-        scale = min(1.0, 1000.0 / float(w))
+        fov = np.maximum(r, g) > 18.0
+        scale = min(1.0, 960.0 / float(w))
         proc_w, proc_h = int(round(w * scale)), int(round(h * scale))
         im_g = Image.fromarray(rgb[:, :, 1]).resize((proc_w, proc_h), Image.Resampling.BILINEAR)
         g_proc = np.asarray(im_g, dtype=np.float32) / 255.0
-        resp = fast_vectorized_frangi_2d(g_proc, sigmas=[1.0, 2.0], alpha=0.5, beta=0.5, gamma=15.0)
+        g_clahe = exp.equalize_adapthist(g_proc, kernel_size=(max(16, proc_h // 8), max(16, proc_w // 8)), clip_limit=0.02).astype(np.float32)
+        resp = fast_vectorized_frangi_2d(g_clahe, sigmas=[1.0, 2.0, 3.0], alpha=0.5, beta=0.5, gamma=15.0)
         resp_norm = resp / (resp.max() + 1e-12)
-        bin_small = resp_norm > 0.05
+        bin_small = resp_norm > 0.032
         im_mask = Image.fromarray(bin_small.astype(np.uint8) * 255).resize((w, h), Image.Resampling.NEAREST)
-        vessel_mask = np.asarray(im_mask) > 0
+        vessel_mask = (np.asarray(im_mask) > 0) & fov
 
-    r = rgb[:, :, 0].astype(np.float32)
-    g = rgb[:, :, 1].astype(np.float32)
-    b = rgb[:, :, 2].astype(np.float32)
+    if not np.any(vessel_mask):
+        return np.zeros((h, w), dtype=bool), np.zeros((h, w), dtype=bool), vessel_mask
 
-    rg_ratio = np.where(g > 5.0, r / (g + 1e-3), 1.0)
-    # Arteries typically have higher red-to-green reflection compared to neighboring veins
-    vessel_rg = rg_ratio[vessel_mask]
-    if len(vessel_rg) > 0:
-        median_rg = float(np.median(vessel_rg))
-        art_mask = vessel_mask & (rg_ratio >= median_rg)
-        vein_mask = vessel_mask & (rg_ratio < median_rg)
-    else:
-        art_mask = np.zeros((h, w), dtype=bool)
-        vein_mask = np.zeros((h, w), dtype=bool)
+    # 1. Local illumination background normalization (size=35)
+    r_bg = np.maximum(uniform_filter(r, size=35), 10.0)
+    g_bg = np.maximum(uniform_filter(g, size=35), 10.0)
+
+    r_norm = r / r_bg
+    g_norm = g / g_bg
+    norm_rg = r_norm / (g_norm + 1e-4)
+
+    # 2. Green-channel Optical Density (higher in darker, wider venules)
+    od_green = -np.log(np.clip((g + 1.0) / (g_bg + 1.0), 0.05, 2.0))
+
+    # 3. Central Light Reflex (bright centerline ridge inside arterioles)
+    g_local_mean = uniform_filter(g, size=5)
+    clr_signal = np.maximum(0.0, g - g_local_mean) / (g_bg + 1.0)
+
+    # Standardize features across the detected vessel mask
+    v_rg = norm_rg[vessel_mask]
+    v_od = od_green[vessel_mask]
+    v_clr = clr_signal[vessel_mask]
+
+    def _zscore(arr_2d: np.ndarray, vals: np.ndarray) -> np.ndarray:
+        mu = float(np.mean(vals))
+        sd = float(np.std(vals)) + 1e-6
+        return (arr_2d - mu) / sd
+
+    # Composite physiological arterial score:
+    # + High normalized R/G ratio (oxygenated blood)
+    # - High green optical density (deoxygenated wider venules)
+    # + Central light reflex
+    arterial_score = (
+        0.55 * _zscore(norm_rg, v_rg)
+        - 0.30 * _zscore(od_green, v_od)
+        + 0.15 * _zscore(clr_signal, v_clr)
+    )
+    smooth_score = gaussian_filter(arterial_score, sigma=1.5)
+
+    # 4. Connected-component branch-level voting on individual vessel segments
+    branch_mask = (vessel_mask & roi_mask) if (roi_mask is not None and np.any(vessel_mask & roi_mask)) else vessel_mask
+    branch_labels, num_branches = label(branch_mask, structure=np.ones((3, 3), dtype=np.int32))
+
+    final_score = smooth_score.copy()
+    if num_branches > 1:
+        flat_lbl = branch_labels.ravel()
+        flat_score = arterial_score.ravel()
+        branch_counts = np.bincount(flat_lbl)
+        branch_sums = np.bincount(flat_lbl, weights=flat_score)
+        branch_means = np.zeros_like(branch_sums, dtype=np.float32)
+        valid = branch_counts > 0
+        branch_means[valid] = branch_sums[valid] / branch_counts[valid]
+
+        # Blend branch mean with local smoothed score for isolated branch segments (< 2500 px)
+        in_branch = (branch_labels > 0) & (branch_counts[branch_labels] < 2500)
+        final_score[in_branch] = 0.70 * branch_means[branch_labels[in_branch]] + 0.30 * smooth_score[in_branch]
+
+    ref_pixels = final_score[branch_mask] if np.count_nonzero(branch_mask) >= 30 else final_score[vessel_mask]
+    threshold_score = float(np.percentile(ref_pixels, 52))
+
+    art_mask = vessel_mask & (final_score >= threshold_score)
+    vein_mask = vessel_mask & (~art_mask)
 
     return art_mask, vein_mask, vessel_mask
 
@@ -201,8 +264,6 @@ def render_avr_visualization_b64(
     out[artery_mask] = [255, 45, 45]
 
     # Draw annulus boundary ring
-    from scipy.ndimage import binary_dilation
-    inner_ring = np.abs(np.hypot(*np.ogrid[:h, :w]) - 0)  # placeholder
     yy, xx = np.ogrid[:h, :w]
     dist = np.hypot(yy - cy, xx - cx)
     ring_inner = (np.abs(dist - 2.0 * r_od) <= 1.5)
@@ -263,8 +324,12 @@ def calculate_avr(
     zone_b_mask = (dist_map >= cfg.zone_b_inner_radii * r_od) & (dist_map <= cfg.zone_b_outer_radii * r_od)
 
     # 3. Artery and Vein segmentation
-    art_mask, vein_mask, total_vessels = segment_arteries_veins(
-        rgb, vessel_mask=vessel_mask, artery_gt_mask=artery_gt_mask, vein_gt_mask=vein_gt_mask
+    art_mask, vein_mask, _ = segment_arteries_veins(
+        rgb,
+        vessel_mask=vessel_mask,
+        artery_gt_mask=artery_gt_mask,
+        vein_gt_mask=vein_gt_mask,
+        roi_mask=zone_b_mask,
     )
 
     # 4. Measure calibers in Zone B via Euclidean distance transform
@@ -320,9 +385,16 @@ def calculate_avr(
         else None
     )
 
+    seg_mode = (
+        "GROUND_TRUTH"
+        if (artery_gt_mask is not None and vein_gt_mask is not None)
+        else "AUTOMATED_PHYSIOLOGICAL_BRANCH_CLASSIFIER"
+    )
+
     return {
         "status": "SUCCESS",
         "task": "arteriolar_venular_ratio_calculation",
+        "segmentation_mode": seg_mode,
         "risk_available": True,
         "avr": avr,
         "crae_px": crae,
@@ -353,5 +425,5 @@ def calculate_avr(
             "no_artificial_clamping": True,
             "graceful_degraded_fallback": True,
             "knudtson_formula_applied": True,
-        }
+        },
     }

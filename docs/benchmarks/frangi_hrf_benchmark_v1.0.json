@@ -1,7 +1,7 @@
 {
   "benchmark_name": "AURA_HRF_FRANGI_2D_V0_2_BENCHMARK",
   "task": "SCRUM-371 / W5-M4-01",
-  "timestamp_utc": "2026-11-01T14:50:30.003545Z",
+  "timestamp_utc": "2026-11-03T05:00:17.549538Z",
   "dataset": "HRF (High-Resolution Fundus Image Database)",
   "split": "test",
   "sample_count": 9,
@@ -15,12 +15,13 @@
     "pillow": "12.3.0"
   },
   "configuration": {
+    "processing_mode": "MULTI_RESOLUTION_PROXY",
     "clahe_clip_limit": 0.02,
     "tile_grid_size": [
       8,
       8
     ],
-    "max_processing_width": 1400,
+    "max_processing_width": 1280,
     "frangi_sigmas": [
       1.0,
       2.0,
@@ -29,248 +30,277 @@
     "frangi_alpha": 0.5,
     "frangi_beta": 0.5,
     "frangi_gamma": 15.0,
-    "binary_threshold": 0.05
+    "binary_threshold": 0.04,
+    "upsampling_interpolation": "NEAREST_NEIGHBOR"
   },
   "accuracy_metrics": {
-    "mean_dice": 0.400981,
-    "median_dice": 0.428208,
-    "mean_iou": 0.260324,
-    "median_iou": 0.272433,
-    "mean_sensitivity": 0.299701,
-    "mean_specificity": 0.986654
+    "mean_dice": 0.483415,
+    "median_dice": 0.520117,
+    "mean_iou": 0.327454,
+    "median_iou": 0.351458,
+    "mean_sensitivity": 0.39799,
+    "mean_specificity": 0.979958,
+    "mean_topology_largest_component_ratio": 0.1231
   },
   "runtime_latency_ms": {
     "sla_target_ms": 1500.0,
-    "mean_ms": 1342.0,
-    "median_p50_ms": 1343.95,
-    "p95_ms": 1407.72,
-    "max_ms": 1424.32,
-    "mean_clahe_ms": 242.24,
-    "mean_frangi_ms": 879.51,
+    "mean_ms": 1123.02,
+    "median_p50_ms": 1126.5,
+    "p95_ms": 1398.4,
+    "max_ms": 1406.65,
+    "mean_clahe_ms": 189.42,
+    "mean_frangi_ms": 717.88,
     "meets_sla_under_1_5s": true
   },
   "memory_telemetry": {
-    "baseline_rss_mb": 0.0,
-    "mean_rss_mb": 0.0,
-    "peak_rss_mb": 0.0,
-    "tracemalloc_peak_heap_mb": 182.58
+    "baseline_rss_mb": 72.89,
+    "mean_rss_mb": 161.28,
+    "peak_rss_mb": 161.76,
+    "tracemalloc_peak_heap_mb": 161.75
   },
   "samples": [
     {
       "patient_id": "hrf_dr_02",
       "category": "dr",
       "image": "02_dr.JPG",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
       "original_resolution": [
         3504,
         2336
       ],
       "processed_resolution": [
-        1400,
-        933
+        1280,
+        853
       ],
-      "downsample_scale": 0.3995,
-      "total_latency_ms": 1328.5,
-      "clahe_latency_ms": 229.61,
-      "frangi_latency_ms": 872.71,
-      "upsample_latency_ms": 34.21,
-      "vessel_density": 0.016459,
-      "dice": 0.229276,
-      "iou": 0.129482,
-      "sensitivity": 0.139594,
-      "specificity": 0.993612,
-      "peak_rss_mb": 0.0
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1346.74,
+      "clahe_latency_ms": 190.29,
+      "frangi_latency_ms": 844.38,
+      "upsample_latency_ms": 39.39,
+      "vessel_density": 0.028905,
+      "topology_connected_components": 2072,
+      "topology_largest_component_ratio": 0.0916,
+      "dice": 0.339574,
+      "iou": 0.20451,
+      "sensitivity": 0.234698,
+      "specificity": 0.987927,
+      "peak_rss_mb": 160.8
     },
     {
       "patient_id": "hrf_dr_09",
       "category": "dr",
       "image": "09_dr.JPG",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
       "original_resolution": [
         3504,
         2336
       ],
       "processed_resolution": [
-        1400,
-        933
+        1280,
+        853
       ],
-      "downsample_scale": 0.3995,
-      "total_latency_ms": 1424.32,
-      "clahe_latency_ms": 279.09,
-      "frangi_latency_ms": 902.8,
-      "upsample_latency_ms": 38.96,
-      "vessel_density": 0.010084,
-      "dice": 0.152286,
-      "iou": 0.082418,
-      "sensitivity": 0.085677,
-      "specificity": 0.996537,
-      "peak_rss_mb": 0.0
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1406.65,
+      "clahe_latency_ms": 283.05,
+      "frangi_latency_ms": 879.89,
+      "upsample_latency_ms": 44.07,
+      "vessel_density": 0.017918,
+      "topology_connected_components": 1566,
+      "topology_largest_component_ratio": 0.1244,
+      "dice": 0.250644,
+      "iou": 0.143278,
+      "sensitivity": 0.153204,
+      "specificity": 0.993932,
+      "peak_rss_mb": 160.98
     },
     {
       "patient_id": "hrf_dr_14",
       "category": "dr",
       "image": "14_dr.JPG",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
       "original_resolution": [
         3504,
         2336
       ],
       "processed_resolution": [
-        1400,
-        933
+        1280,
+        853
       ],
-      "downsample_scale": 0.3995,
-      "total_latency_ms": 1331.73,
-      "clahe_latency_ms": 224.99,
-      "frangi_latency_ms": 882.11,
-      "upsample_latency_ms": 35.8,
-      "vessel_density": 0.051128,
-      "dice": 0.371502,
-      "iou": 0.228125,
-      "sensitivity": 0.290487,
-      "specificity": 0.97274,
-      "peak_rss_mb": 0.0
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1002.3,
+      "clahe_latency_ms": 177.76,
+      "frangi_latency_ms": 576.55,
+      "upsample_latency_ms": 23.48,
+      "vessel_density": 0.076128,
+      "topology_connected_components": 4675,
+      "topology_largest_component_ratio": 0.0375,
+      "dice": 0.447885,
+      "iou": 0.288564,
+      "sensitivity": 0.411954,
+      "specificity": 0.95736,
+      "peak_rss_mb": 161.2
     },
     {
       "patient_id": "hrf_g_02",
       "category": "g",
       "image": "02_g.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
       "original_resolution": [
         3504,
         2336
       ],
       "processed_resolution": [
-        1400,
-        933
+        1280,
+        853
       ],
-      "downsample_scale": 0.3995,
-      "total_latency_ms": 1361.59,
-      "clahe_latency_ms": 241.97,
-      "frangi_latency_ms": 892.99,
-      "upsample_latency_ms": 36.48,
-      "vessel_density": 0.06646,
-      "dice": 0.523048,
-      "iou": 0.35414,
-      "sensitivity": 0.45818,
-      "specificity": 0.971517,
-      "peak_rss_mb": 0.0
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 867.3,
+      "clahe_latency_ms": 142.66,
+      "frangi_latency_ms": 579.21,
+      "upsample_latency_ms": 26.11,
+      "vessel_density": 0.080261,
+      "topology_connected_components": 4188,
+      "topology_largest_component_ratio": 0.1654,
+      "dice": 0.567991,
+      "iou": 0.396639,
+      "sensitivity": 0.541895,
+      "specificity": 0.964495,
+      "peak_rss_mb": 161.16
     },
     {
       "patient_id": "hrf_g_09",
       "category": "g",
       "image": "09_g.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
       "original_resolution": [
         3504,
         2336
       ],
       "processed_resolution": [
-        1400,
-        933
+        1280,
+        853
       ],
-      "downsample_scale": 0.3995,
-      "total_latency_ms": 1382.81,
-      "clahe_latency_ms": 256.1,
-      "frangi_latency_ms": 905.85,
-      "upsample_latency_ms": 38.0,
-      "vessel_density": 0.045721,
-      "dice": 0.522286,
-      "iou": 0.353442,
-      "sensitivity": 0.413019,
-      "specificity": 0.985618,
-      "peak_rss_mb": 0.0
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 890.54,
+      "clahe_latency_ms": 141.91,
+      "frangi_latency_ms": 559.87,
+      "upsample_latency_ms": 27.03,
+      "vessel_density": 0.063906,
+      "topology_connected_components": 3246,
+      "topology_largest_component_ratio": 0.3348,
+      "dice": 0.598702,
+      "iou": 0.427248,
+      "sensitivity": 0.542692,
+      "specificity": 0.976945,
+      "peak_rss_mb": 161.76
     },
     {
       "patient_id": "hrf_g_14",
       "category": "g",
       "image": "14_g.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
       "original_resolution": [
         3504,
         2336
       ],
       "processed_resolution": [
-        1400,
-        933
+        1280,
+        853
       ],
-      "downsample_scale": 0.3995,
-      "total_latency_ms": 1343.95,
-      "clahe_latency_ms": 263.19,
-      "frangi_latency_ms": 854.97,
-      "upsample_latency_ms": 36.25,
-      "vessel_density": 0.01904,
-      "dice": 0.292185,
-      "iou": 0.171087,
-      "sensitivity": 0.179239,
-      "specificity": 0.995635,
-      "peak_rss_mb": 0.0
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 950.61,
+      "clahe_latency_ms": 166.01,
+      "frangi_latency_ms": 602.24,
+      "upsample_latency_ms": 52.77,
+      "vessel_density": 0.029268,
+      "topology_connected_components": 1273,
+      "topology_largest_component_ratio": 0.0445,
+      "dice": 0.399861,
+      "iou": 0.249891,
+      "sensitivity": 0.269659,
+      "specificity": 0.992753,
+      "peak_rss_mb": 161.38
     },
     {
       "patient_id": "hrf_h_02",
       "category": "h",
       "image": "02_h.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
       "original_resolution": [
         3504,
         2336
       ],
       "processed_resolution": [
-        1400,
-        933
+        1280,
+        853
       ],
-      "downsample_scale": 0.3995,
-      "total_latency_ms": 1298.25,
-      "clahe_latency_ms": 233.9,
-      "frangi_latency_ms": 849.03,
-      "upsample_latency_ms": 35.31,
-      "vessel_density": 0.07064,
-      "dice": 0.589857,
-      "iou": 0.418296,
-      "sensitivity": 0.472452,
-      "specificity": 0.982786,
-      "peak_rss_mb": 0.0
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1130.53,
+      "clahe_latency_ms": 191.97,
+      "frangi_latency_ms": 742.95,
+      "upsample_latency_ms": 31.16,
+      "vessel_density": 0.088383,
+      "topology_connected_components": 3746,
+      "topology_largest_component_ratio": 0.1313,
+      "dice": 0.645881,
+      "iou": 0.476975,
+      "sensitivity": 0.56615,
+      "specificity": 0.975142,
+      "peak_rss_mb": 161.46
     },
     {
       "patient_id": "hrf_h_09",
       "category": "h",
       "image": "09_h.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
       "original_resolution": [
         3504,
         2336
       ],
       "processed_resolution": [
-        1400,
-        933
+        1280,
+        853
       ],
-      "downsample_scale": 0.3995,
-      "total_latency_ms": 1380.12,
-      "clahe_latency_ms": 244.17,
-      "frangi_latency_ms": 931.78,
-      "upsample_latency_ms": 32.49,
-      "vessel_density": 0.029252,
-      "dice": 0.428208,
-      "iou": 0.272433,
-      "sensitivity": 0.281873,
-      "specificity": 0.996472,
-      "peak_rss_mb": 0.0
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1126.5,
+      "clahe_latency_ms": 181.95,
+      "frangi_latency_ms": 738.58,
+      "upsample_latency_ms": 31.37,
+      "vessel_density": 0.039593,
+      "topology_connected_components": 2052,
+      "topology_largest_component_ratio": 0.0442,
+      "dice": 0.520117,
+      "iou": 0.351458,
+      "sensitivity": 0.371472,
+      "specificity": 0.994201,
+      "peak_rss_mb": 161.36
     },
     {
       "patient_id": "hrf_h_14",
       "category": "h",
       "image": "14_h.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
       "original_resolution": [
         3504,
         2336
       ],
       "processed_resolution": [
-        1400,
-        933
+        1280,
+        853
       ],
-      "downsample_scale": 0.3995,
-      "total_latency_ms": 1226.76,
-      "clahe_latency_ms": 207.18,
-      "frangi_latency_ms": 823.31,
-      "upsample_latency_ms": 34.74,
-      "vessel_density": 0.052557,
-      "dice": 0.500181,
-      "iou": 0.333495,
-      "sensitivity": 0.376788,
-      "specificity": 0.984973,
-      "peak_rss_mb": 0.0
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1386.02,
+      "clahe_latency_ms": 229.21,
+      "frangi_latency_ms": 937.23,
+      "upsample_latency_ms": 34.65,
+      "vessel_density": 0.071589,
+      "topology_connected_components": 3315,
+      "topology_largest_component_ratio": 0.1341,
+      "dice": 0.580076,
+      "iou": 0.408527,
+      "sensitivity": 0.490182,
+      "specificity": 0.976864,
+      "peak_rss_mb": 161.46
     }
   ]
 }

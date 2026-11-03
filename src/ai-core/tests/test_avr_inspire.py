@@ -56,6 +56,26 @@ def synthetic_retina_with_od() -> np.ndarray:
     return rgb
 
 
+def test_knudtson_golden_vector_equal_calibers() -> None:
+    """
+    Kiểm chứng Golden Vector trên cặp khẩu kính đồng dạng [100.0, 100.0].
+    Theo sinh lý võng mạc và công thức Knudtson et al. (2003):
+    Tĩnh mạch bắt buộc phải lớn hơn Động mạch (CRVE > CRAE <=> AVR < 1.0).
+    """
+    calibers = [100.0, 100.0]
+    crae = compute_knudtson_crae(calibers)
+    crve = compute_knudtson_crve(calibers)
+
+    # Đối chiếu giá trị số học chuẩn:
+    assert crae == pytest.approx(124.451, abs=0.01)
+    assert crve == pytest.approx(134.350, abs=0.01)
+    assert crae < crve, "Lỗi nghiêm trọng: CRAE không được phép lớn hơn CRVE khi khẩu kính bằng nhau!"
+
+    avr = crae / crve
+    assert avr == pytest.approx(0.9263, abs=0.001)
+    assert avr < 1.0
+
+
 def test_knudtson_crae_and_crve_formulas() -> None:
     # Test pairing calculation
     artery_calibers = [15.0, 14.0, 12.0, 11.0, 10.0, 8.0]
@@ -66,9 +86,9 @@ def test_knudtson_crae_and_crve_formulas() -> None:
 
     assert crae > 0.0
     assert crve > 0.0
-    assert crve > crae  # Veins are typically wider than arteries
+    assert crve > crae  # Veins are wider than arteries
     avr = crae / crve
-    assert 0.40 <= avr <= 1.20
+    assert 0.40 <= avr < 1.0
 
     # Edge case: empty list
     assert compute_knudtson_crae([]) == 0.0
@@ -121,16 +141,11 @@ def test_inspire_avr_real_case_if_present() -> None:
         pytest.skip("INSPIRE_AVR dataset not present locally")
 
     rgb = np.asarray(Image.open(case_path))
-    art_path = Path("datasets/INSPIRE_AVR/IM000004/IM000004--arteries.jpg")
-    vein_path = Path("datasets/INSPIRE_AVR/IM000004/IM000004--veins.jpg")
-
-    art_gt = np.mean(np.asarray(Image.open(art_path)), axis=-1) < 240 if art_path.exists() else None
-    vein_gt = np.mean(np.asarray(Image.open(vein_path)), axis=-1) < 240 if vein_path.exists() else None
-
-    res = calculate_avr(rgb, artery_gt_mask=art_gt, vein_gt_mask=vein_gt, generate_visualization=True)
-    assert res["status"] == "SUCCESS"
-    assert res["risk_available"] is True
-    assert res["avr"] is not None
-    assert res["crae_px"] > 0
-    assert res["crve_px"] > 0
-    assert res["visualization"]["annotated_base64_png"] is not None
+    # Verify automated end-to-end prediction without GT masks
+    res_auto = calculate_avr(rgb, artery_gt_mask=None, vein_gt_mask=None, generate_visualization=True)
+    assert res_auto["status"] == "SUCCESS"
+    assert res_auto["risk_available"] is True
+    assert res_auto["avr"] is not None
+    assert res_auto["crae_px"] > 0
+    assert res_auto["crve_px"] > 0
+    assert res_auto["visualization"]["annotated_base64_png"] is not None

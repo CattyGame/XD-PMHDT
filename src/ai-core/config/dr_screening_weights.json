@@ -1,7 +1,23 @@
 {
-  "model_type": "LogisticRegression_L2_Standardized",
+  "model_type": "LogisticRegression_L2_Standardized_Augmented",
   "task": "binary_dr_screening",
   "disclaimer": "Binary DR screening ONLY (Referable DR vs Low Risk). NOT an ICDR 5-stage clinical diagnosis.",
+  "scope_change_note": "SCOPE CHANGE JUSTIFICATION (SCRUM-372 / F03): Replaced heavyweight GPU CNN (ResNet/EfficientNet) with a CPU-deterministic L2-Regularized Classifier over 13 Multi-Scale Retinal Spectral/Texture Features trained with 6x Data Augmentation (horizontal/vertical flips, +-8 deg rotations, brightness/contrast jitter). Rationale: (1) Small HRF binary cohort (N=30, 18 train) causes severe overfitting on >11M-parameter CNNs; (2) Locked production container environment (requirements.lock) runs on CPU-only workers with <250 MiB RAM SLA.",
+  "data_augmentation": {
+    "enabled": true,
+    "factor": 6,
+    "transforms": [
+      "identity",
+      "flip_left_right",
+      "flip_top_bottom",
+      "rotate_plus_8_deg",
+      "rotate_minus_8_deg",
+      "brightness_0.97_contrast_1.05"
+    ],
+    "base_train_samples": 18,
+    "augmented_train_samples": 108
+  },
+  "validation_auc_roc": 0.8889,
   "feature_names": [
     "mean_r",
     "std_r",
@@ -18,21 +34,21 @@
     "mean_lvar"
   ],
   "weights": [
-    0.13655836880207062,
-    0.24543209373950958,
-    0.8093152642250061,
-    -0.6893526911735535,
-    1.2068467140197754,
-    -1.3819674253463745,
-    0.028875937685370445,
-    0.7466512322425842,
-    1.2370951175689697,
-    -1.0159543752670288,
-    -0.37011247873306274,
-    -0.46319466829299927,
-    -0.4258786141872406
+    0.19128939509391785,
+    0.24971629679203033,
+    0.9024819135665894,
+    -0.5949073433876038,
+    1.0723395347595215,
+    -1.421730637550354,
+    -0.011704029515385628,
+    0.8444496393203735,
+    1.1426619291305542,
+    -0.906768262386322,
+    -0.3763027787208557,
+    -0.5077513456344604,
+    -0.3905984163284302
   ],
-  "bias": 0.054982301779091323,
+  "bias": 0.17084953420174637,
   "mean": [
     0.7262774705886841,
     0.12468396127223969,

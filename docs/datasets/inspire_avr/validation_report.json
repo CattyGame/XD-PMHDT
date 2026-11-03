@@ -1,13 +1,22 @@
 {
-  "dataset": "INSPIRE-AVR (Iowa Normative Set for Processing Images of the REtina - Arteriovenous Ratio)",
-  "source": "University of Iowa & National Eye Institute",
+  "dataset": "INSPIRE-AVR Extended Clinical Archive (99 Verified Cases from 100 Archive Folders)",
+  "provenance_note": "Extracted from data-assets/INSPIRE_AVR/INSPIRE_AVR.zip containing 100 case directories (IM000001..IM006106). Directory IM000189 is empty in the raw archive, yielding 99 complete clinical cases (expanding upon the classic 40-image Iowa Normative Set reference subset). Archive filename typos in 7 cases (including IM000001--artry.jpg and IM000001/IM000168--veins.jpg verified at 99.86% vessel pixel intersection with IM000001--vessels.jpg) were normalized to canonical {case_id}--arteries.jpg and {case_id}--veins.jpg.",
   "total_cases_verified": 99,
   "split_summary": {
     "train": 70,
     "validation": 15,
     "test": 14
   },
-  "cases_with_av_ground_truth": 93,
+  "cases_with_av_ground_truth": 99,
+  "normalized_archive_typo_cases": [
+    "IM000001",
+    "IM000023",
+    "IM000024",
+    "IM001070",
+    "IM001859",
+    "IM003537",
+    "IM003705"
+  ],
   "seed": 42,
   "manifest_path": "docs/datasets/inspire_avr/manifest.csv"
 }

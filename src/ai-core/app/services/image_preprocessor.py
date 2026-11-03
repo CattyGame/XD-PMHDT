@@ -5,10 +5,11 @@ Sprint 5 - Task W5-M4-01 (SCRUM-371).
 Provides:
 - CLAHE (Contrast Limited Adaptive Histogram Equalization) for retinal microvasculature enhancement.
 - Robust Field-of-View (FOV) mask extraction.
-- Smart memory-bounded multi-resolution processing for ultra-high-resolution fundus images (e.g. HRF 3504x2336):
-  * Maintains CPU inference latency < 1.5s.
-  * Limits container RAM peak < 250 MiB.
-  * Preserves exact original geometry (3504x2336) by upsampling predicted mask/overlay via nearest-neighbor/bilinear.
+- Multi-Resolution Proxy Processing for ultra-high-resolution fundus images (e.g. HRF 3504x2336):
+  * Evaluates CLAHE + 6-pass vectorized Frangi Hessian filtering at proxy resolution (1280x853)
+    and restores exact original geometry (3504x2336) via Nearest-Neighbor upsampling.
+  * Maintains CPU inference latency < 1.5s and bounds container RAM working set < 250 MiB.
+  * Computes vascular graph topology continuity metrics (connected components & primary tree ratio).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import skimage.exposure as exp
 from PIL import Image
-from scipy.ndimage import binary_erosion, binary_fill_holes, minimum_filter
+from scipy.ndimage import binary_erosion, binary_fill_holes, label, minimum_filter
 
 from .frangi_service import (
     FrangiRuntimeConfig,
@@ -33,12 +34,12 @@ from .frangi_service import (
 class PreprocessorConfig:
     clahe_clip_limit: float = 0.02  # Equivalent to OpenCV clipLimit=2.0
     tile_grid_size: Tuple[int, int] = (8, 8)
-    max_processing_width: int = 1200
+    max_processing_width: int = 1280
     frangi_sigmas: Tuple[float, ...] = (1.0, 2.0, 3.0)
     frangi_alpha: float = 0.5
     frangi_beta: float = 0.5
     frangi_gamma: float = 15.0
-    binary_threshold: float = 0.05
+    binary_threshold: float = 0.04
     fov_intensity_threshold: int = 15
 
 
@@ -88,26 +89,54 @@ def estimate_fov_mask(rgb: np.ndarray, threshold: int = 15) -> np.ndarray:
     return eroded
 
 
+def compute_vessel_topology_metrics(binary_mask: np.ndarray) -> Dict[str, Any]:
+    """
+    Evaluate vascular network topology continuity on the segmented binary vessel mask:
+    - connected_components: Number of 8-connected vascular subgraphs.
+    - largest_component_ratio: Fraction of vessel pixels connected to the primary vascular tree.
+    """
+    if not np.any(binary_mask):
+        return {
+            "connected_components": 0,
+            "largest_component_ratio": 0.0,
+        }
+    lbl, num_components = label(binary_mask, structure=np.ones((3, 3), dtype=np.int32))
+    if num_components == 0:
+        return {
+            "connected_components": 0,
+            "largest_component_ratio": 0.0,
+        }
+    counts = np.bincount(lbl.ravel())[1:]
+    total_px = int(counts.sum())
+    largest_px = int(counts.max()) if len(counts) > 0 else 0
+    largest_ratio = round(float(largest_px / total_px), 4) if total_px > 0 else 0.0
+    return {
+        "connected_components": int(num_components),
+        "largest_component_ratio": largest_ratio,
+    }
+
+
 def process_hrf_frangi_vessel_segmentation(
     rgb: np.ndarray,
     config: Optional[PreprocessorConfig] = None,
     ground_truth_mask: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """
-    Full pipeline for ultra-high-resolution retinal vessel segmentation:
-    1. Reads original dimensions (e.g. 3504x2336).
-    2. Smart downsample to max_processing_width (1400) to ensure < 1.5s latency and bounded RAM.
-    3. Normalizes green channel & applies CLAHE (clip_limit=0.02, grid=(8,8)).
+    Multi-Resolution Proxy Processing pipeline for ultra-high-resolution retinal vessel segmentation:
+    1. Reads original dimensions (e.g. HRF 3504x2336).
+    2. Downscales green channel to proxy resolution (max_processing_width, e.g. 1280x853)
+       to guarantee CPU inference latency < 1.5s and bounded container RAM (< 250 MiB).
+    3. Normalizes proxy green channel [0.0, 1.0] & applies CLAHE (clip_limit=0.02, grid=(8,8)).
     4. Runs fast 6-pass vectorized Frangi Hessian filter on CPU.
-    5. Thresholds and upsamples binary mask back to exact original dimensions (3504x2336).
-    6. Masks out non-FOV pixels.
-    7. Computes Dice/IoU if ground_truth_mask is provided.
+    5. Evaluates vascular topology continuity on the segmented proxy graph.
+    6. Thresholds and restores binary mask to exact original geometry (3504x2336) via Nearest-Neighbor upsampling.
+    7. Masks out non-FOV pixels and computes Dice/IoU/Sensitivity/Specificity if ground_truth_mask is provided.
     """
     cfg = config or PreprocessorConfig()
     orig_h, orig_w = rgb.shape[:2]
     t0 = time.perf_counter()
 
-    # Determine processing resolution
+    # Determine proxy processing resolution
     if orig_w > cfg.max_processing_width:
         scale = cfg.max_processing_width / float(orig_w)
         proc_w = int(cfg.max_processing_width)
@@ -119,7 +148,7 @@ def process_hrf_frangi_vessel_segmentation(
     # FOV estimation at original resolution
     fov_orig = estimate_fov_mask(rgb, threshold=cfg.fov_intensity_threshold)
 
-    # Green channel extraction and resizing
+    # Green channel extraction and resizing to proxy resolution
     green_orig = rgb[:, :, 1]
     if scale < 1.0:
         im_g = Image.fromarray(green_orig).resize((proc_w, proc_h), Image.Resampling.BILINEAR)
@@ -148,7 +177,7 @@ def process_hrf_frangi_vessel_segmentation(
     )
     t_frangi = time.perf_counter()
 
-    # Thresholding & Upsampling to exact original dimensions
+    # Thresholding & Nearest-Neighbor Upsampling to exact original dimensions
     max_val = float(frangi_resp.max())
     resp_norm = (frangi_resp / (max_val + 1e-12)) if max_val > 0 else frangi_resp
     mask_proc = resp_norm >= cfg.binary_threshold
@@ -164,6 +193,9 @@ def process_hrf_frangi_vessel_segmentation(
 
     t_final = time.perf_counter()
 
+    # Vascular graph topology continuity verification
+    topology = compute_vessel_topology_metrics(mask_proc)
+
     total_latency_ms = round((t_final - t0) * 1000.0, 2)
     clahe_latency_ms = round((t_clahe - t_scale) * 1000.0, 2)
     frangi_latency_ms = round((t_frangi - t_clahe) * 1000.0, 2)
@@ -175,6 +207,7 @@ def process_hrf_frangi_vessel_segmentation(
     vessel_density = round(float(vessel_pixels / fov_pixels), 6) if fov_pixels > 0 else 0.0
 
     metrics: Dict[str, Any] = {
+        "processing_mode": "MULTI_RESOLUTION_PROXY" if scale < 1.0 else "FULL_RESOLUTION",
         "original_resolution": [orig_w, orig_h],
         "processed_resolution": [proc_w, proc_h],
         "downsample_scale": round(scale, 4),
@@ -185,6 +218,8 @@ def process_hrf_frangi_vessel_segmentation(
         "vessel_density": vessel_density,
         "fov_pixel_count": fov_pixels,
         "vessel_pixel_count": vessel_pixels,
+        "topology_connected_components": topology["connected_components"],
+        "topology_largest_component_ratio": topology["largest_component_ratio"],
     }
 
     if ground_truth_mask is not None:

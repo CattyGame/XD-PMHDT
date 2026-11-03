@@ -2,10 +2,10 @@
 HRF Dataset Vessel Segmentation Benchmark Runner (SCRUM-371 / W5-M4-01).
 
 Measures:
-- Evaluates the optimized CLAHE + multi-resolution Frangi 2D pipeline on the HRF test split (3504x2336).
-- Computes Dice, IoU, Sensitivity, Specificity against expert ground truth (manual1).
+- Evaluates the optimized CLAHE + Multi-Resolution Proxy Frangi 2D pipeline on the HRF test split (3504x2336).
+- Computes Dice, IoU, Sensitivity, Specificity, and Vascular Topology Continuity against expert ground truth (manual1).
 - Tracks p50, p95, mean, and max CPU latency.
-- Tracks peak working set RAM (MiB) and tracemalloc allocations.
+- Tracks actual process Resident Set Size (RSS) RAM (MiB) and tracemalloc heap allocations.
 - Exports report to docs/benchmarks/frangi_hrf_benchmark_v1.0.json.
 """
 
@@ -47,29 +47,65 @@ MANIFEST_PATH = ROOT / "docs" / "datasets" / "hrf" / "manifest.csv"
 
 
 def get_process_rss_mb() -> float:
+    """
+    Đo lường bộ nhớ Resident Set Size (RSS) thực tế của tiến trình (bao gồm C/C++ buffers của NumPy/SciPy/Pillow).
+    Ưu tiên psutil nếu có; hỗ trợ đầy đủ 64-bit Win32 K32GetProcessMemoryInfo và Linux /proc/self/status.
+    """
+    try:
+        import psutil  # type: ignore
+
+        process = psutil.Process(os.getpid())
+        return round(float(process.memory_info().rss) / (1024.0 * 1024.0), 2)
+    except Exception:
+        pass
+
     if sys.platform == "win32":
-        import ctypes
-        from ctypes import wintypes
+        try:
+            import ctypes
+            from ctypes import wintypes
 
-        class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
-            _fields_ = [
-                ("cb", wintypes.DWORD),
-                ("PageFaultCount", wintypes.DWORD),
-                ("PeakWorkingSetSize", ctypes.c_size_t),
-                ("WorkingSetSize", ctypes.c_size_t),
-                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                ("PagefileUsage", ctypes.c_size_t),
-                ("PeakPagefileUsage", ctypes.c_size_t),
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.GetCurrentProcess.argtypes = []
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            k32.K32GetProcessMemoryInfo.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(PROCESS_MEMORY_COUNTERS),
+                wintypes.DWORD,
             ]
+            k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
 
-        counters = PROCESS_MEMORY_COUNTERS()
-        counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
-        handle = ctypes.windll.kernel32.GetCurrentProcess()
-        if ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
-            return round(float(counters.WorkingSetSize) / (1024.0 * 1024.0), 2)
+            counters = PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+            handle = k32.GetCurrentProcess()
+            if k32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                return round(float(counters.WorkingSetSize) / (1024.0 * 1024.0), 2)
+        except Exception:
+            pass
+
+    proc_status = Path("/proc/self/status")
+    if proc_status.is_file():
+        try:
+            for line in proc_status.read_text(encoding="utf-8").splitlines():
+                if line.startswith("VmRSS:"):
+                    kb = float(line.split()[1])
+                    return round(kb / 1024.0, 2)
+        except Exception:
+            pass
+
     return 0.0
 
 
@@ -88,9 +124,9 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
     config = PreprocessorConfig(
         clahe_clip_limit=0.02,
         tile_grid_size=(8, 8),
-        max_processing_width=1400,
+        max_processing_width=1280,
         frangi_sigmas=(1.0, 2.0, 3.0),
-        binary_threshold=0.05,
+        binary_threshold=0.04,
     )
 
     samples: List[Dict[str, Any]] = []
@@ -101,6 +137,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
     ious: List[float] = []
     sensitivities: List[float] = []
     specificities: List[float] = []
+    topology_ratios: List[float] = []
     rss_peaks: List[float] = []
 
     gc.collect()
@@ -144,11 +181,13 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
         ious.append(m["iou"])
         sensitivities.append(m["sensitivity"])
         specificities.append(m["specificity"])
+        topology_ratios.append(m["topology_largest_component_ratio"])
 
         sample_record = {
             "patient_id": row["patient_id"],
             "category": row["category"],
             "image": Path(row["image_path"]).name,
+            "processing_mode": m["processing_mode"],
             "original_resolution": m["original_resolution"],
             "processed_resolution": m["processed_resolution"],
             "downsample_scale": m["downsample_scale"],
@@ -157,6 +196,8 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             "frangi_latency_ms": m["frangi_latency_ms"],
             "upsample_latency_ms": m["upsample_latency_ms"],
             "vessel_density": m["vessel_density"],
+            "topology_connected_components": m["topology_connected_components"],
+            "topology_largest_component_ratio": m["topology_largest_component_ratio"],
             "dice": m["dice"],
             "iou": m["iou"],
             "sensitivity": m["sensitivity"],
@@ -166,8 +207,9 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
         samples.append(sample_record)
         print(
             f"[{idx}/{len(rows)}] {row['patient_id']} ({row['category']}): "
-            f"Latency={m['total_latency_ms']}ms (CLAHE: {m['clahe_latency_ms']}ms, Frangi: {m['frangi_latency_ms']}ms), "
-            f"Dice={m['dice']:.4f}, IoU={m['iou']:.4f}, Sens={m['sensitivity']:.4f}, Spec={m['specificity']:.4f}"
+            f"Latency={m['total_latency_ms']}ms, RSS={peak_rss}MB, "
+            f"Dice={m['dice']:.4f}, IoU={m['iou']:.4f}, Sens={m['sensitivity']:.4f}, Spec={m['specificity']:.4f}, "
+            f"TreeRatio={m['topology_largest_component_ratio']:.4f}"
         )
 
     heap_current, heap_peak = tracemalloc.get_traced_memory()
@@ -190,6 +232,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             "pillow": PIL.__version__,
         },
         "configuration": {
+            "processing_mode": "MULTI_RESOLUTION_PROXY",
             "clahe_clip_limit": config.clahe_clip_limit,
             "tile_grid_size": list(config.tile_grid_size),
             "max_processing_width": config.max_processing_width,
@@ -198,6 +241,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             "frangi_beta": config.frangi_beta,
             "frangi_gamma": config.frangi_gamma,
             "binary_threshold": config.binary_threshold,
+            "upsampling_interpolation": "NEAREST_NEIGHBOR",
         },
         "accuracy_metrics": {
             "mean_dice": round(float(np.mean(dices)), 6),
@@ -206,6 +250,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             "median_iou": round(float(np.median(ious)), 6),
             "mean_sensitivity": round(float(np.mean(sensitivities)), 6),
             "mean_specificity": round(float(np.mean(specificities)), 6),
+            "mean_topology_largest_component_ratio": round(float(np.mean(topology_ratios)), 4),
         },
         "runtime_latency_ms": {
             "sla_target_ms": 1500.0,
@@ -233,6 +278,10 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
         f"Latency: Median(p50)={report['runtime_latency_ms']['median_p50_ms']}ms, "
         f"p95={report['runtime_latency_ms']['p95_ms']}ms, Max={report['runtime_latency_ms']['max_ms']}ms "
         f"(SLA < 1500ms: {report['runtime_latency_ms']['meets_sla_under_1_5s']})"
+    )
+    print(
+        f"Memory: Baseline RSS={baseline_rss}MB, Mean RSS={report['memory_telemetry']['mean_rss_mb']}MB, "
+        f"Peak RSS={report['memory_telemetry']['peak_rss_mb']}MB"
     )
     print(
         f"Accuracy: Mean Dice={report['accuracy_metrics']['mean_dice']}, "
