@@ -1,0 +1,306 @@
+{
+  "benchmark_name": "AURA_HRF_FRANGI_2D_V0_2_BENCHMARK",
+  "task": "SCRUM-371 / W5-M4-01",
+  "timestamp_utc": "2026-11-03T05:00:17.549538Z",
+  "dataset": "HRF (High-Resolution Fundus Image Database)",
+  "split": "test",
+  "sample_count": 9,
+  "environment": {
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.12.14",
+    "cpu_cores": 8,
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "scikit_image": "0.26.0",
+    "pillow": "12.3.0"
+  },
+  "configuration": {
+    "processing_mode": "MULTI_RESOLUTION_PROXY",
+    "clahe_clip_limit": 0.02,
+    "tile_grid_size": [
+      8,
+      8
+    ],
+    "max_processing_width": 1280,
+    "frangi_sigmas": [
+      1.0,
+      2.0,
+      3.0
+    ],
+    "frangi_alpha": 0.5,
+    "frangi_beta": 0.5,
+    "frangi_gamma": 15.0,
+    "binary_threshold": 0.04,
+    "upsampling_interpolation": "NEAREST_NEIGHBOR"
+  },
+  "accuracy_metrics": {
+    "mean_dice": 0.483415,
+    "median_dice": 0.520117,
+    "mean_iou": 0.327454,
+    "median_iou": 0.351458,
+    "mean_sensitivity": 0.39799,
+    "mean_specificity": 0.979958,
+    "mean_topology_largest_component_ratio": 0.1231
+  },
+  "runtime_latency_ms": {
+    "sla_target_ms": 1500.0,
+    "mean_ms": 1123.02,
+    "median_p50_ms": 1126.5,
+    "p95_ms": 1398.4,
+    "max_ms": 1406.65,
+    "mean_clahe_ms": 189.42,
+    "mean_frangi_ms": 717.88,
+    "meets_sla_under_1_5s": true
+  },
+  "memory_telemetry": {
+    "baseline_rss_mb": 72.89,
+    "mean_rss_mb": 161.28,
+    "peak_rss_mb": 161.76,
+    "tracemalloc_peak_heap_mb": 161.75
+  },
+  "samples": [
+    {
+      "patient_id": "hrf_dr_02",
+      "category": "dr",
+      "image": "02_dr.JPG",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1280,
+        853
+      ],
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1346.74,
+      "clahe_latency_ms": 190.29,
+      "frangi_latency_ms": 844.38,
+      "upsample_latency_ms": 39.39,
+      "vessel_density": 0.028905,
+      "topology_connected_components": 2072,
+      "topology_largest_component_ratio": 0.0916,
+      "dice": 0.339574,
+      "iou": 0.20451,
+      "sensitivity": 0.234698,
+      "specificity": 0.987927,
+      "peak_rss_mb": 160.8
+    },
+    {
+      "patient_id": "hrf_dr_09",
+      "category": "dr",
+      "image": "09_dr.JPG",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1280,
+        853
+      ],
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1406.65,
+      "clahe_latency_ms": 283.05,
+      "frangi_latency_ms": 879.89,
+      "upsample_latency_ms": 44.07,
+      "vessel_density": 0.017918,
+      "topology_connected_components": 1566,
+      "topology_largest_component_ratio": 0.1244,
+      "dice": 0.250644,
+      "iou": 0.143278,
+      "sensitivity": 0.153204,
+      "specificity": 0.993932,
+      "peak_rss_mb": 160.98
+    },
+    {
+      "patient_id": "hrf_dr_14",
+      "category": "dr",
+      "image": "14_dr.JPG",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1280,
+        853
+      ],
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1002.3,
+      "clahe_latency_ms": 177.76,
+      "frangi_latency_ms": 576.55,
+      "upsample_latency_ms": 23.48,
+      "vessel_density": 0.076128,
+      "topology_connected_components": 4675,
+      "topology_largest_component_ratio": 0.0375,
+      "dice": 0.447885,
+      "iou": 0.288564,
+      "sensitivity": 0.411954,
+      "specificity": 0.95736,
+      "peak_rss_mb": 161.2
+    },
+    {
+      "patient_id": "hrf_g_02",
+      "category": "g",
+      "image": "02_g.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1280,
+        853
+      ],
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 867.3,
+      "clahe_latency_ms": 142.66,
+      "frangi_latency_ms": 579.21,
+      "upsample_latency_ms": 26.11,
+      "vessel_density": 0.080261,
+      "topology_connected_components": 4188,
+      "topology_largest_component_ratio": 0.1654,
+      "dice": 0.567991,
+      "iou": 0.396639,
+      "sensitivity": 0.541895,
+      "specificity": 0.964495,
+      "peak_rss_mb": 161.16
+    },
+    {
+      "patient_id": "hrf_g_09",
+      "category": "g",
+      "image": "09_g.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1280,
+        853
+      ],
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 890.54,
+      "clahe_latency_ms": 141.91,
+      "frangi_latency_ms": 559.87,
+      "upsample_latency_ms": 27.03,
+      "vessel_density": 0.063906,
+      "topology_connected_components": 3246,
+      "topology_largest_component_ratio": 0.3348,
+      "dice": 0.598702,
+      "iou": 0.427248,
+      "sensitivity": 0.542692,
+      "specificity": 0.976945,
+      "peak_rss_mb": 161.76
+    },
+    {
+      "patient_id": "hrf_g_14",
+      "category": "g",
+      "image": "14_g.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1280,
+        853
+      ],
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 950.61,
+      "clahe_latency_ms": 166.01,
+      "frangi_latency_ms": 602.24,
+      "upsample_latency_ms": 52.77,
+      "vessel_density": 0.029268,
+      "topology_connected_components": 1273,
+      "topology_largest_component_ratio": 0.0445,
+      "dice": 0.399861,
+      "iou": 0.249891,
+      "sensitivity": 0.269659,
+      "specificity": 0.992753,
+      "peak_rss_mb": 161.38
+    },
+    {
+      "patient_id": "hrf_h_02",
+      "category": "h",
+      "image": "02_h.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1280,
+        853
+      ],
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1130.53,
+      "clahe_latency_ms": 191.97,
+      "frangi_latency_ms": 742.95,
+      "upsample_latency_ms": 31.16,
+      "vessel_density": 0.088383,
+      "topology_connected_components": 3746,
+      "topology_largest_component_ratio": 0.1313,
+      "dice": 0.645881,
+      "iou": 0.476975,
+      "sensitivity": 0.56615,
+      "specificity": 0.975142,
+      "peak_rss_mb": 161.46
+    },
+    {
+      "patient_id": "hrf_h_09",
+      "category": "h",
+      "image": "09_h.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1280,
+        853
+      ],
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1126.5,
+      "clahe_latency_ms": 181.95,
+      "frangi_latency_ms": 738.58,
+      "upsample_latency_ms": 31.37,
+      "vessel_density": 0.039593,
+      "topology_connected_components": 2052,
+      "topology_largest_component_ratio": 0.0442,
+      "dice": 0.520117,
+      "iou": 0.351458,
+      "sensitivity": 0.371472,
+      "specificity": 0.994201,
+      "peak_rss_mb": 161.36
+    },
+    {
+      "patient_id": "hrf_h_14",
+      "category": "h",
+      "image": "14_h.jpg",
+      "processing_mode": "MULTI_RESOLUTION_PROXY",
+      "original_resolution": [
+        3504,
+        2336
+      ],
+      "processed_resolution": [
+        1280,
+        853
+      ],
+      "downsample_scale": 0.3653,
+      "total_latency_ms": 1386.02,
+      "clahe_latency_ms": 229.21,
+      "frangi_latency_ms": 937.23,
+      "upsample_latency_ms": 34.65,
+      "vessel_density": 0.071589,
+      "topology_connected_components": 3315,
+      "topology_largest_component_ratio": 0.1341,
+      "dice": 0.580076,
+      "iou": 0.408527,
+      "sensitivity": 0.490182,
+      "specificity": 0.976864,
+      "peak_rss_mb": 161.46
+    }
+  ]
+}

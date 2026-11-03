@@ -1,0 +1,83 @@
+{
+  "model_type": "LogisticRegression_L2_Standardized_Augmented",
+  "task": "binary_dr_screening",
+  "disclaimer": "Binary DR screening ONLY (Referable DR vs Low Risk). NOT an ICDR 5-stage clinical diagnosis.",
+  "scope_change_note": "SCOPE CHANGE JUSTIFICATION (SCRUM-372 / F03): Replaced heavyweight GPU CNN (ResNet/EfficientNet) with a CPU-deterministic L2-Regularized Classifier over 13 Multi-Scale Retinal Spectral/Texture Features trained with 6x Data Augmentation (horizontal/vertical flips, +-8 deg rotations, brightness/contrast jitter). Rationale: (1) Small HRF binary cohort (N=30, 18 train) causes severe overfitting on >11M-parameter CNNs; (2) Locked production container environment (requirements.lock) runs on CPU-only workers with <250 MiB RAM SLA.",
+  "data_augmentation": {
+    "enabled": true,
+    "factor": 6,
+    "transforms": [
+      "identity",
+      "flip_left_right",
+      "flip_top_bottom",
+      "rotate_plus_8_deg",
+      "rotate_minus_8_deg",
+      "brightness_0.97_contrast_1.05"
+    ],
+    "base_train_samples": 18,
+    "augmented_train_samples": 108
+  },
+  "validation_auc_roc": 0.8889,
+  "feature_names": [
+    "mean_r",
+    "std_r",
+    "mean_g",
+    "std_g",
+    "mean_b",
+    "std_b",
+    "mean_rg",
+    "std_rg",
+    "mean_grad",
+    "p90_grad",
+    "mean_diff_rg",
+    "p95_diff_rg",
+    "mean_lvar"
+  ],
+  "weights": [
+    0.19128939509391785,
+    0.24971629679203033,
+    0.9024819135665894,
+    -0.5949073433876038,
+    1.0723395347595215,
+    -1.421730637550354,
+    -0.011704029515385628,
+    0.8444496393203735,
+    1.1426619291305542,
+    -0.906768262386322,
+    -0.3763027787208557,
+    -0.5077513456344604,
+    -0.3905984163284302
+  ],
+  "bias": 0.17084953420174637,
+  "mean": [
+    0.7262774705886841,
+    0.12468396127223969,
+    0.23525765538215637,
+    0.06842348724603653,
+    0.12139512598514557,
+    0.03722207248210907,
+    3.3365602493286133,
+    0.5737502574920654,
+    0.012572115287184715,
+    0.0299175176769495,
+    0.4910197854042053,
+    0.5838779807090759,
+    0.0007695753592997789
+  ],
+  "std": [
+    0.07738828659057617,
+    0.012817909941077232,
+    0.0509699247777462,
+    0.010505103506147861,
+    0.02690434455871582,
+    0.011164983734488487,
+    0.6849489212036133,
+    0.2157760113477707,
+    0.0023206123150885105,
+    0.005445235408842564,
+    0.08290107548236847,
+    0.08429992944002151,
+    0.0002928691974375397
+  ],
+  "threshold": 0.5
+}

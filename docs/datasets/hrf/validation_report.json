@@ -1,0 +1,46 @@
+{
+  "dataset": "HRF (High-Resolution Fundus)",
+  "source": "Pattern Recognition and Image Processing Group, University of Erlangen-Nuremberg",
+  "total_images": 45,
+  "resolution": [
+    3504,
+    2336
+  ],
+  "categories": {
+    "dr": {
+      "description": "Diabetic Retinopathy",
+      "count": 15,
+      "splits": {
+        "train": 9,
+        "validation": 3,
+        "test": 3
+      }
+    },
+    "g": {
+      "description": "Glaucoma",
+      "count": 15,
+      "splits": {
+        "train": 9,
+        "validation": 3,
+        "test": 3
+      }
+    },
+    "h": {
+      "description": "Healthy",
+      "count": 15,
+      "splits": {
+        "train": 9,
+        "validation": 3,
+        "test": 3
+      }
+    }
+  },
+  "split_summary": {
+    "train": 27,
+    "validation": 9,
+    "test": 9
+  },
+  "seed": 42,
+  "manifest_path": "docs/datasets/hrf/manifest.csv",
+  "integrity_check": "100% verified dimensions and SHA-256"
+}

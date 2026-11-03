@@ -28,7 +28,7 @@
     "original84JournalState": "RESTORED84",
     "originalJournalEdited": false,
     "compiledSourceSha256": {
-      "src/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj": "c70436f68a0a4e76ddab83f84bbb50852362135f7783c117249a40fd52b9139b",
+      "src/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj": "e29e8b9b11601f25b081cb097a0810f652012aeadb6985cc54949f9cb7505f6b",
       "src/services/AURA.Analysis.Api.Tests/xunit.runner.json": "916b3182871bc38753a61af64a94d656b67e4ba124e1098051149fe396d58afd",
       "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxFakes.cs": "c0360889346cbc44346831f68726affb94f02f3e7b8463a23809d9c2d1b8ba92",
       "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxRepair84Tests.cs": "2e01214631432f57a40ee89898397e447046ebe2c3f8582edc2f6eece12a77f9",
@@ -102,7 +102,7 @@
     "infra/sprint3/rabbitmq.topology.reference.json": "01a3f3186708ca16f4539ad98d40c2510a699d7ac8fb8103b53a9597230ceebd",
     "infra/sprint3/source-validation.json": "7031f18edb5cbdfb2f187a956190d68f18cbe30c3dedc7bf0ecc24af9888a706",
     "scripts/sprint3/validate_handoff.py": "9f241313be59cfb93b5244b790bef8e98f2a23e5969e7a0a28294c3c8a0111a3",
-    "src/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj": "c70436f68a0a4e76ddab83f84bbb50852362135f7783c117249a40fd52b9139b",
+    "src/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj": "e29e8b9b11601f25b081cb097a0810f652012aeadb6985cc54949f9cb7505f6b",
     "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxFakes.cs": "c0360889346cbc44346831f68726affb94f02f3e7b8463a23809d9c2d1b8ba92",
     "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxPublisherTests.cs": "61a657b1e4a633ccd83b830a8b9dbacf1bfc91e21a16eaf49dec06780e3603d9",
     "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxRepair84Tests.cs": "2e01214631432f57a40ee89898397e447046ebe2c3f8582edc2f6eece12a77f9",
@@ -117,7 +117,7 @@
     "src/services/AURA.Analysis.Api/Outbox/Ports.cs": "40b34194fc2162feee7d0df6a2c3a20281397fa52a7f7cf6e7a4fd4074190956"
   },
   "legacyFileSha256": {
-    "contracts/analysis-openapi.yaml": "71393f4052ab5fdd5c96c3333bef9f84fbc4fc1c5b709023c0d6fd13036ffc82",
+    "contracts/analysis-openapi.yaml": "6b1c7e814581e5481afc4a7a3d762ccfc4c0dd59f5fa823880bfa0f9ccb0d84d",
     "contracts/analysis-events.schema.json": "e780da6c072746ca92a2f921a5594873c2971d416fab26c09333b0ca184412b4",
     "contracts/analysis-job.schema.json": "1892c2f57a18211798cd31d1573d798bc7b8649cc740ee2180fbf810ab2202bd",
     "contracts/BASELINE-W1-v0.1.md": "48609405b906da467a48b1854e1cd71178b64aeff8b2501e4044bad0862f99f2",

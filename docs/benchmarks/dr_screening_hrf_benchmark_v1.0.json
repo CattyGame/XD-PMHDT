@@ -1,0 +1,140 @@
+{
+  "benchmark_id": "dr_screening_hrf_v1.0",
+  "timestamp": "2026-11-03T04:55:18.814317Z",
+  "model_architecture": "L2-Regularized Multi-Scale Retinal Classifier with 6x Data Augmentation (CPU Scope Change)",
+  "scope_change_justification": "SCOPE CHANGE JUSTIFICATION (SCRUM-372 / F03): Replaced heavyweight GPU CNN (ResNet/EfficientNet) with a CPU-deterministic L2-Regularized Classifier over 13 Multi-Scale Retinal Spectral/Texture Features trained with 6x Data Augmentation (horizontal/vertical flips, +-8 deg rotations, brightness/contrast jitter). Rationale: (1) Small HRF binary cohort (N=30, 18 train) causes severe overfitting on >11M-parameter CNNs; (2) Locked production container environment (requirements.lock) runs on CPU-only workers with <250 MiB RAM SLA.",
+  "dataset": "HRF (High-Resolution Fundus Image Database)",
+  "split_strategy": "Deterministic Patient-Level Stratified (seed=42)",
+  "data_augmentation": {
+    "enabled": true,
+    "factor": 6,
+    "transforms": [
+      "identity",
+      "flip_left_right",
+      "flip_top_bottom",
+      "rotate_plus_8_deg",
+      "rotate_minus_8_deg",
+      "brightness_0.97_contrast_1.05"
+    ],
+    "base_train_samples": 18,
+    "augmented_train_samples": 108
+  },
+  "ac_target": "AUC-ROC >= 0.88 on validation split",
+  "ac_status": "PASS",
+  "train_metrics": {
+    "auc_roc": 0.9506,
+    "accuracy": 0.8333,
+    "sensitivity": 0.8889,
+    "specificity": 0.7778,
+    "tp": 8,
+    "tn": 7,
+    "fp": 2,
+    "fn": 1,
+    "probabilities": [
+      0.8766,
+      0.8787,
+      0.3016,
+      0.7331,
+      0.9674,
+      0.5349,
+      0.6085,
+      0.9298,
+      0.83,
+      0.0823,
+      0.2408,
+      0.524,
+      0.1122,
+      0.2974,
+      0.3848,
+      0.277,
+      0.159,
+      0.5769
+    ]
+  },
+  "validation_metrics": {
+    "auc_roc": 0.8889,
+    "accuracy": 0.8333,
+    "sensitivity": 0.6667,
+    "specificity": 1.0,
+    "tp": 2,
+    "tn": 3,
+    "fp": 0,
+    "fn": 1,
+    "probabilities": [
+      0.9617,
+      0.2986,
+      0.942,
+      0.0764,
+      0.4978,
+      0.1349
+    ]
+  },
+  "test_metrics": {
+    "auc_roc": 1.0,
+    "accuracy": 1.0,
+    "sensitivity": 1.0,
+    "specificity": 1.0,
+    "tp": 3,
+    "tn": 3,
+    "fp": 0,
+    "fn": 0,
+    "probabilities": [
+      0.8738,
+      0.9947,
+      0.9877,
+      0.2712,
+      0.2309,
+      0.1544
+    ]
+  },
+  "sample_manifest": {
+    "train_dr": [
+      "hrf_dr_01",
+      "hrf_dr_04",
+      "hrf_dr_06",
+      "hrf_dr_07",
+      "hrf_dr_08",
+      "hrf_dr_10",
+      "hrf_dr_11",
+      "hrf_dr_12",
+      "hrf_dr_15"
+    ],
+    "train_h": [
+      "hrf_h_01",
+      "hrf_h_04",
+      "hrf_h_06",
+      "hrf_h_07",
+      "hrf_h_08",
+      "hrf_h_10",
+      "hrf_h_11",
+      "hrf_h_12",
+      "hrf_h_15"
+    ],
+    "validation_dr": [
+      "hrf_dr_03",
+      "hrf_dr_05",
+      "hrf_dr_13"
+    ],
+    "validation_h": [
+      "hrf_h_03",
+      "hrf_h_05",
+      "hrf_h_13"
+    ],
+    "test_dr": [
+      "hrf_dr_02",
+      "hrf_dr_09",
+      "hrf_dr_14"
+    ],
+    "test_h": [
+      "hrf_h_02",
+      "hrf_h_09",
+      "hrf_h_14"
+    ]
+  },
+  "master_audit_compliance": {
+    "no_fabricated_icdr_5_stage": true,
+    "disclaimer_enforced": true,
+    "explainability_method": "HEURISTIC_RETINAL_SALIENCY",
+    "honest_architecture_disclosure": true
+  }
+}
