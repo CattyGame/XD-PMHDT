@@ -240,6 +240,14 @@ jobs:
           ./scripts/dev/Initialize-AuraDevDatabase.ps1 -EnvFile .env.example
           ./scripts/dev/Initialize-AuraDevDatabase.ps1 -EnvFile .env.example
 
+      - name: Run batch-credit reconciliation integration test
+        env:
+          AURA_SCRUM370_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=aura_dev;Username=aura_dev;Password=replace_with_local_password;Timeout=5;Command Timeout=25
+        run: >-
+          dotnet test src/services/AURA.Billing.Api.Tests/AURA.Billing.Api.Tests.csproj
+          --configuration Release --no-build --no-restore
+          --filter FullyQualifiedName~BatchCreditReconciliationTests
+
       - name: Configure isolated CI runtime logins
         shell: bash
         run: |
