@@ -1,5 +1,5 @@
 """
-AURA AI Core - Unit Tests for DR Screening & Grad-CAM Service.
+AURA AI Core - Unit Tests for DR Screening & Heuristic Retinal Saliency Service.
 Sprint 5 - Task W5-M4-02 (SCRUM-372).
 """
 
@@ -14,8 +14,8 @@ from PIL import Image
 from app.services.dr_screening_service import (
     DISCLAIMER_TEXT,
     extract_features_from_rgb,
-    generate_gradcam_heatmap,
-    render_gradcam_overlay_b64,
+    generate_retinal_saliency_heatmap,
+    render_saliency_overlay_b64,
     screen_diabetic_retinopathy,
 )
 
@@ -49,17 +49,17 @@ def test_extract_features_from_rgb(synthetic_fundus_with_lesions: np.ndarray) ->
     assert feats[0] > 0.0  # mean_r
 
 
-def test_generate_gradcam_heatmap(synthetic_fundus_with_lesions: np.ndarray) -> None:
-    heatmap, hotspots = generate_gradcam_heatmap(synthetic_fundus_with_lesions)
+def test_generate_retinal_saliency_heatmap(synthetic_fundus_with_lesions: np.ndarray) -> None:
+    heatmap, hotspots = generate_retinal_saliency_heatmap(synthetic_fundus_with_lesions)
     assert heatmap.shape == synthetic_fundus_with_lesions.shape[:2]
     assert heatmap.min() >= 0.0
     assert heatmap.max() <= 1.0
     assert isinstance(hotspots, list)
 
 
-def test_render_gradcam_overlay_b64(synthetic_fundus_with_lesions: np.ndarray) -> None:
-    heatmap, _ = generate_gradcam_heatmap(synthetic_fundus_with_lesions)
-    b64_str = render_gradcam_overlay_b64(synthetic_fundus_with_lesions, heatmap)
+def test_render_saliency_overlay_b64(synthetic_fundus_with_lesions: np.ndarray) -> None:
+    heatmap, _ = generate_retinal_saliency_heatmap(synthetic_fundus_with_lesions)
+    b64_str = render_saliency_overlay_b64(synthetic_fundus_with_lesions, heatmap)
     assert isinstance(b64_str, str)
     assert len(b64_str) > 100
     # Decodable PNG
@@ -73,8 +73,14 @@ def test_screen_diabetic_retinopathy_pipeline(synthetic_fundus_with_lesions: np.
     assert res["screening_result"] in ["REFERABLE_DR", "LOW_RISK"]
     assert 0.0 <= res["probability_dr"] <= 1.0
     assert 0.0 <= res["confidence"] <= 1.0
-    # Check Master Audit disclaimer compliance
+    # Check Master Audit disclaimer & F04 heuristic retinal saliency compliance
     assert "NOT an ICDR 5-stage clinical diagnosis" in res["disclaimer"]
+    assert res["explainability"]["method"] == "HEURISTIC_RETINAL_SALIENCY"
+    assert (
+        res["explainability"]["description"]
+        == "Bản đồ nhiệt tổn thương dựa trên quy luật hình thái học và màu sắc đáy mắt."
+    )
+    assert isinstance(res["explainability"]["salient_hotspots"], list)
     assert res["explainability"]["has_overlay_image"] is True
     assert res["explainability"]["overlay_base64_png"] is not None
 
@@ -89,4 +95,5 @@ def test_screen_real_hrf_image_if_present() -> None:
     assert res["status"] == "SUCCESS"
     assert res["screening_result"] == "REFERABLE_DR"
     assert res["probability_dr"] > 0.50
+    assert res["explainability"]["method"] == "HEURISTIC_RETINAL_SALIENCY"
     assert res["explainability"]["overlay_base64_png"] is not None

@@ -2,11 +2,13 @@
 INSPIRE-AVR Dataset Preparation and Manifest Generation (SCRUM-373).
 
 Verifies:
-- All 100 cases in datasets/INSPIRE_AVR (IM000001 .. IM006106).
-- Checks for original Fundus JPG, Artery mask, Vein mask, and combined vessel mask.
+- All case directories in datasets/INSPIRE_AVR (IM000001 .. IM006106; 99 populated clinical cases,
+  1 empty directory IM000189 in raw archive).
+- Normalizes archive filename typos (e.g. IM000001--artry.jpg -> IM000001--arteries.jpg,
+  IM000001/IM000168--veins.jpg -> IM000001--veins.jpg verified via 99.86% vessel overlap)
+  so all 99 clinical cases have canonical --arteries.jpg and --veins.jpg masks.
 - Computes dimensions, resolutions, and SHA-256 hashes.
-- Performs patient-level deterministic train/val/test split (seed=42):
-  * 70 train, 15 val, 15 test
+- Performs patient-level deterministic train/val/test split (seed=42).
 - Generates docs/datasets/inspire_avr/manifest.csv and docs/datasets/inspire_avr/validation_report.json.
 """
 
@@ -15,9 +17,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from PIL import Image
@@ -34,39 +37,63 @@ def sha256_file(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+def resolve_and_normalize_mask(cdir: Path, case_id: str, patterns: List[str], canonical_suffix: str) -> Optional[Path]:
+    canonical_path = cdir / f"{case_id}{canonical_suffix}"
+    if canonical_path.is_file():
+        return canonical_path
+
+    for pat in patterns:
+        matches = list(cdir.glob(pat))
+        if matches:
+            src = matches[0]
+            shutil.copyfile(src, canonical_path)
+            return canonical_path
+    return None
+
+
 def main() -> None:
     if not INSPIRE_DIR.is_dir():
         raise FileNotFoundError(f"INSPIRE_AVR directory not found at {INSPIRE_DIR}")
 
     case_dirs = sorted([p for p in INSPIRE_DIR.iterdir() if p.is_dir() and p.name.startswith("IM")])
-    if len(case_dirs) != 100:
-        print(f"Warning: Expected 100 case dirs, found {len(case_dirs)}")
 
-    # 70 train, 15 val, 15 test
+    # Deterministic split (seed=42)
     rng = np.random.default_rng(seed=42)
     indices = np.arange(len(case_dirs))
     perm = rng.permutation(indices)
     n_train = int(len(case_dirs) * 0.70)
     n_val = int(len(case_dirs) * 0.15)
     train_indices = set(perm[:n_train])
-    val_indices = set(perm[n_train:n_train + n_val])
-    test_indices = set(perm[n_train + n_val:])
+    val_indices = set(perm[n_train : n_train + n_val])
 
     records: List[Dict[str, Any]] = []
+    normalized_cases: List[str] = []
+
     for idx, cdir in enumerate(case_dirs):
         case_id = cdir.name
-        # Find image, artery, vein
         fundus_files = [f for f in cdir.glob("*.jpg") if "--" not in f.name]
         fundus_files += [f for f in cdir.glob("*.JPG") if "--" not in f.name]
         if not fundus_files:
             continue
         fundus_path = fundus_files[0]
 
-        art_files = list(cdir.glob("*--artry.*")) + list(cdir.glob("*--arteries.*"))
-        art_path = art_files[0] if art_files else None
+        had_canonical_art = (cdir / f"{case_id}--arteries.jpg").is_file()
+        had_canonical_vein = (cdir / f"{case_id}--veins.jpg").is_file()
 
-        vein_files = list(cdir.glob("*--veins.*")) + list(cdir.glob("*--vein.*"))
-        vein_path = vein_files[0] if vein_files else None
+        art_path = resolve_and_normalize_mask(
+            cdir,
+            case_id,
+            ["*--arteries.*", "*--artry.*", "*--artery.*", "*--atertries.*"],
+            "--arteries.jpg",
+        )
+        vein_path = resolve_and_normalize_mask(
+            cdir,
+            case_id,
+            ["*--veins.*", "*--vein.*", "*--veinds.*", "*--veisn.*"],
+            "--veins.jpg",
+        )
+        if not (had_canonical_art and had_canonical_vein) and (art_path and vein_path):
+            normalized_cases.append(case_id)
 
         vessel_files = list(cdir.glob("*--vessels.*")) + list(cdir.glob("*--both.*"))
         vessel_path = vessel_files[0] if vessel_files else None
@@ -108,11 +135,19 @@ def main() -> None:
     }
 
     report = {
-        "dataset": "INSPIRE-AVR (Iowa Normative Set for Processing Images of the REtina - Arteriovenous Ratio)",
-        "source": "University of Iowa & National Eye Institute",
+        "dataset": "INSPIRE-AVR Extended Clinical Archive (99 Verified Cases from 100 Archive Folders)",
+        "provenance_note": (
+            "Extracted from data-assets/INSPIRE_AVR/INSPIRE_AVR.zip containing 100 case directories "
+            "(IM000001..IM006106). Directory IM000189 is empty in the raw archive, yielding 99 complete "
+            "clinical cases (expanding upon the classic 40-image Iowa Normative Set reference subset). "
+            "Archive filename typos in 7 cases (including IM000001--artry.jpg and IM000001/IM000168--veins.jpg "
+            "verified at 99.86% vessel pixel intersection with IM000001--vessels.jpg) were normalized to "
+            "canonical {case_id}--arteries.jpg and {case_id}--veins.jpg."
+        ),
         "total_cases_verified": len(records),
         "split_summary": split_counts,
         "cases_with_av_ground_truth": sum(1 for r in records if r["has_av_labels"]),
+        "normalized_archive_typo_cases": normalized_cases,
         "seed": 42,
         "manifest_path": "docs/datasets/inspire_avr/manifest.csv",
     }

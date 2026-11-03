@@ -378,7 +378,7 @@ và [M4 integration status](../integration/M4_Sprint2_integration_status.md).
 
 ## 13. Tối ưu hóa Thuật toán Frangi 2D v0.2 & Benchmark Đa độ phân giải trên Tập HRF (Sprint 5)
 
-> **Mã Jira**: SCRUM-371 (`W5-M4-01`) · **Tác giả**: Đào Duy Quân (M4 — AI Engineer) · **Cập nhật**: 2026-11-01
+> **Mã Jira**: SCRUM-371 (`W5-M4-01`) · **Tác giả**: Đào Duy Quân (M4 — AI Engineer) · **Cập nhật**: 2026-11-03
 
 ### 13.1. Đặc tính Kỹ thuật & Tập dữ liệu HRF
 - Tập dữ liệu: High-Resolution Fundus (HRF) Image Database gồm 45 ảnh chụp võng mạc siêu phân giải ($3504 \times 2336$ pixel), bao gồm 15 ca Bệnh võng mạc đái tháo đường (`dr`), 15 ca Mắt khỏe mạnh (`h`), và 15 ca Glôcôm (`g`).
@@ -391,87 +391,99 @@ và [M4 integration status](../integration/M4_Sprint2_integration_status.md).
   - `docs/datasets/hrf/manifest.csv`
   - `docs/datasets/hrf/validation_report.json`
 
-### 13.2. Pipeline Tối ưu hóa Tiền xử lý & Đo lường
+### 13.2. Pipeline Tối ưu hóa Tiền xử lý (Multi-Resolution Proxy Processing) & Đo lường
 - File triển khai: `src/ai-core/app/services/image_preprocessor.py`
 - Bộ nâng cao độ tương phản: CLAHE (`clipLimit=0.02`, `tileGridSize=(8,8)`).
 - Trích xuất vùng hữu dụng (FOV mask): Thuật toán tối ưu hóa đa tỷ lệ bằng morphological hole-filling và separable boundary erosion (< 60ms).
-- Xử lý đa độ phân giải (Smart Multi-Resolution Processing):
-  - Kích thước xử lý giới hạn ở chiều rộng 1200 pixel để kiểm soát bộ nhớ RAM < 200 MiB và độ trễ CPU.
-  - Phân vùng mạch máu bằng bộ lọc Frangi Hessian vector hóa đa tỷ lệ (`sigmas=[1.0, 2.0, 3.0]`).
-  - Phục hồi hình học gốc: Mặt nạ phân vùng nhị phân được nội suy (Nearest-Neighbor) trở lại đúng kích thước gốc $3504 \times 2336$ pixel.
+- **Xử lý đa độ phân giải (Multi-Resolution Proxy Processing — F02)**:
+  - Nhằm đáp ứng SLA CPU `< 1.5s` và giới hạn bộ nhớ container `< 250 MiB` trên ảnh siêu phân giải $3504 \times 2336$, hệ thống thực thi CLAHE + bộ lọc 6-pass Vectorized Frangi Hessian (`sigmas=[1.0, 2.0, 3.0]`, `binary_threshold=0.04`) trên độ phân giải proxy ($1280 \times 853$ pixel).
+  - **Phục hồi hình học gốc**: Mặt nạ phân vùng nhị phân được nội suy `Nearest-Neighbor` trở lại đúng kích thước gốc $3504 \times 2336$ pixel để đối chiếu với nhãn chuẩn chuyên gia (`manual1`).
+  - **Kiểm chứng tính liên tục đồ thị vi mạch (Vascular Topology Continuity)**: Đo lường số thành phần liên thông 8 hướng (`topology_connected_components`) và tỷ lệ cây mạch máu chính (`topology_largest_component_ratio`).
 - Báo cáo Benchmark: `docs/benchmarks/frangi_hrf_benchmark_v1.0.json` (kiểm thử độc lập trên 9 ảnh tập `test`):
-  - **Độ trễ trung vị (p50)**: `1343.95 ms` (< 1.5s SLA — **ĐẠT**)
-  - **Độ trễ phân vị 95 (p95)**: `1407.72 ms` (< 1.5s SLA — **ĐẠT**)
-  - **Độ đặc hiệu trung bình (Mean Specificity)**: `0.9867` (98.67%)
-  - **Mean Dice**: `0.4010`
+  - **Độ trễ trung vị (p50)**: `1126.50 ms` (< 1.5s SLA — **ĐẠT**)
+  - **Độ trễ phân vị 95 (p95)**: `1398.40 ms` (< 1.5s SLA — **ĐẠT**)
+  - **Độ trễ cực đại (Max)**: `1406.65 ms` (< 1.5s SLA — **ĐẠT**)
+  - **Telemetry Bộ nhớ RAM thực tế (Process RSS — F01)**: `Baseline RSS = 72.89 MB`, `Mean RSS = 161.28 MB`, `Peak RSS = 161.76 MB` (< 250 MiB SLA — **ĐẠT**)
+  - **Mean Dice**: `0.4834` | **Mean IoU**: `0.3275` | **Mean Sensitivity**: `0.3980` | **Mean Specificity**: `0.9800` (98.00%)
 
 ---
 
-## 14. Mô hình Sàng lọc Bệnh Võng Mạc Đái Tháo Đường (DR Screening) & Explainable AI Grad-CAM (Sprint 5)
+## 14. Mô hình Sàng lọc Bệnh Võng Mạc Đái Tháo Đường (DR Screening) & Bản đồ Nhiệt Heuristic Retinal Saliency (Sprint 5)
 
-> **Mã Jira**: SCRUM-372 (`W5-M4-02`) · **Tác giả**: Đào Duy Quân (M4 — AI Engineer) · **Cập nhật**: 2026-11-01
+> **Mã Jira**: SCRUM-372 (`W5-M4-02`) · **Tác giả**: Đào Duy Quân (M4 — AI Engineer) · **Cập nhật**: 2026-11-03
 
-### 14.1. Cam kết Tuân thủ Master Audit & Giới hạn Lâm sàng
+### 14.1. Cam kết Tuân thủ Master Audit, Giải trình Scope Change (F03) & Giới hạn Lâm sàng
 - **Cam kết phạm vi chẩn đoán**: Mô hình được thiết kế thuần túy cho mục đích **Sàng lọc Nhị phân (Binary DR Screening — Referable DR vs Low Risk)** giữa ca bệnh đái tháo đường (`dr`) và ca bình thường (`h`).
 - **Tuyệt đối KHÔNG giả lập phân loại 5 giai đoạn ICDR**: Do tập HRF chỉ cung cấp nhãn danh mục nhị phân và không có nhãn giai đoạn lâm sàng (ICDR Severity Levels 0–4), hệ thống không tạo lập hoặc suy diễn các số liệu chẩn đoán giai đoạn thiếu cơ sở khoa học.
+- **Giải trình Kiến trúc & Scope Change (F03)**:
+  - Thay vì sử dụng mạng CNN nặng yêu cầu GPU (ResNet/EfficientNet), hệ thống triển khai bộ phân loại tuyến tính chuẩn hóa L2 (`LogisticRegression_L2_Standardized_Augmented`) kết hợp **Data Augmentation 6x** (lật ngang, lật dọc, xoay $\pm 8^\circ$, biến thiên độ sáng/tương phản — mở rộng tập `train` từ 18 ảnh gốc lên 108 mẫu huấn luyện) trên 13 đặc trưng phổ màu và kết cấu đa tỷ lệ.
+  - **Lý do kỹ thuật**: (1) Quy mô tập mẫu nhị phân HRF nhỏ ($N=30$, 18 ảnh `train`) dễ gây hiện tượng học vẹt (overfitting) nghiêm trọng nếu huấn luyện mạng CNN hàng chục triệu tham số; (2) Môi trường container sản xuất (`requirements.lock`) khóa cứng các thư viện CPU thuần (`numpy`, `scipy`, `scikit-image`, `Pillow`) để bảo đảm SLA bộ nhớ `< 250 MiB` và tính tất định 100% trên CI/CD không có GPU.
 - Mọi kết quả phân tích đều đính kèm thông cáo miễn trừ trách nhiệm y khoa:
   > *"DISCLAIMER: Binary Diabetic Retinopathy screening tool (Referable DR vs Low Risk). NOT an ICDR 5-stage clinical diagnosis. HRF dataset lacks multi-stage ground truth. Clinical diagnosis must be confirmed by an ophthalmologist."*
 
-### 14.2. Huấn luyện Mô hình & Đánh giá Tiêu chí Nghiệm thu (AC)
+### 14.2. Huấn luyện Mô hình & Đánh giá Tiêu chí Nghiệm thu (AC1 & F05)
 - File huấn luyện: `src/ai-core/scripts/train_dr_screening.py`
 - Trọng số mô hình: `src/ai-core/config/dr_screening_weights.json`
 - Báo cáo Benchmark: `docs/benchmarks/dr_screening_hrf_benchmark_v1.0.json`
+- **Hồ sơ mẫu Validation chuẩn xác (`sample_manifest` — F05)**:
+  - `validation_dr`: `["hrf_dr_03", "hrf_dr_05", "hrf_dr_13"]`
+  - `validation_h`: `["hrf_h_03", "hrf_h_05", "hrf_h_13"]`
 - **Kết quả nghiệm thu AC1**:
   - **AUC-ROC trên tập Validation**: `0.8889` (Mục tiêu AC1: $\ge 0.88$ — **ĐẠT**)
   - **AUC-ROC trên tập Test**: `1.0000`
   - **Độ đặc hiệu (Specificity)**: `1.0000` (100% không báo động nhầm trên mắt khỏe mạnh)
   - **Độ chính xác tổng thể (Accuracy)**: `83.33%` trên validation, `100%` trên test
 
-### 14.3. Trích xuất Bản đồ Nhiệt Giải thích Grad-CAM (AC2 & NFR-22)
-- File dịch vụ: `src/ai-core/app/services/dr_screening_service.py`
-- Thuật toán Grad-CAM / Retinal Saliency làm nổi bật trực tiếp các tổn thương vi phình mạch (microaneurysms), xuất huyết điểm (hemorrhages) và xuất tiết cứng (hard exudates).
-- Bản đồ nhiệt được phối màu chuẩn JET/Warm và hòa trộn (alpha blending) với ảnh gốc, xuất ra định dạng chuỗi Base64 PNG kèm tọa độ tâm cụm tổn thương phục vụ hiển thị trực quan trên Doctor Workspace.
+### 14.3. Trích xuất Bản đồ Nhiệt Tổn thương Heuristic Retinal Saliency (AC2, NFR-22 & F04)
+- File dịch vụ: `src/ai-core/app/services/dr_screening_service.py` (hàm `generate_retinal_saliency_heatmap`)
+- **Minh bạch danh pháp (F04)**: Định danh chính thức trong payload trả về là `"method": "HEURISTIC_RETINAL_SALIENCY"` (*"Bản đồ nhiệt tổn thương dựa trên quy luật hình thái học và màu sắc đáy mắt"*), phản ánh trung thực thuật toán phát hiện vùng xuất tiết sáng (Exudates) và vùng xuất huyết/vi phình mạch tối có tỷ lệ R/G cao (Hemorrhages/Microaneurysms), độc lập với đạo hàm gradient của mạng CNN.
+- Bản đồ nhiệt được phối màu chuẩn JET và hòa trộn (alpha blending) với ảnh gốc, xuất ra định dạng chuỗi Base64 PNG kèm danh sách `salient_hotspots` phục vụ hiển thị trực quan trên Doctor Workspace.
 
 ---
 
 ## 15. Pipeline Phân loại Động/Tĩnh Mạch & Đo Tỷ Số AVR trên Tập INSPIRE-AVR (Sprint 5)
 
-> **Mã Jira**: SCRUM-373 (`W5-M4-03`) · **Tác giả**: Đào Duy Quân (M4 — AI Engineer) · **Cập nhật**: 2026-11-01
+> **Mã Jira**: SCRUM-373 (`W5-M4-03`) · **Tác giả**: Đào Duy Quân (M4 — AI Engineer) · **Cập nhật**: 2026-11-03
 
-### 15.1. Nguồn dữ liệu & Cấu trúc Phân đoạn
-- Tập dữ liệu: INSPIRE-AVR (100 ca chụp đáy mắt chuẩn y khoa tại `datasets/INSPIRE_AVR`), cung cấp cặp mặt nạ chuẩn vàng Động mạch (`--arteries.jpg` / `--artry.jpg`) và Tĩnh mạch (`--veins.jpg`).
-- Phân chia tập dữ liệu (`docs/datasets/inspire_avr/manifest.csv`):
-  - `train`: 70 ca (trong đó 65 ca có đầy đủ cặp nhãn AV)
-  - `validation`: 15 ca (14 ca có nhãn AV)
-  - `test`: 14 ca (đầy đủ nhãn AV)
+### 15.1. Nguồn dữ liệu, Xuất xứ Bộ 99 Ca & Chuẩn hóa Toàn vẹn Manifest (F06)
+- **Xuất xứ dữ liệu**: Giải nén từ kho lưu trữ mở rộng `data-assets/INSPIRE_AVR/INSPIRE_AVR.zip` gồm 100 thư mục ca bệnh (`IM000001`..`IM006106`), mở rộng từ bộ 40 ảnh tham chiếu gốc của Đại học Iowa (INSPIRE-AVR Normative Set). Trong archive gốc, thư mục `IM000189` là thư mục rỗng, còn lại **99 ca lâm sàng hoàn chỉnh** có đầy đủ ảnh chụp đáy mắt và mặt nạ mạch máu.
+- **Chuẩn hóa lỗi chính tả tên file trong archive gốc (F06)**:
+  - Trong archive gốc có 7 thư mục bị người tạo bộ dữ liệu đặt sai chính tả tên file mặt nạ (`IM000001--artry.jpg`, `IM000001/IM000168--veins.jpg`, `IM000023--artery.jpg`, `IM000024--artery.jpg`, `IM001070--atertries.jpg`, `IM001070--vein.jpg`, `IM001859--veinds.jpg`, `IM003537--veisn.jpg`, `IM003705--veisn.jpg`).
+  - Kiểm tra đối chiếu điểm ảnh chứng minh file `IM000168--veins.jpg` nằm trong thư mục `IM000001/` có độ trùng khớp **99.86%** với mặt nạ tổng `IM000001--vessels.jpg` (và có mã băm SHA-256 hoàn toàn khác với `IM000168/IM000168--veins.jpg`), tức là mặt nạ tĩnh mạch thật của ca `IM000001` nhưng bị gõ nhầm tên khi xuất file.
+  - Script `src/ai-core/scripts/prepare_inspire_avr.py` tự động chuẩn hóa các file này về định danh chuẩn `{case_id}--arteries.jpg` và `{case_id}--veins.jpg`, đảm bảo cả **99/99 ca** trong `docs/datasets/inspire_avr/manifest.csv` (bao gồm dòng 2 `IM000001`) đều trỏ đúng vào mặt nạ chuẩn của chính ca đó (`has_av_labels = True`).
+- Phân chia tập dữ liệu (`docs/datasets/inspire_avr/manifest.csv`, `seed=42`):
+  - `train`: 70 ca (100% có cặp nhãn AV chuẩn)
+  - `validation`: 15 ca (100% có cặp nhãn AV chuẩn)
+  - `test`: 14 ca (100% có cặp nhãn AV chuẩn)
 
-### 15.2. Thuật toán Đo Khẩu kính Mạch máu & Tỷ số AVR Knudtson
+### 15.2. Thuật toán Phân loại Nhánh Sinh lý học (F09) & Công thức Knudtson et al. (2003) (F07)
 - File dịch vụ: `src/ai-core/app/services/avr_service.py`
 - Định vị Đĩa thị (Optic Disc Landmark): Xác định tâm $(cx, cy)$ và bán kính $R_{\text{OD}}$ bằng Gaussian contrast-centroid.
 - Vùng khảo sát chuẩn lâm sàng (Zone B Annulus ROI): Vành khuyên đồng tâm từ $2.0 \cdot R_{\text{OD}}$ đến $3.0 \cdot R_{\text{OD}}$ (Knudtson et al., 2003).
-- Công thức phối hợp khẩu kính:
-  - Khẩu kính Động mạch tương đương (CRAE):
-    $$CRAE = \sqrt{0.87 \cdot w_1^2 + 1.01 \cdot w_2^2 - 0.22 \cdot w_1 \cdot w_2}$$
-  - Khẩu kính Tĩnh mạch tương đương (CRVE):
-    $$CRVE = \sqrt{0.72 \cdot w_1^2 + 0.91 \cdot w_2^2}$$
+- **Phân loại nhánh Động/Tĩnh mạch tự động từ ảnh RGB (`segment_arteries_veins` — F09)**:
+  - Kết hợp 3 đặc trưng quang học sinh lý võng mạc: (1) Tỷ số phản xạ Đỏ/Xanh lá chuẩn hóa theo nền cục bộ (hemoglobin giàu oxy trong động mạch), (2) Mật độ quang học kênh Xanh lá (Optical Density — tĩnh mạch khử oxy hấp thụ mạnh hơn), và (3) Phản xạ ánh sáng trung tâm (Central Light Reflex dọc trục động mạch).
+  - Áp dụng **bỏ phiếu theo nhánh liên thông (Connected-Component Branch Voting)** trong vành khuyên Zone B để mỗi nhánh mạch máu được gán nhãn đồng nhất.
+- **Công thức phối hợp khẩu kính chuẩn Knudtson et al. (2003) (F07 & F10)**:
+  - Khẩu kính Động mạch trung tâm tương đương (CRAE):
+    $$\text{CRAE}_{\text{pair}} = 0.88 \cdot \sqrt{w_1^2 + w_2^2}$$
+  - Khẩu kính Tĩnh mạch trung tâm tương đương (CRVE):
+    $$\text{CRVE}_{\text{pair}} = 0.95 \cdot \sqrt{w_1^2 + w_2^2}$$
   - Tỷ số Động/Tĩnh mạch ($AVR$):
     $$AVR = \frac{CRAE}{CRVE}$$
+  - **Kiểm chứng Golden Vector (`test_knudtson_golden_vector_equal_calibers` — F10)**: Trên vector khẩu kính đồng dạng $[100.0, 100.0]$, $\text{CRAE} = 124.451 < \text{CRVE} = 134.350 \implies \text{AVR} = 0.9263 < 1.0$, đảm bảo tuân thủ tuyệt đối sinh lý học võng mạc.
 - Phân tầng nguy cơ bệnh võng mạc tăng huyết áp:
   - `NORMAL`: $AVR \ge 0.65$
   - `BORDERLINE`: $0.60 \le AVR < 0.65$
   - `HYPERTENSION_RISK`: $AVR < 0.60$ (co hẹp động mạch lan tỏa — Generalized Arteriolar Narrowing)
 
-### 15.3. Xóa bỏ Giới hạn Cứng & Cơ chế Báo động Graceful Degraded Fallback
+### 15.3. Tách bạch Benchmark Tự động vs Ground Truth (F08) & Cơ chế Graceful Degraded Fallback
 - **Tuân thủ Master Audit**: Hệ thống **loại bỏ hoàn toàn ràng buộc gán ép nhân tạo $AVR \in [0.40, 0.85]$**.
 - Khi ảnh bị suy giảm chất lượng nghiêm trọng, không thể định vị đĩa thị, hoặc số lượng mạch máu trong Zone B không đủ điều kiện đo lường tin cậy:
-  - Trả về `status: "WARNING"`
-  - `risk_available: false`
-  - `avr: null`, `crae_px: null`, `crve_px: null`
-  - `risk_level: "RISK_UNAVAILABLE"`
-  - `warning_code: "RISK_UNAVAILABLE"`
-  - Tuyệt đối không sinh số liệu sinh học giả tạo để vượt qua kiểm thử.
-- Báo cáo Benchmark: `docs/benchmarks/inspire_avr_benchmark_v1.0.json`:
-  - Tổng số mẫu kiểm thử: 29 ca (Validation + Test)
-  - Tỷ lệ đo đạc thành công: 100% (Mean AVR = `0.9658`, p50 Latency = `638.74 ms`)
-  - Phát hiện chính xác ca lâm sàng có biểu hiện co thắt động mạch thực tế (`IM003537`: $AVR = 0.5294 < 0.60 \implies \text{HYPERTENSION\_RISK}$)
+  - Trả về `status: "WARNING"`, `risk_available: false`, `avr: null`, `crae_px: null`, `crve_px: null`, `risk_level: "RISK_UNAVAILABLE"`, `warning_code: "RISK_UNAVAILABLE"`.
+- **Tách bạch Đo kiểm Tự động và Đối chiếu Ground Truth (`benchmark_inspire_avr.py` — F08)**:
+  - Trong `src/ai-core/scripts/benchmark_inspire_avr.py`, hàm `calculate_avr()` được gọi với `artery_gt_mask=None, vein_gt_mask=None` để kiểm thử **100% năng lực tự động phân đoạn từ ảnh RGB**.
+  - Sau khi suy diễn tự động, script đối chiếu kết quả dự đoán với nhãn chuyên gia Ground Truth (`docs/benchmarks/inspire_avr_benchmark_v1.0.json` trên 29 ca Validation + Test):
+    - **Tỷ lệ đo đạc tự động thành công**: `29/29` ca (100%), độ trễ trung vị `p50 = 1268.78 ms`.
+    - **Chỉ số sinh học tự động (Automated RGB)**: `Mean AVR = 0.5415`, `Mean CRAE = 11.49 px`, `Mean CRVE = 21.39 px`.
+    - **Đối chiếu nhãn chuyên gia (Ground Truth Reference)**: `GT Mean AVR = 0.7551`, `Mean AVR MAE = 0.2335`, `Mean AV Branch Classification Accuracy = 0.5528` (55.28%).
 - Ảnh trực quan hóa lâm sàng: Động mạch phân màu Đỏ, Tĩnh mạch phân màu Xanh, Vành khuyên Zone B viền Xanh lá và Tâm đĩa thị chấm Vàng, trả về qua Base64 PNG.
