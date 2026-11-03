@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
 import type { BackendContext } from '../api/backendContext'
@@ -6,15 +6,23 @@ import { canUploadPersonal, uploadErrorMessage, type EyeSide } from '../api/anal
 import { getPersonalUploadWorkspace } from '../api/personalUploadWorkspace'
 
 function ImagePreview({ file }: { file: File }) {
+  const [loadFailed, setLoadFailed] = useState(false)
   const attach = useCallback((image: HTMLImageElement | null) => {
     if (!image) return
     const url = URL.createObjectURL(file)
     image.src = url
     return () => URL.revokeObjectURL(url)
   }, [file])
-  return <div style={{ marginBottom: 16 }}><p>{file.name}</p>
-    <img ref={attach} alt={`Xem trước ${file.name}`}
-      style={{ width: 200, height: 200, objectFit: 'contain', border: '1px solid #ddd', borderRadius: 8 }} />
+  return <div style={{ marginBottom: 16 }}>
+    <p>{file.name} {loadFailed ? '(Tệp hỏng cấu trúc)' : ''}</p>
+    {!loadFailed ? (
+      <img ref={attach} alt={`Xem trước ${file.name}`} onError={() => setLoadFailed(true)}
+        style={{ width: 200, height: 200, objectFit: 'contain', border: '1px solid #ddd', borderRadius: 8 }} />
+    ) : (
+      <div style={{ width: 200, height: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', borderRadius: 8, padding: 8, fontSize: 13, textAlign: 'center' }}>
+        ⚠️ Tệp hỏng nhị phân (Sẵn sàng kiểm thử Quarantine)
+      </div>
+    )}
   </div>
 }
 
@@ -96,6 +104,10 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
         <ul>{receipt.items.map((item) => <li key={item.analysisId}>
           {item.fileName}: {item.processingStatus === 'DUPLICATE'
             ? `Ảnh trùng, tham chiếu phân tích ${item.existingAnalysisId}. Không tạo kết quả AI mới.`
+            : item.processingStatus === 'QUARANTINE'
+            ? 'Dữ liệu ảnh không hợp lệ (hỏng cấu trúc). Đã cách ly sang nhánh Quarantine trong < 1s (Không ghi rác vào DB).'
+            : item.processingStatus === 'RETRY'
+            ? 'Gặp sự cố tạm thời, hệ thống đang tự động xếp hàng thử lại (Bounded Retry).'
             : 'Đã xếp hàng, đang chờ xử lý.'}
         </li>)}</ul>
       </section>}

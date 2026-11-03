@@ -130,14 +130,25 @@ describe('Personal upload using backend context and a stable request', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('rejects image decoder failure without accepting the selection', async () => {
+  it('accepts corrupted file or decoder failure so backend quarantine pipeline can isolate it', async () => {
     bitmap.mockRejectedValue(new Error('private-decoder-details'))
     page()
     fireEvent.change(screen.getByLabelText('Chọn ảnh võng mạc'), {
       target: { files: [new File(['bad'], 'bad.png', { type: 'image/png' })] },
     })
-    expect((await screen.findByRole('alert')).textContent).toBe('Không thể đọc ảnh "bad.png".')
-    expect(screen.queryByText('Đã chọn 1 ảnh:')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(await screen.findByText('Đã chọn 1 ảnh:')).toBeTruthy()
+  })
+
+  it('renders quarantine notice when backend isolates corrupted payload', async () => {
+    fetchMock.mockResolvedValueOnce(json({ ...accepted, items: [{
+      ...accepted.items[0], processingStatus: 'QUARANTINE',
+      error: { code: 'ERR_CORRUPTED_PAYLOAD', message: 'Tệp hỏng', retryable: false },
+    }] }))
+    page()
+    await choose([new File(['bad-bytes'], 'bad_retina.jpg', { type: 'image/jpeg' })])
+    submit()
+    expect(await screen.findByText(/Dữ liệu ảnh không hợp lệ \(hỏng cấu trúc\)\. Đã cách ly sang nhánh Quarantine/)).toBeTruthy()
   })
 
   it('uses the backend patientId and preserves selected file order and eye side', async () => {

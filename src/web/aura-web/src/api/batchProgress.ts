@@ -6,7 +6,7 @@ import type { BackendContext } from './backendContext'
 export const BATCH_STATUSES = ['IN_PROGRESS', 'COMPLETED', 'PARTIAL_FAILED', 'FAILED'] as const
 export const PROCESSING_STATUSES = [
   'PENDING', 'QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED', 'RETRY_READY',
-  'LOW_QUALITY', 'REJECTED', 'DUPLICATE',
+  'LOW_QUALITY', 'REJECTED', 'DUPLICATE', 'QUARANTINE', 'RETRY',
 ] as const
 export type BatchStatus = typeof BATCH_STATUSES[number]
 export type ProcessingStatus = typeof PROCESSING_STATUSES[number]

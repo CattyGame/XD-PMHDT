@@ -37,12 +37,28 @@ public static class AnalysisEndpoints
                 user.AccountId,clinic,ResourceId(analysisId),Correlation(c),c.RequestAborted);
             return Results.Json(report,UploadJson.Options,statusCode:StatusCodes.Status201Created);
         }));
+        app.MapGet("/api/v1/analyses/{analysisId}/reports/{reportId}/download",(HttpContext c,string analysisId,string reportId)=>Handle(c,async()=>
+        {
+            var user=await User(c);var clinic=Clinic(c);
+            var stream=await c.RequestServices.GetRequiredService<AnalysisReportService>().OpenReportStreamAsync(
+                user.AccountId,clinic,ResourceId(analysisId),ResourceId(reportId),c.RequestAborted);
+            c.Response.Headers.CacheControl="no-store";
+            return Results.Stream(stream,"application/pdf");
+        }));
         app.MapPost("/api/v1/batches/{batchId}/reports",(HttpContext c,string batchId,ReportFormatRequest request)=>Handle(c,async()=>
         {
             var user=await User(c);var clinic=Clinic(c);
             var report=await c.RequestServices.GetRequiredService<AnalysisReportService>().CreateBatchReportAsync(
                 user.AccountId,clinic,ResourceId(batchId),request.Format,Correlation(c),c.RequestAborted);
             return Results.Json(report,UploadJson.Options,statusCode:StatusCodes.Status201Created);
+        }));
+        app.MapGet("/api/v1/batches/{batchId}/reports/{reportId}/download",(HttpContext c,string batchId,string reportId)=>Handle(c,async()=>
+        {
+            var user=await User(c);var clinic=Clinic(c);
+            var (stream, contentType)=await c.RequestServices.GetRequiredService<AnalysisReportService>().OpenBatchReportStreamAsync(
+                user.AccountId,clinic,ResourceId(batchId),ResourceId(reportId),c.RequestAborted);
+            c.Response.Headers.CacheControl="no-store";
+            return Results.Stream(stream, contentType);
         }));
         app.MapGet("/api/v1/analyses/{analysisId}",(HttpContext c,string analysisId)=>Handle(c,async()=>
         {

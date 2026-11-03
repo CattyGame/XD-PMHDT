@@ -802,7 +802,8 @@ public class ProfileRepository
             }
 
             var now = DateTimeOffset.UtcNow;
-            var initialStatus = existingAccountId.HasValue ? MembershipStatuses.Active : MembershipStatuses.Invited;
+            // ADR-005 D2 & R15: Require explicit invitation acceptance for all accounts (no auto-active on invite)
+            var initialStatus = MembershipStatuses.Invited;
 
             // 2. Kiểm tra xem đã có membership với account_id hoặc email này trong clinic chưa
             const string checkMembershipSql = @"
@@ -843,7 +844,7 @@ public class ProfileRepository
                 const string updateSql = @"
                     UPDATE profile.memberships
                     SET role = $1, status = $2, account_id = COALESCE(account_id, $3),
-                        invited_email = $4, updated_at = $5
+                        invited_email = $4, created_at = $5, updated_at = $5
                     WHERE membership_id = $6;";
 
                 await using var updateCmd = new NpgsqlCommand(updateSql, connection, transaction);
@@ -901,19 +902,9 @@ public class ProfileRepository
         string? email,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(email)) return 0;
-        var cleanEmail = email.Trim().ToLowerInvariant();
-
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        const string sql = @"
-            UPDATE profile.memberships
-            SET account_id = $1, status = 'ACTIVE', updated_at = NOW()
-            WHERE LOWER(invited_email) = $2 AND status = 'INVITED';";
-
-        await using var cmd = new NpgsqlCommand(sql, connection);
-        cmd.Parameters.AddWithValue(accountId);
-        cmd.Parameters.AddWithValue(cleanEmail);
-        return await cmd.ExecuteNonQueryAsync(cancellationToken);
+        // ADR-005 D2 & R15: Deprecated legacy auto-activation.
+        // Explicit acceptance via /api/v1/clinics/invitations/{membershipId}/accept is mandatory.
+        return 0;
     }
 
     // ====================================================================
@@ -1855,4 +1846,106 @@ public class ProfileRepository
         return (false, null, "ERR_INTERNAL_DB", "Không thể cập nhật hồ sơ bệnh nhân.");
     }
 
+
+    /// <summary>
+    /// ADR-005 D2: Chấp nhận lời mời tham gia phòng khám rõ ràng (Explicit Acceptance).
+    /// Kiểm tra token/lời mời trong hạn 72 giờ và email trùng khớp với tài khoản được xác nhận.
+    /// </summary>
+    public async Task<(bool Succeeded, string? ErrorCode, ClinicMembershipDto? Result)> AcceptClinicInvitationExplicitAsync(
+        Guid accountId,
+        string? email,
+        Guid membershipId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(email)) return (false, "ERR_EMAIL_REQUIRED", null);
+        var cleanEmail = email.Trim().ToLowerInvariant();
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        const string selectSql = @"
+            SELECT m.membership_id, m.clinic_id, m.account_id, m.role, m.status, m.invited_email, m.created_at,
+                   c.name, c.status
+            FROM profile.memberships m
+            JOIN profile.clinics c ON c.clinic_id = m.clinic_id
+            WHERE m.membership_id = $1
+            FOR UPDATE OF m;";
+
+        await using var cmd = new NpgsqlCommand(selectSql, connection, transaction);
+        cmd.Parameters.AddWithValue(membershipId);
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return (false, "ERR_INVITATION_NOT_FOUND", null);
+        }
+
+        var mId = reader.GetGuid(0);
+        var clinicId = reader.GetGuid(1);
+        var existingAccId = reader.IsDBNull(2) ? (Guid?)null : reader.GetGuid(2);
+        var role = reader.GetString(3);
+        var status = reader.GetString(4);
+        var invitedEmail = reader.IsDBNull(5) ? null : reader.GetString(5);
+        var createdAt = reader.GetDateTime(6);
+        var clinicName = reader.GetString(7);
+        var clinicStatus = reader.GetString(8);
+        await reader.CloseAsync();
+
+        if (string.Equals(clinicStatus, ClinicStatuses.Suspended, StringComparison.OrdinalIgnoreCase))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return (false, "ERR_CLINIC_SUSPENDED", null);
+        }
+
+        if (string.Equals(status, MembershipStatuses.Active, StringComparison.OrdinalIgnoreCase))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return (false, "ERR_ALREADY_ACTIVE", null);
+        }
+
+        if (string.Equals(status, MembershipStatuses.Revoked, StringComparison.OrdinalIgnoreCase))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return (false, "ERR_INVITATION_REVOKED", null);
+        }
+
+        // Kiểm tra thời hạn 72 giờ theo chuẩn ADR-005 D2
+        if (DateTime.UtcNow - createdAt > TimeSpan.FromHours(72))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return (false, "ERR_INVITATION_EXPIRED", null);
+        }
+
+        // Kiểm tra email khớp với tài khoản
+        if (string.IsNullOrWhiteSpace(invitedEmail) || !string.Equals(invitedEmail.Trim(), cleanEmail, StringComparison.OrdinalIgnoreCase))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return (false, "ERR_EMAIL_MISMATCH", null);
+        }
+
+        const string updateSql = @"
+            UPDATE profile.memberships
+            SET account_id = $1, status = 'ACTIVE', updated_at = NOW()
+            WHERE membership_id = $2;";
+
+        await using var updateCmd = new NpgsqlCommand(updateSql, connection, transaction);
+        updateCmd.Parameters.AddWithValue(accountId);
+        updateCmd.Parameters.AddWithValue(membershipId);
+        await updateCmd.ExecuteNonQueryAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+
+        var memberResponse = new ClinicMembershipDto(
+            membershipId,
+            clinicId,
+            accountId,
+            role,
+            MembershipStatuses.Active,
+            invitedEmail,
+            createdAt,
+            DateTimeOffset.UtcNow);
+
+        return (true, null, memberResponse);
+    }
 }

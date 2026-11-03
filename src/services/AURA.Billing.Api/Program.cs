@@ -782,8 +782,8 @@ app.MapPost("/internal/v1/billing/reservations/batch-refund", async Task<IResult
     CreditReservationRepository repository,
     CancellationToken cancellationToken) =>
 {
-    var tokenResult = await tokenValidator.ValidateAsync(
-        context.Request, "billing:release", "analysis-api", cancellationToken);
+    var tokenResult = await tokenValidator.ValidateAnyScopeAsync(
+        context.Request, ["billing:refund", "billing:release"], "analysis-api", cancellationToken);
     if (!tokenResult.Succeeded)
     {
         return BillingError(context, tokenResult.StatusCode, tokenResult.Code,
@@ -802,7 +802,8 @@ app.MapPost("/internal/v1/billing/reservations/batch-refund", async Task<IResult
             "TenantId và danh sách items cần hoàn credit không được rỗng.");
     }
 
-    var response = await repository.ExecuteBatchRefundAsync(request, batchIdempotencyKey, cancellationToken);
+    var canRefundCaptured = tokenResult.HasScope("billing:refund");
+    var response = await repository.ExecuteBatchRefundAsync(request, batchIdempotencyKey, canRefundCaptured, cancellationToken);
     return Results.Ok(response);
 })
 .WithName("BatchRefundReservations")

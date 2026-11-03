@@ -121,6 +121,9 @@ public class JobProcessor : IJobProcessor
             return JobProcessResult.Requeue;
         }
 
+        // Refresh job to get latest fencing_token
+        job = await _jobRepo.GetJobAsync(message.JobId, cancellationToken) ?? job;
+
         // 4. Recheck Profile access BEFORE downloading original image
         var initialAccess = await _profileClient.RecheckAccessAsync(
             analysis.TenantId,
@@ -384,7 +387,13 @@ public class JobProcessor : IJobProcessor
             aiResponse.ThresholdVersion);
 
         // 14. Commit Result + Analysis status + Job status + Outbox in SINGLE transaction
-        await _analysisRepo.CommitSuccessAsync(analysis.AnalysisId, job.JobId, resultJson, completedEvt, cancellationToken);
+        await _analysisRepo.CommitSuccessAsync(
+            analysis.AnalysisId,
+            job.JobId,
+            resultJson,
+            completedEvt,
+            cancellationToken);
+
         await RecordBatchOutcomeAsync(message, analysis, isSuccess: true, cancellationToken);
         _logger.LogInformation("Successfully processed and committed analysis {AnalysisId}", analysis.AnalysisId);
 
@@ -393,13 +402,42 @@ public class JobProcessor : IJobProcessor
 
     private async Task RecordBatchOutcomeAsync(JobRunMessage message, AnalysisRecord analysis, bool isSuccess, CancellationToken cancellationToken)
     {
-        var result = await _batchProgress.RecordImageOutcomeAsync(analysis.BatchId, analysis.AnalysisId, isSuccess);
-        if (result.IsBatchFinished)
+        BatchImageCompletionResult? result = null;
+        try
+        {
+            result = await _batchProgress.RecordImageOutcomeAsync(analysis.BatchId, analysis.AnalysisId, isSuccess);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Redis batch progress update failed for batch {BatchId}, falling back to DB batch completion check", analysis.BatchId);
+        }
+
+        bool isBatchFinished = result?.IsBatchFinished ?? false;
+        string batchStatus = result?.BatchStatus ?? "IN_PROGRESS";
+        int completed = result?.Completed ?? 0;
+        int failed = result?.Failed ?? 0;
+        int total = result?.Total ?? 0;
+
+        if (!isBatchFinished)
+        {
+            var dbBatchStatus = await _analysisRepo.CheckBatchCompletionAsync(analysis.BatchId, cancellationToken);
+            if (dbBatchStatus is { IsFinished: true })
+            {
+                isBatchFinished = true;
+                batchStatus = dbBatchStatus.BatchStatus;
+                completed = dbBatchStatus.Completed;
+                failed = dbBatchStatus.Failed;
+                total = dbBatchStatus.Total;
+            }
+        }
+
+        if (isBatchFinished)
         {
             _logger.LogInformation("Batch {BatchId} finished: status={Status}, completed={Completed}, failed={Failed}",
-                result.BatchId, result.BatchStatus, result.Completed, result.Failed);
+                analysis.BatchId, batchStatus, completed, failed);
+            var finalResult = new BatchImageCompletionResult(analysis.BatchId, total, completed, failed, 0, true, batchStatus);
             await _batchEvents.PublishAsync(analysis.TenantId, analysis.BatchId, analysis.PatientId,
-                message.CorrelationId, result, cancellationToken);
+                message.CorrelationId, finalResult, cancellationToken);
         }
     }
 }

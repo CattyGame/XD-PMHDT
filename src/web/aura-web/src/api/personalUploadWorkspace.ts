@@ -38,7 +38,7 @@ function createWorkspace(context: BackendContext) {
     publish({ ...state, images: Object.freeze([]), phase: 'validating', validation: undefined, error: undefined })
     let problem: string | undefined
     if (files.length > 100) problem = 'Mỗi lần chỉ được chọn tối đa 100 ảnh.'
-    else if (files.some((file) => !['image/jpeg', 'image/png'].includes(file.type))) {
+    else if (files.some((file) => !['image/jpeg', 'image/png'].includes(file.type) && !/\.(jpe?g|png)$/i.test(file.name))) {
       problem = 'Chỉ hỗ trợ ảnh JPG và PNG.'
     } else if (files.some((file) => file.size <= 0 || file.size > 10 * 1024 * 1024)) {
       problem = 'Mỗi ảnh phải có dữ liệu và không được vượt quá 10 MB.'
@@ -54,7 +54,8 @@ function createWorkspace(context: BackendContext) {
             }
           } finally { bitmap.close() }
         } catch {
-          problem = `Không thể đọc ảnh "${file.name}".`
+          // Bỏ qua lỗi decode bitmap ở client để cho phép tải tệp hỏng (corrupted file)
+          // lên pipeline kiểm định Quarantine của backend theo kịch bản demo (Scenario 3).
         }
         if (revision !== selection) return
         if (problem) break

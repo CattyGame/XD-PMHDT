@@ -20,6 +20,7 @@ const statusLabels: Record<string, string> = {
   RETRY_READY: 'Chờ thử lại', COMPLETED: 'Đã hoàn tất AI', FAILED: 'Phân tích thất bại',
   LOW_QUALITY: 'Ảnh không đạt chất lượng', REJECTED: 'Đã từ chối', DUPLICATE: 'Ảnh trùng',
   IN_PROGRESS: 'Đang xử lý', PARTIAL_FAILED: 'Hoàn tất một phần, có ảnh lỗi',
+  QUARANTINE: 'Đã cách ly (Quarantine)', RETRY: 'Chờ tự động thử lại',
 }
 
 /** Poll at most one GET at a time. Timer and in-flight GET are aborted on navigation or session change. */

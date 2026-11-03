@@ -1,4 +1,5 @@
 using System.Text;
+using AURA.Analysis.Api.Auth;
 using AURA.Analysis.Api.Campaign;
 using AURA.Analysis.Api.Upload;
 
@@ -8,10 +9,10 @@ public static class CampaignEndpoints
 {
     public static void MapCampaignEndpoints(this WebApplication app)
     {
-        // 1. Tạo chiến dịch mới
+        // 1. Tạo chiến dịch mới (D2: Authoritative tenant isolation)
         app.MapPost("/api/v1/campaigns", (HttpContext c, CreateCampaignRequest request) => Handle(c, async () =>
         {
-            var tenantId = ResolveClinicTenantId(c);
+            var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_MANAGE");
             var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
             var response = await repo.CreateCampaignAsync(tenantId, request, c.RequestAborted);
             return Results.Json(response, UploadJson.Options, statusCode: StatusCodes.Status201Created);
@@ -20,7 +21,7 @@ public static class CampaignEndpoints
         // 2. Danh sách chiến dịch của phòng khám
         app.MapGet("/api/v1/campaigns", (HttpContext c, string? status) => Handle(c, async () =>
         {
-            var tenantId = ResolveClinicTenantId(c);
+            var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_READ");
             var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
             var response = await repo.GetCampaignsAsync(tenantId, status, c.RequestAborted);
             return Results.Json(response, UploadJson.Options);
@@ -29,7 +30,7 @@ public static class CampaignEndpoints
         // 3. Chi tiết chiến dịch
         app.MapGet("/api/v1/campaigns/{campaignId}", (HttpContext c, string campaignId) => Handle(c, async () =>
         {
-            var tenantId = ResolveClinicTenantId(c);
+            var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_READ");
             var campId = ParseGuid(campaignId, "campaignId");
             var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
             var response = await repo.GetCampaignByIdAsync(tenantId, campId, c.RequestAborted);
@@ -39,7 +40,7 @@ public static class CampaignEndpoints
         // 4. Cập nhật trạng thái chiến dịch
         app.MapPatch("/api/v1/campaigns/{campaignId}/status", (HttpContext c, string campaignId, UpdateCampaignStatusRequest request) => Handle(c, async () =>
         {
-            var tenantId = ResolveClinicTenantId(c);
+            var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_MANAGE");
             var campId = ParseGuid(campaignId, "campaignId");
             var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
             var response = await repo.UpdateCampaignStatusAsync(tenantId, campId, request.Status, c.RequestAborted);
@@ -49,7 +50,7 @@ public static class CampaignEndpoints
         // 5. Gắn batch ảnh vào chiến dịch (AC1 & AC3: chặn nếu CLOSED)
         app.MapPost("/api/v1/campaigns/{campaignId}/batches", (HttpContext c, string campaignId, LinkBatchToCampaignRequest request) => Handle(c, async () =>
         {
-            var tenantId = ResolveClinicTenantId(c);
+            var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_MANAGE");
             var campId = ParseGuid(campaignId, "campaignId");
             var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
             await repo.LinkBatchAsync(tenantId, campId, request.BatchId, c.RequestAborted);
@@ -59,7 +60,7 @@ public static class CampaignEndpoints
         // 6. Tổng hợp thống kê tiến độ & lâm sàng (AC2)
         app.MapGet("/api/v1/campaigns/{campaignId}/summary", (HttpContext c, string campaignId) => Handle(c, async () =>
         {
-            var tenantId = ResolveClinicTenantId(c);
+            var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_READ");
             var campId = ParseGuid(campaignId, "campaignId");
             var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
             var response = await repo.GetCampaignSummaryAsync(tenantId, campId, c.RequestAborted);
@@ -69,7 +70,7 @@ public static class CampaignEndpoints
         // 7. Kết xuất dữ liệu báo cáo y tế CSV
         app.MapGet("/api/v1/campaigns/{campaignId}/export", (HttpContext c, string campaignId) => Handle(c, async () =>
         {
-            var tenantId = ResolveClinicTenantId(c);
+            var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_READ");
             var campId = ParseGuid(campaignId, "campaignId");
             var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
             var csv = await repo.ExportCampaignReportCsvAsync(tenantId, campId, c.RequestAborted);
@@ -79,29 +80,78 @@ public static class CampaignEndpoints
         }));
     }
 
-    private static Guid ResolveClinicTenantId(HttpContext c)
+    private static async Task<Guid> ResolveClinicTenantIdAsync(HttpContext c, string operation)
     {
-        // 1. Kiểm tra header X-Clinic-Context-Id
-        if (c.Request.Headers.TryGetValue("X-Clinic-Context-Id", out var hVal)
-            && Guid.TryParse(hVal.FirstOrDefault(), out var hId) && hId != Guid.Empty)
+        // 1. D2 ADR-005: Authenticate user authoritatively from Bearer token
+        var resolver = c.RequestServices.GetService<IAnalysisUserIdentityResolver>();
+        if (resolver == null)
         {
-            return hId;
+            throw new UploadFailure(503, "ERR_SERVICE_UNAVAILABLE", "Dịch vụ xác thực danh tính chưa sẵn sàng.");
         }
 
-        // 2. Kiểm tra query param clinicContextId hoặc clinicId
+        var user = await resolver.ResolveAsync(c.Request, c.RequestAborted);
+        if (user == null || user.AccountId == Guid.Empty)
+        {
+            throw new UploadFailure(401, "ERR_UNAUTHORIZED", "Yêu cầu cần xác thực danh tính hợp lệ.");
+        }
+
+        // 2. D2 ADR-005: Chặn tin cậy header X-Clinic-Context-Id do client gửi trực tiếp
+        // Chỉ chấp nhận clinic selector qua query param, sau đó server phải xác thực context
+        Guid? clinicSelector = null;
         if (c.Request.Query.TryGetValue("clinicContextId", out var qVal)
             && Guid.TryParse(qVal.FirstOrDefault(), out var qId) && qId != Guid.Empty)
         {
-            return qId;
+            clinicSelector = qId;
         }
-        if (c.Request.Query.TryGetValue("clinicId", out var qVal2)
+        else if (c.Request.Query.TryGetValue("clinicId", out var qVal2)
             && Guid.TryParse(qVal2.FirstOrDefault(), out var qId2) && qId2 != Guid.Empty)
         {
-            return qId2;
+            clinicSelector = qId2;
         }
 
-        // Mặc định ném lỗi validation nếu thiếu thông tin Clinic Context
-        throw UploadFailure.Validation(new ErrorDetail("clinicContextId", "Ngữ cảnh phòng khám (clinicContextId) là bắt buộc."));
+        if (clinicSelector is null || clinicSelector.Value == Guid.Empty)
+        {
+            throw UploadFailure.Validation(new ErrorDetail("clinicContextId", "Ngữ cảnh phòng khám (clinicContextId) là bắt buộc."));
+        }
+
+        // 3. Fail-closed: Phân giải tenant authoritative qua Profile Client (R01/N04)
+        // ADR-005 D2: Không bypass Profile cho SYSTEM_ADMIN; phân giải clinicId -> tenantId authoritatively.
+        // Quyền quản trị clinic (CLINIC_ADMIN, DOCTOR, STAFF) do Profile membership giải quyết, không dựa vào JWT global roles.
+        var profileClient = c.RequestServices.GetService<IPatientAccessResolver>();
+        if (profileClient == null)
+        {
+            throw new UploadFailure(503, "ERR_SERVICE_UNAVAILABLE", "Dịch vụ xác thực phòng khám chưa sẵn sàng.");
+        }
+
+        var correlationId = c.Items["CorrelationId"] as string;
+        bool isMutate = operation == "CAMPAIGN_MANAGE";
+        string action = isMutate ? "CAMPAIGN_MANAGE" : "ANALYSIS_READ";
+
+        AccessDecision decision;
+        try
+        {
+            decision = await profileClient.ResolveAsync(new PatientAccessRequest(
+                user.AccountId,
+                clinicSelector.Value,
+                user.AccountId,
+                action)
+            {
+                CorrelationId = correlationId
+            }, c.RequestAborted);
+        }
+        catch (UploadFailure) { throw; }
+        catch (Exception)
+        {
+            // Fail-closed! Bất kỳ lỗi kết nối Profile đều trả 503, tuyệt đối KHÔNG fallback sang selector
+            throw new UploadFailure(503, "ERR_SERVICE_UNAVAILABLE", "Không thể xác minh quyền phòng khám lúc này.");
+        }
+
+        if (decision == null || !decision.Allowed || decision.TenantId == Guid.Empty)
+        {
+            throw new UploadFailure(403, "ERR_FORBIDDEN", "Không có quyền truy cập vào phòng khám này.");
+        }
+
+        return decision.TenantId;
     }
 
     private static Guid ParseGuid(string raw, string field)

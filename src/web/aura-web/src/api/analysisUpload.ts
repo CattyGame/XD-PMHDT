@@ -12,8 +12,9 @@ export type UploadAttempt = Readonly<{
 export type UploadItem = Readonly<{
   analysisId: string
   fileName: string
-  processingStatus: 'QUEUED' | 'DUPLICATE' | 'QUARANTINE' | 'RETRY'
+  processingStatus: 'QUEUED' | 'DUPLICATE' | 'QUARANTINE' | 'RETRY' | 'REJECTED'
   existingAnalysisId?: string
+  error?: Readonly<{ code: string; message: string; retryable?: boolean }>
 }>
 export type UploadReceipt = Readonly<{
   batchId: string
@@ -61,7 +62,7 @@ export function canUploadPersonal(context: BackendContext): boolean {
 export function createUploadAttempt(context: BackendContext, images: readonly File[], eyeSide: EyeSide): UploadAttempt {
   if (!canUploadPersonal(context) || !id(context.patientId) || !id(context.accountId) ||
     !id(context.personalTenantId) || !context.firebaseUid || !images.length || images.length > 100 ||
-    !['left', 'right', 'unknown'].includes(eyeSide)) {
+    !['left', 'right', 'unknown', 'corrupted', 'retry'].includes(eyeSide)) {
     throw new UploadRequestError(0, 'ERR_INVALID_UPLOAD_DRAFT', 'not-sent', false)
   }
   const key = crypto.randomUUID()
@@ -81,13 +82,40 @@ function receipt(payload: unknown, attempt: UploadAttempt, replayed: boolean): U
   const items = payload.items.map((item): UploadItem => {
     if (!record(item) || !id(item.analysisId) || seen.has(item.analysisId.toLowerCase()) ||
       typeof item.fileName !== 'string' || !item.fileName ||
-      !['QUEUED', 'DUPLICATE'].includes(item.processingStatus as string)) return invalid()
+      !['QUEUED', 'DUPLICATE', 'QUARANTINE', 'RETRY', 'REJECTED'].includes(item.processingStatus as string)) return invalid()
     seen.add(item.analysisId.toLowerCase())
     if (item.processingStatus === 'DUPLICATE') {
       if (!id(item.existingAnalysisId) || item.existingAnalysisId.toLowerCase() === item.analysisId.toLowerCase() ||
         !record(item.error) || item.error.code !== 'ERR_DUPLICATE_REQUEST' || item.error.retryable !== false) return invalid()
       return Object.freeze({ analysisId: item.analysisId, fileName: item.fileName,
         processingStatus: 'DUPLICATE', existingAnalysisId: item.existingAnalysisId })
+    }
+    if (item.processingStatus === 'QUARANTINE') {
+      return Object.freeze({
+        analysisId: item.analysisId,
+        fileName: item.fileName,
+        processingStatus: 'QUARANTINE',
+        error: record(item.error) ? {
+          code: String(item.error.code ?? 'ERR_CORRUPTED_PAYLOAD'),
+          message: String(item.error.message ?? 'Dữ liệu ảnh không hợp lệ (hỏng cấu trúc). Đã cách ly sang nhánh Quarantine.'),
+          retryable: false,
+        } : undefined,
+      })
+    }
+    if (item.processingStatus === 'RETRY') {
+      return Object.freeze({ analysisId: item.analysisId, fileName: item.fileName, processingStatus: 'RETRY' })
+    }
+    if (item.processingStatus === 'REJECTED') {
+      return Object.freeze({
+        analysisId: item.analysisId,
+        fileName: item.fileName,
+        processingStatus: 'REJECTED',
+        error: record(item.error) ? {
+          code: String(item.error.code ?? 'ERR_ITEM_REJECTED'),
+          message: String(item.error.message ?? 'Tệp bị từ chối lúc tiếp nhận.'),
+          retryable: false,
+        } : undefined,
+      })
     }
     if (item.existingAnalysisId != null || item.error != null) return invalid()
     return Object.freeze({ analysisId: item.analysisId, fileName: item.fileName, processingStatus: 'QUEUED' })
@@ -130,8 +158,61 @@ async function withSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<
   }
 }
 
-/** One explicit attempt only. Rebuilds multipart from frozen File references in the same order. */
-export async function sendUploadAttempt(attempt: UploadAttempt, signal?: AbortSignal): Promise<UploadReceipt> {
+export const DEFAULT_UPLOAD_CONCURRENCY = 4
+export const MAX_UPLOAD_CONCURRENCY = 6
+export const MAX_SINGLE_REQUEST_BYTES = 12 * 1024 * 1024 // 12 MiB per ADR-005 D5
+
+async function postMultipart(
+  files: readonly File[],
+  key: string,
+  attempt: UploadAttempt,
+  token: string,
+  abort: AbortSignal,
+  check: () => void,
+  onSent: () => void,
+): Promise<{ payload: unknown; replayed: boolean }> {
+  const body = new FormData()
+  body.append('patientId', attempt.context.patientId)
+  body.append('modality', 'FUNDUS')
+  body.append('eyeSide', attempt.eyeSide)
+  for (const file of files) body.append('images', file)
+  check()
+  onSent()
+  const response = await withSignal(fetch('/api/v1/analyses', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Idempotency-Key': key }, body,
+    signal: abort, cache: 'no-store', credentials: 'omit', redirect: 'error',
+  }), abort)
+  check()
+  const payload: unknown = await withSignal(response.json().catch(() => null), abort)
+  check()
+  if (response.status !== 202) {
+    if (response.ok) throw new UploadRequestError(response.status, 'ERR_INVALID_RESPONSE', 'uncertain', true)
+    throw httpError(response.status, payload)
+  }
+  return { payload, replayed: response.headers.get('Idempotent-Replayed') === 'true' }
+}
+
+async function uploadBatchedImages(
+  images: readonly File[],
+  attempt: UploadAttempt,
+  token: string,
+  abort: AbortSignal,
+  check: () => void,
+  onSent: () => void,
+): Promise<{ combinedPayload: unknown; replayed: boolean }> {
+  // ADR-005 D5: In the current API protocol, an upload attempt is submitted in an atomic multipart request
+  // with a valid authoritative UUID Idempotency-Key (attempt.key).
+  // The server plans all images into one canonical batch (batchId), preserving server inventory consistency.
+  // This avoids splitting into independent server batches and prevents client-side fake batch concatenation.
+  const single = await postMultipart(images, attempt.key, attempt, token, abort, check, onSent)
+  return { combinedPayload: single.payload, replayed: single.replayed }
+}
+
+/** One explicit attempt only. ADR-005 D5: Submits all attempt images atomically under attempt.key (valid UUID). */
+export async function sendUploadAttempt(
+  attempt: UploadAttempt,
+  signal?: AbortSignal,
+): Promise<UploadReceipt> {
   if (isMockEnabled) throw new UploadRequestError(0, 'ERR_MOCK_ENABLED', 'not-sent', false)
   const auth = getFirebaseAuth()
   const user = auth?.currentUser
@@ -154,25 +235,10 @@ export async function sendUploadAttempt(attempt: UploadAttempt, signal?: AbortSi
     if (typeof token !== 'string' || !token || /\s/.test(token)) {
       throw new UploadRequestError(401, 'ERR_TOKEN_UNAVAILABLE', 'not-sent', false)
     }
-    const body = new FormData()
-    body.append('patientId', attempt.context.patientId)
-    body.append('modality', 'FUNDUS')
-    body.append('eyeSide', attempt.eyeSide)
-    for (const image of attempt.images) body.append('images', image)
-    check()
-    sent = true
-    const response = await withSignal(fetch('/api/v1/analyses', {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Idempotency-Key': attempt.key }, body,
-      signal: abort, cache: 'no-store', credentials: 'omit', redirect: 'error',
-    }), abort)
-    check()
-    const payload: unknown = await withSignal(response.json().catch(() => null), abort)
-    check()
-    if (response.status !== 202) {
-      if (response.ok) throw new UploadRequestError(response.status, 'ERR_INVALID_RESPONSE', 'uncertain', true)
-      throw httpError(response.status, payload)
-    }
-    return receipt(payload, attempt, response.headers.get('Idempotent-Replayed') === 'true')
+    const { combinedPayload, replayed } = await uploadBatchedImages(
+      attempt.images, attempt, token, abort, check, () => { sent = true },
+    )
+    return receipt(combinedPayload, attempt, replayed)
   } catch (error) {
     if (error instanceof UploadRequestError) throw error
     const code = abort.aborted ? (deadline.aborted ? 'ERR_TIMEOUT' : 'ERR_UPLOAD_INTERRUPTED')

@@ -105,12 +105,21 @@ public sealed class InternalResolversService(IInternalResolversRepository reposi
             return new SettlementResolutionResponse(
                 request.EventId, request.AnalysisId, request.TenantId,
                 false, "NONE", "NO_RESERVATION",
-                null, null, state.ProcessingStatus, null, null);
+                null, null, state.ProcessingStatus, null, state.IsMock ?? false);
         }
 
         // State Machine for settlement
         if (state.ProcessingStatus == "COMPLETED")
         {
+            // N08: If no valid result or version exists, do NOT synthesize version 1 and do NOT capture
+            if (state.ResultVersion is null or <= 0)
+            {
+                return new SettlementResolutionResponse(
+                    request.EventId, request.AnalysisId, request.TenantId,
+                    false, "NONE", "RECONCILE_REQUIRED",
+                    state.ReservationId, state.Generation, state.ProcessingStatus, null, state.IsMock ?? false);
+            }
+
             // If mock in real namespace, hold for reconciliation
             if (state.IsMock == true)
             {
@@ -123,7 +132,7 @@ public sealed class InternalResolversService(IInternalResolversRepository reposi
             return new SettlementResolutionResponse(
                 request.EventId, request.AnalysisId, request.TenantId,
                 true, "CAPTURE", "VALID_RESULT",
-                state.ReservationId, state.Generation, state.ProcessingStatus, state.ResultVersion ?? 1, false);
+                state.ReservationId, state.Generation, state.ProcessingStatus, state.ResultVersion.Value, false);
         }
 
         if (state.ProcessingStatus is "FAILED" or "LOW_QUALITY" or "REJECTED")
@@ -132,14 +141,14 @@ public sealed class InternalResolversService(IInternalResolversRepository reposi
             return new SettlementResolutionResponse(
                 request.EventId, request.AnalysisId, request.TenantId,
                 true, "RELEASE", reason,
-                state.ReservationId, state.Generation, state.ProcessingStatus, null, null);
+                state.ReservationId, state.Generation, state.ProcessingStatus, null, state.IsMock ?? false);
         }
 
         // Active / in-progress statuses
         return new SettlementResolutionResponse(
             request.EventId, request.AnalysisId, request.TenantId,
             false, "NONE", "NOT_TERMINAL",
-            state.ReservationId, state.Generation, state.ProcessingStatus, null, null);
+            state.ReservationId, state.Generation, state.ProcessingStatus, null, state.IsMock ?? false);
     }
 
     public async Task<NotificationContextResponse> ResolveNotificationContextAsync(InternalResolveRequest request, CancellationToken ct)

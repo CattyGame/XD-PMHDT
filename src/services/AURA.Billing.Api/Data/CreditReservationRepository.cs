@@ -278,7 +278,8 @@ public sealed class CreditReservationRepository(
     public async Task<BatchRefundResponse> ExecuteBatchRefundAsync(
         BatchRefundRequest request,
         Guid batchIdempotencyKey,
-        CancellationToken cancellationToken)
+        bool canRefundCaptured = false,
+        CancellationToken cancellationToken = default)
     {
         if (request.Items is null || request.Items.Count == 0)
         {
@@ -456,6 +457,30 @@ public sealed class CreditReservationRepository(
                 else if (string.Equals(stored.State, "CAPTURED", StringComparison.OrdinalIgnoreCase) &&
                          itemReason.Contains("REFUND", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (!canRefundCaptured)
+                    {
+                        itemResults[originalIndex] = new BatchRefundItemResult(
+                            item.ReservationId, "FORBIDDEN", false, "Yêu cầu scope billing:refund để hoàn tiền reservation đã CAPTURED.");
+                        continue;
+                    }
+                    // ADR-005 D4 and R09: Full-refund toi da mot lan moi captured reservation (doi key/reason khong tao refund moi)
+                    await using (var checkPriorRefundCmd = new NpgsqlCommand("""
+                        SELECT 1 FROM billing.credit_ledger_entries
+                        WHERE reservation_id = @reservation_id 
+                          AND entry_type = 'ADJUSTMENT'
+                          AND (metadata->>'operation' = 'REFUND' OR metadata->>'operation' = 'BATCH_REFUND')
+                        LIMIT 1;
+                        """, connection, transaction))
+                    {
+                        checkPriorRefundCmd.Parameters.AddWithValue("reservation_id", item.ReservationId);
+                        var priorRefund = await checkPriorRefundCmd.ExecuteScalarAsync(cancellationToken);
+                        if (priorRefund != null)
+                        {
+                            itemResults[originalIndex] = new BatchRefundItemResult(
+                                item.ReservationId, "ALREADY_REFUNDED", false, "Reservation da duoc hoan tien truoc do (toi da mot lan).");
+                            continue;
+                        }
+                    }
                     int balanceAfter;
                     await using (var updateWalletCmd = new NpgsqlCommand("""
                         UPDATE billing.credit_wallets

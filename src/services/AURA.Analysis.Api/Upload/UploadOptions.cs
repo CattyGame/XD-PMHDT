@@ -8,7 +8,7 @@ public sealed class UploadOptions
     public long MaxImageBytes { get; set; } = 10_485_760;          // 10 MiB mỗi ảnh
     public long MaxImagePixels { get; set; } = 16_000_000;         // 16 triệu pixel
     public int MaxImagesPerRequest { get; set; } = 100;
-    public long MaxRequestBytes { get; set; } = 1_101_004_800;     // 1.050 MiB gồm overhead multipart
+    public long MaxRequestBytes { get; set; } = 104_857_600;       // 100 MiB (Gateway boundary)
 
     public string OriginalsContainer { get; set; } = "aura-originals";
 }

@@ -242,7 +242,57 @@ public sealed class OrderRepository(
                 payload.TransactionId, 0, 0, false);
         }
 
-        // 3. Verify amount and currency
+        // 3. D4 ADR-005 & R06: Verify payment status from gateway callback
+        // Validate callback status against allowlist: SUCCESS, PENDING, FAILED
+        var callbackStatus = payload.PaymentStatus?.Trim().ToUpperInvariant() ?? "UNKNOWN";
+        if (callbackStatus == "PENDING")
+        {
+            // Do not credit wallet, do not complete order, keep order as PENDING
+            await transaction.CommitAsync(cancellationToken);
+            var currentBalance = await GetWalletBalanceAsync(
+                connection, null, order.BillingOwnerType, order.BillingOwnerId, order.Environment, cancellationToken);
+            return new PaymentCallbackResult(
+                true, "PENDING", "Giao dịch thanh toán đang được xử lý tại cổng thanh toán.",
+                payload.TransactionId, 0, currentBalance, false);
+        }
+
+        if (callbackStatus != "SUCCESS")
+        {
+            // Callback failed or cancelled -> update order status to CANCELLED (complying with CHECK constraint: PENDING, COMPLETED, CANCELLED)
+            await using var cancelCmd = new NpgsqlCommand("""
+                UPDATE billing.orders SET status = 'CANCELLED', updated_at = now() WHERE id = @id;
+                """, connection, transaction);
+            cancelCmd.Parameters.AddWithValue("id", order.Id);
+            await cancelCmd.ExecuteNonQueryAsync(cancellationToken);
+
+            // Audit payment attempt as FAILED
+            var paymentAuditJson = JsonSerializer.Serialize(payload);
+            await using var insertFailedPaymentCmd = new NpgsqlCommand("""
+                INSERT INTO billing.payments (
+                    id, order_id, payment_method, transaction_id, amount, currency, status,
+                    signature, raw_payload, created_at, updated_at
+                ) VALUES (
+                    gen_random_uuid(), @order_id, @payment_method, @transaction_id, @amount, @currency, 'FAILED',
+                    @signature, @raw_payload::jsonb, now(), now()
+                );
+                """, connection, transaction);
+            insertFailedPaymentCmd.Parameters.AddWithValue("order_id", order.Id);
+            insertFailedPaymentCmd.Parameters.AddWithValue("payment_method", paymentMethod);
+            insertFailedPaymentCmd.Parameters.AddWithValue("transaction_id", payload.TransactionId);
+            insertFailedPaymentCmd.Parameters.AddWithValue("amount", payload.Amount);
+            insertFailedPaymentCmd.Parameters.AddWithValue("currency", payload.Currency);
+            insertFailedPaymentCmd.Parameters.AddWithValue("signature", payload.Signature);
+            insertFailedPaymentCmd.Parameters.AddWithValue("raw_payload", paymentAuditJson);
+            await insertFailedPaymentCmd.ExecuteNonQueryAsync(cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+
+            return new PaymentCallbackResult(
+                false, "CANCELLED", $"Thanh toán thất bại từ cổng thanh toán (Status: {callbackStatus}). Đơn hàng đã hủy.",
+                payload.TransactionId, 0, 0, false);
+        }
+
+        // 4. Verify amount and currency
         if (payload.Amount != order.PriceAmountSnapshot ||
             !string.Equals(payload.Currency, order.CurrencyCodeSnapshot, StringComparison.OrdinalIgnoreCase))
         {
