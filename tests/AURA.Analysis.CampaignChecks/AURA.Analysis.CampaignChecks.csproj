@@ -10,6 +10,8 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
 
+    <Compile Include="../../src/services/AURA.Analysis.Api/Campaign/CampaignCsvWriter.cs"
+             Link="CampaignCsvWriter.cs" />
     <Compile Include="../../src/services/AURA.Analysis.Api/Campaign/CampaignModels.cs"
              Link="CampaignModels.cs" />
     <Compile Include="../../src/services/AURA.Analysis.Api/Campaign/CampaignRepository.cs"
