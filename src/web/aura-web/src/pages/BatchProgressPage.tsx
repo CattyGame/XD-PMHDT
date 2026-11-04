@@ -9,6 +9,8 @@ import {
 } from '../api/batchProgress'
 import './BatchProgressPage.css'
 import ReportDownloadButton from '../components/ReportDownloadButton'
+import { calculateBatchPercent, completedBatchCount } from '../api/bulkUploadUi'
+import { getBatchPreview, subscribeBatchPreviews } from '../api/batchLocalPreviews'
 
 type View = {
   phase: 'loading' | 'accepted' | 'tracking' | 'retrying' | 'error'
@@ -99,28 +101,35 @@ function useProgress(batchId: string, context: BackendContext) {
   return { view, retry }
 }
 
-function ItemRow({ item }: { item: BatchItem }) {
-  return <li className="batch-item">
-    <div><strong>{item.fileName || 'Ảnh không có tên'}</strong> <code>{item.analysisId}</code></div>
-    <p>{statusLabels[item.processingStatus]}</p>
-    {item.processingStatus === 'COMPLETED' && <p>
-      {item.riskLevel ? `Mức nguy cơ: ${item.riskLevel}. ` : ''}
-      {item.reviewStatus === 'PENDING' ? 'Đang chờ bác sĩ review.' : `Trạng thái review: ${item.reviewStatus}.`}
-    </p>}
-    {item.error && <p role="note">{item.error.message || 'Không thể hoàn tất phân tích ảnh.'}
-      {item.error.retryable ? ' Có thể đủ điều kiện thử lại theo chính sách backend.' : ''}
-    </p>}
-    {/* Chỉ cho mở kết quả khi AI đã xử lý hoàn tất */}
-    {item.processingStatus === 'COMPLETED' && (
-      <p>
-        <Link to={`/analyses/${item.analysisId}`}>
-        Xem kết quả chi tiết
-        </Link>
-        </p>
-      )}
-    {item.processingStatus === 'DUPLICATE' && item.existingAnalysisId &&
-      <p>Ảnh trùng; tham chiếu analysis có quyền: <code>{item.existingAnalysisId}</code></p>}
-  </li>
+function ItemThumbnail({ item, batchId, context }: { item: BatchItem; batchId: string; context: BackendContext }) {
+  const [preview, setPreview] = useState(() => getBatchPreview(batchId, context.firebaseUid, item.fileName))
+  useEffect(() => subscribeBatchPreviews(() => {
+    setPreview(getBatchPreview(batchId, context.firebaseUid, item.fileName))
+  }), [batchId, context.firebaseUid, item.fileName])
+  return preview
+    ? <img className="batch-thumbnail" src={preview} alt={`Ảnh thu nhỏ ${item.fileName || ''}`} />
+    : <span className="batch-thumbnail-placeholder" title="API batch chưa trả thumbnail; chỉ có ảnh tạm trong tab đã upload">Chưa có ảnh</span>
+}
+
+function ItemRow({ item, batchId, context }: { item: BatchItem; batchId: string; context: BackendContext }) {
+  return <tr className="batch-table-row">
+    <td><ItemThumbnail item={item} batchId={batchId} context={context} /></td>
+    <td><strong>{item.fileName || 'Ảnh không có tên'}</strong><div><code>{item.analysisId}</code></div></td>
+    <td><span className={`batch-status batch-status--${item.processingStatus.toLowerCase()}`}>
+      {item.processingStatus === 'COMPLETED' ? '✓ ' : ''}{statusLabels[item.processingStatus] || item.processingStatus}
+    </span>
+      {item.processingStatus === 'COMPLETED' && <div>{item.riskLevel ? `Mức nguy cơ: ${item.riskLevel}. ` : ''}
+        {item.reviewStatus === 'PENDING' ? 'Đang chờ bác sĩ review.' : `Trạng thái review: ${item.reviewStatus}.`}</div>}
+      {item.error && <div role="note" className="batch-item-error">{item.error.message || 'Không thể hoàn tất phân tích ảnh.'}
+        {item.error.retryable ? ' Backend có thể tự thử lại.' : ''}</div>}
+      {item.processingStatus === 'DUPLICATE' && item.existingAnalysisId &&
+        <div>Tham chiếu ảnh trùng: <code>{item.existingAnalysisId}</code></div>}
+    </td>
+    <td title="GET Batch hiện không trả thời gian xử lý riêng từng ảnh">Chưa có từ API</td>
+    <td>{item.processingStatus === 'COMPLETED'
+      ? <Link to={`/analyses/${item.analysisId}`}>Xem kết quả chi tiết</Link>
+      : <span>—</span>}</td>
+  </tr>
 }
 
 function BatchViewer({ batchId, context }: { batchId: string; context: BackendContext }) {
@@ -156,10 +165,26 @@ function BatchViewer({ batchId, context }: { batchId: string; context: BackendCo
         <span>Lỗi: <strong>{view.data.summary.failed}</strong></span>
         <span>Trùng: <strong>{view.data.summary.duplicate}</strong></span>
       </div>
+      <div className="batch-progress-summary">
+        <label htmlFor="batch-overall-progress"><strong>Tiến độ batch: {calculateBatchPercent(view.data.summary, view.data.totalDeclared, view.data.admissionRejected ?? 0)}%</strong></label>
+        <progress id="batch-overall-progress" aria-label="Tiến độ xử lý batch" max={100}
+          value={calculateBatchPercent(view.data.summary, view.data.totalDeclared, view.data.admissionRejected ?? 0)} />
+        <p>Đã có kết quả cuối: {completedBatchCount(view.data.summary, view.data.admissionRejected ?? 0)}/{view.data.totalDeclared ?? view.data.summary.total} ảnh
+          (bao gồm hoàn tất, lỗi, trùng và từ chối tiếp nhận nếu API cung cấp).
+        </p>
+      </div>
       <h3>Trạng thái từng ảnh</h3>
-      <ul className="batch-items">{view.data.items.map((item) => <ItemRow item={item} key={item.analysisId} />)}</ul>
-      <ReportDownloadButton resource="batches" resourceId={batchId} format="pdf" context={context} />
-      <ReportDownloadButton resource="batches" resourceId={batchId} format="csv" context={context} />
+      <div className="batch-table-scroll"><table className="batch-detail-table">
+        <thead><tr><th scope="col">Thumbnail</th><th scope="col">Ảnh / ID</th>
+          <th scope="col">Trạng thái / lý do</th><th scope="col">Thời gian xử lý</th><th scope="col">Thao tác</th></tr></thead>
+        <tbody>{view.data.items.map((item) => <ItemRow item={item} batchId={batchId} context={context} key={item.analysisId} />)}</tbody>
+      </table></div>
+      <p className="batch-disclaimer">Ảnh thu nhỏ chỉ có sẵn tạm thời trong tab gửi ảnh; sau khi tải lại trang cần API ảnh riêng tư của M2.
+        API batch hiện chưa cung cấp thời gian xử lý từng ảnh.</p>
+      {isBatchTerminal(view.data) ? <div className="batch-reports" aria-label="Báo cáo batch đã kết thúc">
+        <ReportDownloadButton resource="batches" resourceId={batchId} format="pdf" context={context} />
+        <ReportDownloadButton resource="batches" resourceId={batchId} format="csv" context={context} />
+      </div> : <p>Báo cáo PDF/CSV sẽ được mở khi batch đã kết thúc, tránh xuất dữ liệu chưa ổn định.</p>}
     </>}
     <button type="button" onClick={retry}>Tải lại trạng thái (chỉ GET)</button>
   </section>
@@ -182,7 +207,7 @@ export default function BatchProgressPage() {
     void navigate(`/batches/${id.toLowerCase()}`)
   }
   return <main className="batch-page">
-    <nav><Link to="/">Trang chủ</Link> · <Link to="/upload">Tải ảnh cá nhân</Link></nav>
+    <nav><Link to="/">Trang chủ</Link> · <Link to="/upload">Tải ảnh cá nhân</Link> · <Link to="/clinic-upload">Tải ảnh phòng khám</Link></nav>
     <h1>Theo dõi batch ảnh võng mạc</h1>
     <p>Mở batch do website hoặc hệ thống camera/NiFi tạo. Analysis API sẽ kiểm tra quyền tài khoản hiện tại trên mỗi lần GET.</p>
     <form onSubmit={submit} className="batch-lookup">
