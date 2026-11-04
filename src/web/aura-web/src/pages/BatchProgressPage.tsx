@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
@@ -8,6 +8,7 @@ import {
   BatchProgressError, type BatchProgress, type BatchItem,
 } from '../api/batchProgress'
 import './BatchProgressPage.css'
+import ReportDownloadButton from '../components/ReportDownloadButton'
 
 type View = {
   phase: 'loading' | 'accepted' | 'tracking' | 'retrying' | 'error'
@@ -20,6 +21,7 @@ const statusLabels: Record<string, string> = {
   RETRY_READY: 'Chờ thử lại', COMPLETED: 'Đã hoàn tất AI', FAILED: 'Phân tích thất bại',
   LOW_QUALITY: 'Ảnh không đạt chất lượng', REJECTED: 'Đã từ chối', DUPLICATE: 'Ảnh trùng',
   IN_PROGRESS: 'Đang xử lý', PARTIAL_FAILED: 'Hoàn tất một phần, có ảnh lỗi',
+  QUARANTINE: 'Đã cách ly (Quarantine)', RETRY: 'Chờ tự động thử lại',
 }
 
 /** Poll at most one GET at a time. Timer and in-flight GET are aborted on navigation or session change. */
@@ -143,6 +145,10 @@ function BatchViewer({ batchId, context }: { batchId: string; context: BackendCo
       : (statusLabels[view.data.batchStatus] ?? view.data.batchStatus)}</strong>
         {isBatchTerminal(view.data) ? ' — đã dừng polling.' : ' — trạng thái sẽ tự cập nhật.'}</p>
       <p>Ngày tạo: {new Date(view.data.createdAt).toLocaleString('vi-VN')}</p>
+      {view.data.totalDeclared !== undefined && <p aria-label="Tiếp nhận và tải ảnh">
+        Đã khai báo: {view.data.totalDeclared} · Được nhận xử lý: {view.data.summary.total} ·
+        Từ chối tiếp nhận: {view.data.admissionRejected} · Chưa hoàn tất tải/đối soát: {view.data.uploadPending}
+      </p>}
       <div className="batch-summary" aria-label="Tổng hợp batch">
         <span>Tổng ảnh: <strong>{view.data.summary.total}</strong></span>
         <span>Đang xử lý: <strong>{view.data.summary.active}</strong></span>
@@ -152,6 +158,8 @@ function BatchViewer({ batchId, context }: { batchId: string; context: BackendCo
       </div>
       <h3>Trạng thái từng ảnh</h3>
       <ul className="batch-items">{view.data.items.map((item) => <ItemRow item={item} key={item.analysisId} />)}</ul>
+      <ReportDownloadButton resource="batches" resourceId={batchId} format="pdf" context={context} />
+      <ReportDownloadButton resource="batches" resourceId={batchId} format="csv" context={context} />
     </>}
     <button type="button" onClick={retry}>Tải lại trạng thái (chỉ GET)</button>
   </section>
@@ -163,6 +171,8 @@ export default function BatchProgressPage() {
   const navigate = useNavigate()
   const [input, setInput] = useState('')
   const [validation, setValidation] = useState('')
+  const clinicContextId = new URLSearchParams(window.location.search).get('clinicContextId') || undefined
+  const context = useMemo(() => state.status === 'ready' ? { ...state.context, clinicContextId } : undefined, [state, clinicContextId])
   if (state.status !== 'ready') return <BackendSessionNotice />
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -183,7 +193,7 @@ export default function BatchProgressPage() {
     </form>
     {validation && <p role="alert">{validation}</p>}
     {batchId && (validBatchId(batchId)
-      ? <BatchViewer key={`${state.context.firebaseUid}:${state.context.accountId}:${batchId}`} batchId={batchId} context={state.context} />
+      ? <BatchViewer key={`${state.context.firebaseUid}:${state.context.accountId}:${batchId}`} batchId={batchId} context={context!} />
       : <p role="alert">Batch ID trên đường dẫn không hợp lệ.</p>)}
     <p className="batch-disclaimer">Receipt hoặc HTTP 202 chỉ xác nhận tiếp nhận ảnh; chỉ trạng thái COMPLETED từ GET mới xác nhận AI đã hoàn tất.</p>
   </main>

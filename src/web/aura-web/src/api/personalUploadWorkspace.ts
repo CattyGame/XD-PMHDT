@@ -1,11 +1,12 @@
 import type { BackendContext } from './backendContext'
 import {
-  createUploadAttempt, sendUploadAttempt, UploadRequestError,
+  createUploadAttempt, UploadRequestError,
   type EyeSide, type UploadAttempt, type UploadReceipt,
 } from './analysisUpload'
+import { sendItemUploadAttempt, loadUploadInventory, resumeItemUpload, type UploadInventory } from './itemUpload'
 
 export type UploadView = Readonly<{
-  phase: 'editing' | 'validating' | 'sending' | 'error' | 'accepted'
+  phase: 'editing' | 'validating' | 'restoring' | 'sending' | 'error' | 'accepted'
   images: readonly File[]
   eyeSide: EyeSide
   attempt?: UploadAttempt
@@ -13,6 +14,8 @@ export type UploadView = Readonly<{
   error?: UploadRequestError
   validation?: string
   uncertain: boolean
+  inventory?: UploadInventory
+  resumeBatchId?: string
 }>
 
 const empty = (): UploadView => Object.freeze({ phase: 'editing', images: Object.freeze([]), eyeSide: 'left', uncertain: false })
@@ -28,17 +31,39 @@ function createWorkspace(context: BackendContext) {
     for (const listener of listeners) listener()
   }
   const canReset = () => state.phase !== 'sending' && state.phase !== 'validating' && (
-    state.phase === 'accepted' || !state.attempt ||
+    state.phase === 'accepted' || (!state.attempt && !state.resumeBatchId) ||
     (!state.uncertain && ['not-sent', 'rejected'].includes(state.error?.disposition ?? '')))
 
+  function rememberBatch(batchId?: string) {
+    const url = new URL(window.location.href)
+    if (batchId) url.searchParams.set('uploadBatchId', batchId)
+    else url.searchParams.delete('uploadBatchId')
+    window.history.replaceState(window.history.state, '', url)
+  }
+  async function restoreFromUrl() {
+    const batchId = new URL(window.location.href).searchParams.get('uploadBatchId')
+    if (!batchId || state.attempt || state.receipt || state.phase === 'restoring' || state.resumeBatchId === batchId) return
+    const revision = ++run
+    controller = new AbortController()
+    publish({ ...state, phase: 'restoring' })
+    try {
+      const inventory = await loadUploadInventory(context, batchId, { signal: controller.signal })
+      if (revision === run) publish({ ...state, phase: 'editing', resumeBatchId: batchId, inventory, uncertain: false })
+    } catch (cause) {
+      if (revision !== run) return
+      const error = cause instanceof UploadRequestError ? cause : new UploadRequestError(0, 'ERR_NETWORK', 'uncertain', true)
+      publish({ ...empty(), phase: 'error', error, resumeBatchId: batchId, uncertain: error.code !== 'ERR_UPLOAD_EXPIRED' })
+    }
+  }
+
   async function selectImages(input: readonly File[]) {
-    if (state.attempt || state.phase === 'sending') return
+    if (state.attempt || state.phase === 'sending' || state.phase === 'restoring') return
     const revision = ++selection
     const files = [...input]
     publish({ ...state, images: Object.freeze([]), phase: 'validating', validation: undefined, error: undefined })
     let problem: string | undefined
     if (files.length > 100) problem = 'Mỗi lần chỉ được chọn tối đa 100 ảnh.'
-    else if (files.some((file) => !['image/jpeg', 'image/png'].includes(file.type))) {
+    else if (files.some((file) => !['image/jpeg', 'image/png'].includes(file.type) && !/\.(jpe?g|png)$/i.test(file.name))) {
       problem = 'Chỉ hỗ trợ ảnh JPG và PNG.'
     } else if (files.some((file) => file.size <= 0 || file.size > 10 * 1024 * 1024)) {
       problem = 'Mỗi ảnh phải có dữ liệu và không được vượt quá 10 MB.'
@@ -54,7 +79,8 @@ function createWorkspace(context: BackendContext) {
             }
           } finally { bitmap.close() }
         } catch {
-          problem = `Không thể đọc ảnh "${file.name}".`
+          // Bỏ qua lỗi decode bitmap ở client để cho phép tải tệp hỏng (corrupted file)
+          // lên pipeline kiểm định Quarantine của backend theo kịch bản demo (Scenario 3).
         }
         if (revision !== selection) return
         if (problem) break
@@ -65,19 +91,19 @@ function createWorkspace(context: BackendContext) {
   }
 
   function setEyeSide(eyeSide: EyeSide) {
-    if (state.attempt || state.phase !== 'editing' || !['left', 'right', 'unknown', 'corrupted', 'retry'].includes(eyeSide)) return
+    if (state.attempt || state.resumeBatchId || state.phase !== 'editing' || !['left', 'right', 'unknown'].includes(eyeSide)) return
     publish({ ...state, eyeSide })
   }
 
   async function send() {
     if (state.phase === 'sending' || state.phase === 'validating' || state.phase === 'accepted' ||
       (state.phase === 'error' && !state.error?.canRetry)) return
-    if (!state.images.length) {
+    if (!state.images.length && !state.resumeBatchId) {
       publish({ ...state, validation: 'Vui lòng chọn ít nhất một ảnh.' })
       return
     }
-    let attempt: UploadAttempt
-    try { attempt = state.attempt ?? createUploadAttempt(context, state.images, state.eyeSide) }
+    let attempt: UploadAttempt | undefined
+    try { attempt = state.attempt ?? (state.resumeBatchId ? undefined : createUploadAttempt(context, state.images, state.eyeSide)) }
     catch {
       publish({ ...state, validation: 'Không tạo được lượt gửi cho hồ sơ hiện tại.' })
       return
@@ -87,7 +113,14 @@ function createWorkspace(context: BackendContext) {
     const signal = controller.signal
     publish({ ...state, attempt, phase: 'sending', error: undefined, validation: undefined })
     try {
-      const receipt = await sendUploadAttempt(attempt, signal)
+      const onInventory = (inventory: UploadInventory) => {
+        if (revision !== run) return
+        rememberBatch(inventory.batchId)
+        publish({ ...state, inventory, resumeBatchId: inventory.batchId })
+      }
+      const receipt = attempt
+        ? await sendItemUploadAttempt(attempt, { signal, onInventory })
+        : await resumeItemUpload(context, state.resumeBatchId!, state.images, { signal, onInventory })
       if (revision !== run) return
       publish({ ...state, phase: 'accepted', receipt, uncertain: false })
     } catch (error) {
@@ -95,7 +128,7 @@ function createWorkspace(context: BackendContext) {
       const failure = error instanceof UploadRequestError ? error
         : new UploadRequestError(0, 'ERR_OUTCOME_UNKNOWN', 'uncertain', true)
       publish({ ...state, phase: 'error', error: failure,
-        uncertain: state.uncertain || failure.disposition === 'uncertain' || failure.disposition === 'conflict' })
+        uncertain: failure.code !== 'ERR_UPLOAD_EXPIRED' && (state.uncertain || failure.disposition === 'uncertain' || failure.disposition === 'conflict') })
     } finally {
       if (revision === run) controller = undefined
     }
@@ -111,14 +144,16 @@ function createWorkspace(context: BackendContext) {
         error: new UploadRequestError(0, 'ERR_UPLOAD_INTERRUPTED', 'uncertain', true) })
     } else if (state.phase === 'validating') {
       publish({ ...state, phase: 'editing', images: Object.freeze([]) })
+    } else if (state.phase === 'restoring') {
+      publish({ ...state, phase: 'editing' })
     }
   }
 
   return {
     getSnapshot: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
-    selectImages, setEyeSide, send, release, canReset,
-    reset: () => { if (canReset()) { selection += 1; publish(empty()) } },
+    selectImages, setEyeSide, send, release, canReset, restoreFromUrl,
+    reset: () => { if (canReset()) { selection += 1; rememberBatch(); publish(empty()) } },
   }
 }
 

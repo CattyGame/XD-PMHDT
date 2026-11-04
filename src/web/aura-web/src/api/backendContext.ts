@@ -10,6 +10,7 @@ export type BackendContext = Readonly<{
   personalTenantId: string
   displayName: string
   profileVersion: number
+  clinicContextId?: string
 }>
 
 export class BackendContextError extends Error {

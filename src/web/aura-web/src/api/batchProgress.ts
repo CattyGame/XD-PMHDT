@@ -6,7 +6,7 @@ import type { BackendContext } from './backendContext'
 export const BATCH_STATUSES = ['IN_PROGRESS', 'COMPLETED', 'PARTIAL_FAILED', 'FAILED'] as const
 export const PROCESSING_STATUSES = [
   'PENDING', 'QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED', 'RETRY_READY',
-  'LOW_QUALITY', 'REJECTED', 'DUPLICATE',
+  'LOW_QUALITY', 'REJECTED', 'DUPLICATE', 'QUARANTINE', 'RETRY',
 ] as const
 export type BatchStatus = typeof BATCH_STATUSES[number]
 export type ProcessingStatus = typeof PROCESSING_STATUSES[number]
@@ -25,6 +25,9 @@ export type BatchProgress = Readonly<{
   batchStatus: BatchStatus
   items: readonly BatchItem[]
   summary: Readonly<{ total: number; active: number; succeeded: number; failed: number; duplicate: number }>
+  totalDeclared?: number
+  admissionRejected?: number
+  uploadPending?: number
 }>
 export type BatchRead = Readonly<{ kind: 'accepted' }> | Readonly<{ kind: 'batch'; data: BatchProgress }>
 
@@ -59,12 +62,18 @@ export function parseBatchProgress(value: unknown, requestedId: string): BatchPr
     value.batchId.toLowerCase() !== requestedId.toLowerCase() ||
     typeof value.batchStatus !== 'string' || !BATCH_STATUSES.includes(value.batchStatus as BatchStatus) ||
     typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt)) ||
-    !Array.isArray(value.items) || value.items.length < 1 || value.items.length > 100 ||
+    !Array.isArray(value.items) || value.items.length > 100 ||
     !object(value.summary)) invalid()
   const summary = value.summary
   if (!count(summary.total) || !count(summary.active) || !count(summary.succeeded) ||
     !count(summary.failed) || !count(summary.duplicate) || summary.total !== value.items.length ||
     summary.active + summary.succeeded + summary.failed + summary.duplicate !== summary.total) invalid()
+  const hasAdmission = value.totalDeclared != null || value.admissionRejected != null || value.uploadPending != null
+  if (hasAdmission && (!count(value.totalDeclared) || !count(value.admissionRejected) || !count(value.uploadPending) ||
+    value.totalDeclared < 1 || value.totalDeclared > 100 ||
+    value.totalDeclared !== summary.total + value.admissionRejected + value.uploadPending)) invalid()
+  // Empty processing inventory is valid only for the declared-item protocol, not a malformed legacy batch.
+  if (!hasAdmission && value.items.length === 0) invalid()
   const seen = new Set<string>()
   const items: BatchItem[] = value.items.map((entry: unknown) => {
     if (!object(entry) || typeof entry.analysisId !== 'string' || !validBatchId(entry.analysisId) ||
@@ -104,6 +113,8 @@ export function parseBatchProgress(value: unknown, requestedId: string): BatchPr
       total: summary.total, active: summary.active, succeeded: summary.succeeded,
       failed: summary.failed, duplicate: summary.duplicate,
     },
+    ...(hasAdmission ? { totalDeclared: value.totalDeclared as number, admissionRejected: value.admissionRejected as number,
+      uploadPending: value.uploadPending as number } : {}),
   }
 }
 
@@ -142,7 +153,9 @@ export async function getBatchProgress(
     if (typeof token !== 'string' || !token || /\s/.test(token)) {
       throw new BatchProgressError(401, 'ERR_TOKEN_UNAVAILABLE', false)
     }
-    const response = await fetch(`/api/v1/batches/${batchId}`, {
+    if (context.clinicContextId && !validBatchId(context.clinicContextId)) throw new BatchProgressError(400, 'ERR_INVALID_CLINIC_ID', false)
+    const selector = context.clinicContextId ? `?clinicContextId=${encodeURIComponent(context.clinicContextId)}` : ''
+    const response = await fetch(`/api/v1/batches/${batchId}${selector}`, {
       method: 'GET', headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store', credentials: 'omit', redirect: 'error', signal: abort,
     })

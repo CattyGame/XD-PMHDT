@@ -13,6 +13,7 @@ import AppRouter from './AppRouter'
 import AnalysisResultPage from '../pages/AnalysisResultPage'
 import NotificationInboxPage from '../pages/NotificationInboxPage'
 import CampaignManagementPage from '../pages/CampaignManagementPage'
+import ClinicUploadPage from '../pages/ClinicUploadPage'
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
@@ -33,6 +34,7 @@ export default function ApplicationRoutes() {
       <Route path="/router-demo/*" element={<DemoScope><AppRouter /></DemoScope>} />
       <Route path="/demo/*" element={<ProtectedRoute><DemoScope><App /></DemoScope></ProtectedRoute>} />
       <Route path="/upload" element={<ProtectedRoute><UploadPage /></ProtectedRoute>} />
+      <Route path="/clinic-upload" element={<ProtectedRoute><ClinicUploadPage /></ProtectedRoute>} />
       <Route path="/batches" element={<ProtectedRoute><BatchProgressPage /></ProtectedRoute>} />
       <Route path="/batches/:batchId" element={<ProtectedRoute><BatchProgressPage /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute><SessionHomePage /></ProtectedRoute>} />

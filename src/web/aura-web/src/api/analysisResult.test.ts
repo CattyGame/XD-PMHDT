@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendContext } from './backendContext'
 import {
-  AnalysisResultError, getAnalysisResult, getPrivateFileAccess, parseAnalysis,
+  AnalysisResultError, getAnalysisResult, getPrivateFileAccess, getProtectedContent, parseAnalysis,
 } from './analysisResult'
 
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), mock: false }))
@@ -94,14 +94,31 @@ describe('SCRUM-333 — Analysis Result client', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('gets a private signed URL without sending the token in the URL', async () => {
-    const url = 'https://private-storage.example.test/mask?signature=private'
+  it('gets an authenticated same-origin content route without putting the token in its URL', async () => {
+    const url = `/api/v1/analyses/${analysisId}/files/${fileId}/content`
     fetchMock.mockResolvedValueOnce(json({ url, expiresAt: new Date(Date.now() + 60_000).toISOString() }))
     const access = await getPrivateFileAccess(analysisId, fileId, context)
     expect(access.url).toBe(url)
     expect(fetchMock.mock.calls[0][0]).toBe(`/api/v1/analyses/${analysisId}/files/${fileId}/access`)
     expect(fetchMock.mock.calls[0][1]?.method).toBe('GET')
     expect(JSON.stringify(access)).not.toContain('firebase-token')
+  })
+
+  it('fetches content bytes with a fresh bearer and fails after permission is revoked', async () => {
+    const url = `/api/v1/analyses/${analysisId}/files/${fileId}/content`
+    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } }))
+    const blob = await getProtectedContent(url, context)
+    expect(blob.type).toBe('image/png')
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer firebase-token')
+    fetchMock.mockResolvedValueOnce(json({ error: { code: 'ERR_FORBIDDEN' } }, 403))
+    await expect(getProtectedContent(url, context)).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('never sends a Firebase bearer to external storage or a substituted file content route', async () => {
+    await expect(getProtectedContent('https://outside.example/report', context)).rejects.toMatchObject({ code: 'ERR_INVALID_RESPONSE' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    fetchMock.mockResolvedValueOnce(json({ url: `/api/v1/analyses/${batchId}/files/${fileId}/content`, expiresAt: new Date(Date.now() + 60_000).toISOString() }))
+    await expect(getPrivateFileAccess(analysisId, fileId, context)).rejects.toMatchObject({ code: 'ERR_INVALID_RESPONSE' })
   })
 
   it('rejects expired, malformed or non-http private file URLs', async () => {

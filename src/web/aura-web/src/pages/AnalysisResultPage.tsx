@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import type { BackendContext } from '../api/backendContext'
 import { validBatchId } from '../api/batchProgress'
 import {
-  analysisErrorMessage, getAnalysisResult, getPrivateFileAccess,
+  analysisErrorMessage, getAnalysisResult, getPrivateFileAccess, getProtectedContent,
   AnalysisResultError, type AnalysisDetail, type FileRef,
 } from '../api/analysisResult'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
 import './AnalysisResultPage.css'
+import ReportDownloadButton from '../components/ReportDownloadButton'
 
 type AnalysisView =
   | { phase: 'loading' }
@@ -63,16 +64,21 @@ function PrivateFilePreview({ analysisId, file, context }: {
   useEffect(() => {
     const controller = new AbortController()
     let expiryTimer: ReturnType<typeof setTimeout> | undefined
+    let objectUrl: string | undefined
 
     void getPrivateFileAccess(analysisId, file.fileId, context, controller.signal)
-      .then((access) => {
+      .then(async (access) => {
         if (controller.signal.aborted) return
         const remaining = Date.parse(access.expiresAt) - Date.now()
         if (!Number.isFinite(remaining) || remaining <= 0) {
           setView({ phase: 'expired' })
           return
         }
-        setView({ phase: 'ready', url: access.url })
+        const blob = await getProtectedContent(access.url, context, controller.signal)
+        if (controller.signal.aborted) return
+        if (!['image/png', 'image/jpeg'].includes(blob.type.split(';')[0])) throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
+        objectUrl = URL.createObjectURL(blob)
+        setView({ phase: 'ready', url: objectUrl })
         expiryTimer = setTimeout(() => {
           if (!controller.signal.aborted) setView({ phase: 'expired' })
         }, Math.min(remaining, 2_147_000_000))
@@ -86,6 +92,7 @@ function PrivateFilePreview({ analysisId, file, context }: {
     return () => {
       controller.abort()
       if (expiryTimer !== undefined) clearTimeout(expiryTimer)
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
   }, [analysisId, file.fileId, context, attempt])
 
@@ -213,18 +220,21 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
 
     <section aria-labelledby="analysis-files-heading">
       <h2 id="analysis-files-heading">Ảnh và chú thích riêng tư</h2>
-      <p>Từng ảnh được xin quyền truy cập riêng. URL ký có hạn sử dụng và không được lưu vào trình duyệt.</p>
+      <p>Từng ảnh được tải sau khi máy chủ kiểm tra quyền hiện hành.</p>
       {uniqueFiles.length > 0
         ? <div className="analysis-files-grid">{uniqueFiles.map((file) =>
           <PrivateFilePreview key={file.fileId} analysisId={analysisId} file={file} context={context} />)}</div>
         : <p>API chưa cung cấp tham chiếu ảnh có quyền truy cập.</p>}
     </section>
+    {result && <ReportDownloadButton resource="analyses" resourceId={analysisId} format="pdf" context={context} />}
   </section>
 }
 
 export default function AnalysisResultPage() {
   const { state } = useBackendSession()
   const { analysisId } = useParams<{ analysisId: string }>()
+  const clinicContextId = new URLSearchParams(window.location.search).get('clinicContextId') || undefined
+  const context = useMemo(() => state.status === 'ready' ? { ...state.context, clinicContextId } : undefined, [state, clinicContextId])
   if (state.status !== 'ready') return <BackendSessionNotice />
   return <main className="analysis-result-page">
     <nav aria-label="Điều hướng trang"><Link to="/">Trang chủ</Link> · <Link to="/batches">Theo dõi batch</Link></nav>
@@ -232,7 +242,7 @@ export default function AnalysisResultPage() {
     <p>Analysis ID: <code>{analysisId ?? 'Chưa có'}</code></p>
     {analysisId && validBatchId(analysisId)
       ? <AnalysisViewer key={`${state.context.firebaseUid}:${state.context.accountId}:${analysisId}`}
-        analysisId={analysisId} context={state.context} />
+        analysisId={analysisId} context={context!} />
       : <p role="alert">Analysis ID trong đường dẫn không hợp lệ.</p>}
   </main>
 }

@@ -129,7 +129,10 @@ export function parseAnalysis(value: unknown, requestedId: string): AnalysisDeta
 }
 
 /** Từng GET cần token của phiên hiện tại, không cache và không ghi thông tin quyền vào URL. */
-async function authorizedGet(path: string, context: BackendContext, signal?: AbortSignal): Promise<unknown> {
+export async function authorizedApiResponse(path: string, context: BackendContext, signal?: AbortSignal,
+  method: 'GET' | 'POST' = 'GET', body?: string): Promise<Response> {
+  if (!path.startsWith('/api/v1/') || new URL(path, window.location.origin).origin !== window.location.origin)
+    throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
   if (isMockEnabled) throw new AnalysisResultError(0, 'ERR_MOCK_ENABLED')
   const auth = getFirebaseAuth()
   const user = auth?.currentUser
@@ -148,21 +151,20 @@ async function authorizedGet(path: string, context: BackendContext, signal?: Abo
     current()
     if (!string(token) || /\s/.test(token)) throw new AnalysisResultError(401, 'ERR_TOKEN_UNAVAILABLE')
     const response = await fetch(path, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
+      method, body,
+      headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       credentials: 'omit', cache: 'no-store', redirect: 'error', signal: abort,
     })
     current()
-    const payload: unknown = await response.json().catch(() => null)
-    current()
     if (!response.ok) {
+      const payload: unknown = await response.json().catch(() => null)
+      current()
       const error = record(payload) && record(payload.error) ? payload.error : null
       const code = string(error?.code) && /^ERR_[A-Z0-9_]+$/.test(error.code)
         ? error.code : 'ERR_REQUEST_FAILED'
       throw new AnalysisResultError(response.status, code, response.status >= 500)
     }
-    if (response.status !== 200) invalid()
-    return payload
+    return response
   } catch (cause) {
     if (cause instanceof AnalysisResultError) throw cause
     if (signal?.aborted) throw cause
@@ -171,11 +173,43 @@ async function authorizedGet(path: string, context: BackendContext, signal?: Abo
   }
 }
 
+async function authorizedGet(path: string, context: BackendContext, signal?: AbortSignal): Promise<unknown> {
+  const response = await authorizedApiResponse(path, context, signal)
+  if (response.status !== 200) invalid()
+  return response.json().catch(() => null)
+}
+
+export function clinicSelector(context: BackendContext): string {
+  if (!context.clinicContextId) return ''
+  if (!validBatchId(context.clinicContextId)) throw new AnalysisResultError(400, 'ERR_INVALID_CLINIC_ID')
+  return `?clinicContextId=${encodeURIComponent(context.clinicContextId)}`
+}
+
+export function protectedContentPath(value: string): string {
+  if (!value.startsWith('/api/v1/')) invalid()
+  const url = new URL(value, window.location.origin)
+  if (url.origin !== window.location.origin || url.hash ||
+    !/^\/api\/v1\/(?:analyses\/[0-9a-f-]{36}\/files\/[0-9a-f-]{36}|reports\/[0-9a-f-]{36})\/content$/i.test(url.pathname) ||
+    [...url.searchParams.keys()].some(key => key !== 'clinicContextId') ||
+    (url.searchParams.has('clinicContextId') && !validBatchId(url.searchParams.get('clinicContextId')!))) invalid()
+  return url.pathname + url.search
+}
+
+/** Download bytes with a fresh Firebase bearer; never put a protected URL directly in img/window.open. */
+export async function getProtectedContent(path: string, context: BackendContext, signal?: AbortSignal): Promise<Blob> {
+  const response = await authorizedApiResponse(protectedContentPath(path), context, signal)
+  if (response.status !== 200) invalid()
+  const blob = await response.blob()
+  const user = getFirebaseAuth()?.currentUser
+  if (!user || user.uid !== context.firebaseUid || signal?.aborted) throw new AnalysisResultError(401, 'ERR_SESSION_CHANGED')
+  return blob
+}
+
 export async function getAnalysisResult(
   analysisId: string, context: BackendContext, signal?: AbortSignal,
 ): Promise<AnalysisDetail> {
   if (!validBatchId(analysisId)) throw new AnalysisResultError(400, 'ERR_INVALID_ANALYSIS_ID')
-  const payload = await authorizedGet(`/api/v1/analyses/${analysisId}`, context, signal)
+  const payload = await authorizedGet(`/api/v1/analyses/${analysisId}${clinicSelector(context)}`, context, signal)
   return parseAnalysis(payload, analysisId)
 }
 
@@ -185,16 +219,14 @@ export async function getPrivateFileAccess(
   if (!validBatchId(analysisId) || !validBatchId(fileId))
     throw new AnalysisResultError(400, 'ERR_INVALID_FILE_ID')
   const payload = await authorizedGet(
-    `/api/v1/analyses/${analysisId}/files/${fileId}/access`, context, signal,
+    `/api/v1/analyses/${analysisId}/files/${fileId}/access${clinicSelector(context)}`, context, signal,
   )
   if (!record(payload) || !string(payload.url) || !date(payload.expiresAt)) invalid()
-  let url: URL
-  try { url = new URL(payload.url) } catch { return invalid() }
-  if (!['http:', 'https:'].includes(url.protocol) ||
-    (window.location.protocol === 'https:' && url.protocol !== 'https:') ||
+  const path = protectedContentPath(payload.url)
+  if (new URL(path, window.location.origin).pathname.toLowerCase() !==
+    `/api/v1/analyses/${analysisId}/files/${fileId}/content`.toLowerCase() ||
     Date.parse(payload.expiresAt) <= Date.now() + 5000) invalid()
-  // URL ký từ backend: dùng trực tiếp, không gắn Bearer token, không lưu lâu.
-  return { url: payload.url, expiresAt: payload.expiresAt }
+  return { url: path, expiresAt: payload.expiresAt }
 }
 
 export function analysisErrorMessage(error: AnalysisResultError): string {

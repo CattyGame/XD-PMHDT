@@ -156,7 +156,16 @@ describe('Analysis upload contract and immutable attempt', () => {
     await expect(sendUploadAttempt(attempt())).rejects.toMatchObject({ code: 'ERR_INVALID_RESPONSE', disposition: 'uncertain' })
   })
 
-  it('accepts DUPLICATE as a reference without inventing a new AI result', async () => {
+    it('accepts QUARANTINE receipt for corrupted payload isolation demo', async () => {
+    fetchMock.mockResolvedValueOnce(json({ ...accepted, items: [{
+      ...accepted.items[0], processingStatus: 'QUARANTINE',
+      error: { code: 'ERR_CORRUPTED_PAYLOAD', message: 'Dữ liệu ảnh không hợp lệ', retryable: false },
+    }] }))
+    const result = await sendUploadAttempt(attempt())
+    expect(result.items[0]).toMatchObject({ processingStatus: 'QUARANTINE' })
+  })
+
+it('accepts DUPLICATE as a reference without inventing a new AI result', async () => {
     fetchMock.mockResolvedValueOnce(json({ ...accepted, items: [{
       ...accepted.items[0], processingStatus: 'DUPLICATE', existingAnalysisId: context.accountId,
       error: { code: 'ERR_DUPLICATE_REQUEST', message: 'Ảnh trùng', retryable: false },
@@ -197,5 +206,40 @@ describe('Analysis upload contract and immutable attempt', () => {
     deadline.abort(new DOMException('timeout', 'TimeoutError'))
     await check
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('ADR-005 D5: sends all batch images under single atomic request with authoritative UUID key', async () => {
+    const files = [
+      new File(['img0'], 'img0.png', { type: 'image/png' }),
+      new File(['img1'], 'img1.png', { type: 'image/png' }),
+      new File(['img2'], 'img2.png', { type: 'image/png' }),
+    ]
+    const batchAttempt = createUploadAttempt(context, files, 'left')
+    fetchMock.mockResolvedValueOnce(json({
+      batchId,
+      items: [
+        { analysisId: '50000000-0000-0000-0000-000000000001', fileName: 'img0.png', processingStatus: 'QUEUED' },
+        { analysisId: '50000000-0000-0000-0000-000000000002', fileName: 'img1.png', processingStatus: 'QUEUED' },
+        { analysisId: '50000000-0000-0000-0000-000000000003', fileName: 'img2.png', processingStatus: 'QUEUED' },
+      ],
+      createdAt: '2026-10-24T03:00:00Z',
+      statusUrl: `/api/v1/batches/${batchId}`,
+    }))
+
+    const result = await sendUploadAttempt(batchAttempt)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(result.batchId).toBe(batchId)
+    expect(result.items).toHaveLength(3)
+    expect(result.items[0].fileName).toBe('img0.png')
+    expect(result.items[1].fileName).toBe('img1.png')
+    expect(result.items[2].fileName).toBe('img2.png')
+
+    const [, opts] = fetchMock.mock.calls[0]
+    const body = opts?.body as FormData
+    expect(body.getAll('images')).toHaveLength(3)
+    expect(opts?.headers).toMatchObject({ 'Idempotency-Key': batchAttempt.key })
+    // Verify Idempotency-Key is a valid canonical RFC-4122 UUID (not UUID-suffix)
+    const headers = opts?.headers as Record<string, string> | undefined
+    expect(headers?.['Idempotency-Key']).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
   })
 })

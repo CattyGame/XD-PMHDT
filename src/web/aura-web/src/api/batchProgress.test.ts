@@ -38,6 +38,20 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('Analysis batch GET client — SCRUM-332', () => {
+  it('keeps admission-rejected items outside the processing denominator', () => {
+    const result = parseBatchProgress({ ...snapshot, totalDeclared: 3, admissionRejected: 1, uploadPending: 1 }, batchId)
+    expect(result.summary.total).toBe(1)
+    expect(result).toMatchObject({ totalDeclared: 3, admissionRejected: 1, uploadPending: 1 })
+  })
+  it('allows no accepted items during staging or an entirely rejected admission', () => {
+    const empty = { ...snapshot, batchStatus: 'IN_PROGRESS', items: [],
+      summary: { total: 0, active: 0, succeeded: 0, failed: 0, duplicate: 0 }, totalDeclared: 2, admissionRejected: 0, uploadPending: 2 }
+    expect(parseBatchProgress(empty, batchId).items).toEqual([])
+    expect(parseBatchProgress({ ...empty, batchStatus: 'FAILED', admissionRejected: 2, uploadPending: 0 }, batchId).summary.total).toBe(0)
+  })
+  it('rejects a declared count inconsistent with admission plus processing inventory', () => {
+    expect(() => parseBatchProgress({ ...snapshot, totalDeclared: 100, admissionRejected: 0, uploadPending: 0 }, batchId)).toThrow(BatchProgressError)
+  })
   it('uses only authenticated GET, no POST, and reads a completed batch from server', async () => {
     const result = await getBatchProgress(batchId, context)
     expect(result).toMatchObject({ kind: 'batch', data: { batchStatus: 'COMPLETED' } })

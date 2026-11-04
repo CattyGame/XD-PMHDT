@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
 import type { BackendContext } from '../api/backendContext'
@@ -6,15 +6,23 @@ import { canUploadPersonal, uploadErrorMessage, type EyeSide } from '../api/anal
 import { getPersonalUploadWorkspace } from '../api/personalUploadWorkspace'
 
 function ImagePreview({ file }: { file: File }) {
+  const [loadFailed, setLoadFailed] = useState(false)
   const attach = useCallback((image: HTMLImageElement | null) => {
     if (!image) return
     const url = URL.createObjectURL(file)
     image.src = url
     return () => URL.revokeObjectURL(url)
   }, [file])
-  return <div style={{ marginBottom: 16 }}><p>{file.name}</p>
-    <img ref={attach} alt={`Xem trước ${file.name}`}
-      style={{ width: 200, height: 200, objectFit: 'contain', border: '1px solid #ddd', borderRadius: 8 }} />
+  return <div style={{ marginBottom: 16 }}>
+    <p>{file.name} {loadFailed ? '(Tệp hỏng cấu trúc)' : ''}</p>
+    {!loadFailed ? (
+      <img ref={attach} alt={`Xem trước ${file.name}`} onError={() => setLoadFailed(true)}
+        style={{ width: 200, height: 200, objectFit: 'contain', border: '1px solid #ddd', borderRadius: 8 }} />
+    ) : (
+      <div style={{ width: 200, height: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', borderRadius: 8, padding: 8, fontSize: 13, textAlign: 'center' }}>
+        Không thể xem trước ảnh này. Máy chủ sẽ kiểm tra và trả lý do nếu tệp không hợp lệ.
+      </div>
+    )}
   </div>
 }
 
@@ -22,6 +30,7 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
   const workspace = useMemo(() => getPersonalUploadWorkspace(context), [context])
   const state = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot)
   useEffect(() => {
+    void workspace.restoreFromUrl()
     function beforeUnload(event: BeforeUnloadEvent) {
       const current = workspace.getSnapshot()
       if (current.attempt && (current.phase === 'sending' || current.uncertain)) {
@@ -32,7 +41,7 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
     window.addEventListener('beforeunload', beforeUnload)
     return () => { window.removeEventListener('beforeunload', beforeUnload); workspace.release() }
   }, [workspace])
-  const locked = !!state.attempt || state.phase === 'validating'
+  const locked = !!state.attempt || state.phase === 'validating' || state.phase === 'restoring'
   const sending = state.phase === 'sending'
   const canSend = state.phase === 'editing' || (state.phase === 'error' && state.error?.canRetry)
   const receipt = state.receipt
@@ -45,7 +54,7 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
       <form onSubmit={(event) => { event.preventDefault(); void workspace.send() }}>
         <div style={{ marginBottom: 20 }}>
           <label htmlFor="eyeSide">Mắt được chụp</label>
-          <select id="eyeSide" value={state.eyeSide} disabled={locked}
+          <select id="eyeSide" value={state.eyeSide} disabled={locked || !!state.resumeBatchId}
             onChange={(event) => workspace.setEyeSide(event.target.value as EyeSide)}
             style={{ display: 'block', width: '100%', padding: 10 }}>
             <option value="left">Mắt trái</option>
@@ -53,8 +62,14 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
             <option value="unknown">Chưa xác định</option>
           </select>
         </div>
-        <div style={{ marginBottom: 20 }}>
+        <div style={{ marginBottom: 20, padding: 12, border: '1px dashed #888' }}
+          onDragOver={event => { if (!locked) event.preventDefault() }}
+          onDrop={event => {
+            event.preventDefault()
+            if (!locked) void workspace.selectImages(Array.from(event.dataTransfer.files))
+          }}>
           <label htmlFor="images">Chọn ảnh võng mạc</label>
+          <p>Kéo thả ảnh JPG/PNG vào đây hoặc chọn tệp. Tối đa 100 ảnh, 10 MiB mỗi ảnh.</p>
           <input id="images" type="file" accept="image/jpeg,image/png" multiple disabled={locked}
             onChange={(event) => {
               const files = Array.from(event.currentTarget.files ?? [])
@@ -67,10 +82,15 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
           </div>}
         </div>
         <button type="submit" disabled={!canSend}>
-          {sending ? 'Đang gửi ảnh...' : state.attempt ? 'Thử lại cùng lượt gửi' : 'Gửi ảnh phân tích'}
+          {sending ? 'Đang gửi ảnh...' : state.attempt ? 'Thử lại cùng lượt gửi' : state.resumeBatchId ? 'Tiếp tục lượt tải đã lưu' : 'Gửi ảnh phân tích'}
         </button>
       </form>
       {state.phase === 'validating' && <p role="status">Đang kiểm tra ảnh đã chọn...</p>}
+      {state.phase === 'restoring' && <p role="status">Đang khôi phục lượt tải từ máy chủ...</p>}
+      {state.inventory && <section aria-label="Tiến độ tiếp nhận ảnh">
+        <p>Đã lưu trên máy chủ: {state.inventory.items.filter(item => item.uploadStatus !== 'DECLARED').length}/{state.inventory.items.length} ảnh.</p>
+        {state.resumeBatchId && !state.attempt && <p>Chọn lại những ảnh chưa tải. Hệ thống đối chiếu nội dung bằng checksum, không chỉ tên tệp.</p>}
+      </section>}
       {state.validation && <p role="alert">{state.validation}</p>}
       {state.attempt && <p>Mã yêu cầu upload: <code>{state.attempt.key}</code></p>}
       {state.error && <div role="alert">
@@ -79,9 +99,9 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
       </div>}
       {state.uncertain && <p role="status">
         Kết quả lượt gửi trước chưa rõ. Giữ nguyên ảnh và mắt đã chọn để thử lại cùng lượt gửi.
-        Nếu tải lại trang hoặc đổi phiên đăng nhập, hãy lưu mã yêu cầu và đối chiếu trước khi tạo lượt mới.
+        Khi tải lại trang, hệ thống đối chiếu lượt tải đã lưu trên máy chủ trước khi gửi lại ảnh.
       </p>}
-      {state.attempt && workspace.canReset() && <button type="button" onClick={workspace.reset}>
+      {(state.attempt || state.resumeBatchId) && workspace.canReset() && <button type="button" onClick={workspace.reset}>
         {receipt ? 'Tạo lượt tải ảnh mới' : 'Chọn lại ảnh sau khi bị từ chối'}
       </button>}
       {receipt && <section style={{ marginTop: 24 }}>
@@ -96,6 +116,12 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
         <ul>{receipt.items.map((item) => <li key={item.analysisId}>
           {item.fileName}: {item.processingStatus === 'DUPLICATE'
             ? `Ảnh trùng, tham chiếu phân tích ${item.existingAnalysisId}. Không tạo kết quả AI mới.`
+            : item.processingStatus === 'QUARANTINE'
+            ? 'Dữ liệu ảnh không hợp lệ (hỏng cấu trúc). Đã cách ly sang nhánh Quarantine trong < 1s (Không ghi rác vào DB).'
+            : item.processingStatus === 'RETRY'
+            ? 'Gặp sự cố tạm thời, hệ thống đang tự động xếp hàng thử lại (Bounded Retry).'
+            : item.processingStatus === 'REJECTED'
+            ? `Đã từ chối: ${item.error?.message ?? 'Ảnh không đủ điều kiện tiếp nhận.'}`
             : 'Đã xếp hàng, đang chờ xử lý.'}
         </li>)}</ul>
       </section>}
