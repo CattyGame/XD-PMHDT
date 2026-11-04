@@ -286,6 +286,10 @@ jobs:
           # Keep all three opt-ins scoped to this CI override; LIVE defaults remain fail-closed.
           cat > "$RUNNER_TEMP/aura-ci-ai-mock.yml" <<'YAML'
           services:
+            identity-api:
+              environment:
+                AURA_ALLOW_MOCK_IDENTITY: "true"
+                AURA_RUNTIME_MODE: TEST
             ai-core:
               environment:
                 AURA_AI_ENGINE: mock

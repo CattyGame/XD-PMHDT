@@ -17,3 +17,4 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements-contract.txt
       - run: python scripts/sprint3/validate_handoff.py
+      - run: python scripts/validate_adr005_contracts.py

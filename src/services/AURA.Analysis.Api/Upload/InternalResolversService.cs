@@ -29,6 +29,7 @@ public sealed record NotificationContextResponse(
 public interface IInternalResolversRepository
 {
     Task<InternalAnalysisState?> GetStateAsync(Guid analysisId, Guid tenantId, CancellationToken ct);
+    Task<InternalAnalysisState?> GetNotificationStateAsync(InternalResolveRequest request,CancellationToken ct);
     Task<NotificationContextResponse?> GetBatchNotificationAsync(InternalResolveRequest request,CancellationToken ct)=>Task.FromResult<NotificationContextResponse?>(null);
 }
 
@@ -45,6 +46,12 @@ public sealed record InternalAnalysisState(
 
 public sealed class PostgresInternalResolversRepository(NpgsqlDataSource dataSource) : IInternalResolversRepository
 {
+    public async Task<InternalAnalysisState?> GetNotificationStateAsync(InternalResolveRequest request,CancellationToken ct)
+    {
+        await using var command=dataSource.CreateCommand("SELECT EXISTS(SELECT 1 FROM analysis.outbox_events WHERE id=$1 AND tenant_id=$2 AND image_id=$3 AND event_type IN ('analysis.completed','analysis.failed'))");
+        command.Parameters.AddWithValue(request.EventId);command.Parameters.AddWithValue(request.TenantId);command.Parameters.AddWithValue(request.AnalysisId);
+        return await command.ExecuteScalarAsync(ct) is true?await GetStateAsync(request.AnalysisId,request.TenantId,ct):null;
+    }
     public async Task<NotificationContextResponse?> GetBatchNotificationAsync(InternalResolveRequest request,CancellationToken ct)
     {
         await using var command=dataSource.CreateCommand("""
@@ -173,7 +180,7 @@ public sealed class InternalResolversService(IInternalResolversRepository reposi
         if (request.EventId == Guid.Empty || request.AnalysisId == Guid.Empty || request.TenantId == Guid.Empty)
             throw UploadFailure.Validation(new ErrorDetail("body", "invalid_identifiers"));
 
-        var state = await repository.GetStateAsync(request.AnalysisId, request.TenantId, ct);
+        var state = await repository.GetNotificationStateAsync(request,ct);
         if (state is null)return await repository.GetBatchNotificationAsync(request,ct)??throw NotFound();
 
         // In Sprint 3 PERSONAL tenant demo, recipient is the owner account ID verified by Profile

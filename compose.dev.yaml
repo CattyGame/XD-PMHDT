@@ -60,6 +60,13 @@ services:
       Notification__EncryptionKeyId: ${NOTIFICATION_ENCRYPTION_KEY_ID:?Set NOTIFICATION_ENCRYPTION_KEY_ID}
       Notification__EncryptionKey: ${NOTIFICATION_ENCRYPTION_KEY:?Set NOTIFICATION_ENCRYPTION_KEY}
       Notification__EnableTestPush: "false"
+      Services__Identity__BaseUrl: "http://identity-api:8080"
+      Services__Analysis__BaseUrl: "http://analysis-api:8080"
+      ServiceAuth__ClientId: notification-api
+      ServiceAuth__ClientSecret: "${NOTIFICATION_SERVICE_CLIENT_SECRET:-}"
+      RabbitMQ__AutoStart: "${NOTIFICATION_CONSUMER_ENABLED:-false}"
+      RabbitMQ__HostName: rabbitmq
+      RabbitMQ__Password: "${NOTIFICATION_RABBITMQ_PASSWORD:-}"
     ports:
       - "127.0.0.1:5003:8080"
     volumes:

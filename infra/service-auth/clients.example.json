@@ -69,6 +69,18 @@
           "ai:analyze"
         ]
       }
+    },
+    {
+      "clientId": "notification-api",
+      "principalId": "a1000000-0000-4000-8000-000000000005",
+      "allowedTargets": {
+        "aura-identity": [
+          "identity:directory"
+        ],
+        "aura-analysis": [
+          "analysis:notify"
+        ]
+      }
     }
   ]
 }

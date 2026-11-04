@@ -81,6 +81,7 @@ public sealed class ReportSnapshotPostgresTests
         Assert.Equal("42501",denied.SqlState);
         await Write("INSERT INTO analysis.batch_completion_events(batch_id,event_id) VALUES($1,$1)",batch);
         var contexts=new InternalResolversService(new PostgresInternalResolversRepository(db));
+        Assert.Equal(404,(await Assert.ThrowsAsync<UploadFailure>(()=>contexts.ResolveNotificationContextAsync(new(Guid.NewGuid(),image,tenant),default))).Status);
         var notification=await contexts.ResolveNotificationContextAsync(new(batch,batch,tenant),default);
         Assert.Equal(actor,Assert.Single(notification.RecipientAccountIds));
         Assert.Equal(404,(await Assert.ThrowsAsync<UploadFailure>(()=>contexts.ResolveNotificationContextAsync(new(Guid.NewGuid(),batch,tenant),default))).Status);

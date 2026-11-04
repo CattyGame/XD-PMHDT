@@ -231,6 +231,34 @@ paths:
           description: Missing scope
         '404':
           description: Missing account
+  /internal/v1/identity/directory/resolve:
+    post:
+      summary: Resolve a current ACTIVE account for Notification
+      description: Service JWT identity:directory; select exactly one accountId or
+        firebaseUid. No consumer Identity-schema query, positive cache or GUID shortcut.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                accountId:
+                  type: string
+                  format: uuid
+                firebaseUid:
+                  type: string
+      responses:
+        '200':
+          description: accountId,firebaseUid,accountStatus ACTIVE
+        '400':
+          description: Ambiguous selector
+        '401':
+          description: Invalid service identity
+        '403':
+          description: Missing scope
+        '404':
+          description: Unknown or inactive account
 components:
   securitySchemes:
     BearerAuth:

@@ -52,6 +52,7 @@ $billingClientPath = Join-Path $ServiceAuthDirectory "clients\billing-api.json"
 $profileClientPath = Join-Path $ServiceAuthDirectory "clients\profile-api.json"
 $analysisClientPath = Join-Path $ServiceAuthDirectory "clients\analysis-api.json"
 $workerClientPath = Join-Path $ServiceAuthDirectory "clients\analysis-worker.json"
+$notificationClientPath = Join-Path $ServiceAuthDirectory "clients\notification-api.json"
 
 foreach ($clientPath in @($identityClientPath, $billingClientPath, $profileClientPath, $analysisClientPath)) {
     if (-not (Test-Path -LiteralPath $clientPath -PathType Leaf)) {
@@ -83,6 +84,12 @@ $identityServiceClientSecret = [string]$identityClient.clientSecret
 $billingServiceClientSecret = [string]$billingClient.clientSecret
 $profileServiceClientSecret = [string]$profileClient.clientSecret
 $workerServiceClientSecret = $null
+$notificationServiceClientSecret = $null
+if(Test-Path -LiteralPath $notificationClientPath -PathType Leaf) {
+    $notificationClient=Get-Content -LiteralPath $notificationClientPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if($notificationClient.clientId -ne 'notification-api' -or [string]::IsNullOrWhiteSpace([string]$notificationClient.clientSecret)) {throw 'Invalid Notification service client credentials.'}
+    $notificationServiceClientSecret=[string]$notificationClient.clientSecret
+}
 if(Test-Path -LiteralPath $workerClientPath -PathType Leaf) {
     $workerClient=Get-Content -LiteralPath $workerClientPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if($workerClient.clientId -ne 'analysis-worker' -or [string]::IsNullOrWhiteSpace([string]$workerClient.clientSecret)) {throw 'Invalid Worker service client credentials.'}
@@ -164,6 +171,7 @@ try {
         PROFILE_SERVICE_CLIENT_SECRET = $profileServiceClientSecret
         ANALYSIS_SERVICE_CLIENT_SECRET = $analysisServiceClientSecret
         ANALYSIS_WORKER_CLIENT_SECRET = $workerServiceClientSecret
+        NOTIFICATION_SERVICE_CLIENT_SECRET = $notificationServiceClientSecret
 
         # Npgsql connection strings quote these values in compose.yaml.
         IDENTITY_DB_PASSWORD = $identityPassword.Replace('"', '""')
@@ -195,6 +203,8 @@ finally {
     $analysisServiceClientSecret = $null
     $workerServiceClientSecret = $null
     $workerClient = $null
+    $notificationServiceClientSecret = $null
+    $notificationClient = $null
     $analysisClient = $null
     $identityClient = $null
     $billingClient = $null

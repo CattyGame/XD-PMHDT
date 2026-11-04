@@ -22,10 +22,10 @@ public sealed class RabbitMqConsumerOptions
     public int Port { get; set; } = 5672;
     public string VirtualHost { get; set; } = "/aura-s3";
     public string UserName { get; set; } = "s3-notification";
-    public string Password { get; set; } = "aura_s3_notification_2026";
+    public string Password { get; set; } = "";
     public string QueueName { get; set; } = "aura.s3.notification.events";
     public ushort PrefetchCount { get; set; } = 10;
-    public bool AutoStart { get; set; } = true;
+    public bool AutoStart { get; set; } = false;
 }
 
 public sealed record NotificationDispatchMetrics(
@@ -47,9 +47,9 @@ public sealed class NotificationEventConsumer(
     IAccountResolver accountResolver,
     FirebaseApp firebaseApp,
     IConfiguration configuration,
-    NpgsqlDataSource dataSource,
     ILogger<NotificationEventConsumer> logger,
-    IFcmClient? fcmClient = null) : BackgroundService
+    IFcmClient? fcmClient = null,
+    INotificationContextResolver? contextResolver = null) : BackgroundService
 {
     private readonly RabbitMqConsumerOptions _options = options.Value;
     private readonly IFcmClient _fcmClient = fcmClient ?? new FirebaseAdminFcmClient(
@@ -107,6 +107,7 @@ public sealed class NotificationEventConsumer(
 
     private void InitializeRabbitMq()
     {
+        if(string.IsNullOrWhiteSpace(_options.Password))throw new InvalidOperationException("RabbitMQ password must be explicitly configured.");
         var factory = new ConnectionFactory
         {
             HostName = _options.HostName,
@@ -136,13 +137,18 @@ public sealed class NotificationEventConsumer(
             }
             else
             {
-                _channel?.BasicNack(deliveryTag, false, false);
+                _channel?.BasicNack(deliveryTag, false, true);
             }
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex,"Malformed notification JSON rejected to dead-letter queue.");
+            _channel?.BasicNack(deliveryTag,false,false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to process notification message. Nacking without requeue to DLQ.");
-            _channel?.BasicNack(deliveryTag, false, false);
+            logger.LogError(ex, "Failed to process notification message. Requeuing to preserve the delivery obligation.");
+            _channel?.BasicNack(deliveryTag, false, true);
         }
     }
 
@@ -164,18 +170,21 @@ public sealed class NotificationEventConsumer(
         }
 
         var eventType = eventTypeProp.GetString();
-        if (eventType is not ("analysis.completed" or "analysis.failed" or "batch.completed" or "billing.payment.success"))
+        if (eventType is not ("analysis.completed" or "analysis.failed" or "batch.completed" ))
         {
             logger.LogInformation("Ignoring non-terminal event type {EventType}", eventType);
             return true;
         }
 
-        var recipients = await ResolveRecipientsAsync(root, analysisId, cancellationToken);
-        if (recipients.Count == 0)
-        {
-            logger.LogWarning("No recipient accounts found for analysis {AnalysisId}. Acknowledging.", analysisId);
-            return true;
-        }
+        if(contextResolver is null)throw new InvalidOperationException("Notification authority is required.");
+        var authority=await contextResolver.ResolveAsync(eventId,analysisId,tenantId,cancellationToken);
+        if(authority.EventId!=eventId || authority.AnalysisId!=analysisId || authority.TenantId!=tenantId || !authority.Applicable ||
+            (eventType=="batch.completed" ? authority.ProcessingStatus is not ("COMPLETED" or "PARTIAL_FAILED" or "FAILED")
+                :eventType=="analysis.failed"?authority.ProcessingStatus is not ("FAILED" or "LOW_QUALITY" or "REJECTED")
+                :authority.ProcessingStatus!="COMPLETED"))
+            throw new HttpRequestException("Terminal notification authority unavailable or state not applicable.");
+        var recipients=authority.RecipientAccountIds.Where(x=>x!=Guid.Empty).Distinct().ToList();
+        if(recipients.Count==0)throw new HttpRequestException("No authoritative recipients; retry required.");
 
         var inboxType = eventType switch
         {
@@ -209,7 +218,11 @@ public sealed class NotificationEventConsumer(
         int totalCleaned = 0;
         long maxFcmLatencyMs = 0;
 
-        foreach (var recipientId in recipients)
+        // Resolve current Identity authority before any writes: dependency failures must requeue.
+        var activeRecipients=new List<Guid>();
+        foreach(var recipient in recipients)
+            if(!string.IsNullOrWhiteSpace(await accountResolver.ResolveFirebaseUidAsync(recipient,cancellationToken)))activeRecipients.Add(recipient);
+        foreach (var recipientId in activeRecipients)
         {
             // 1. Persist Before ACK: Save to durable PostgreSQL inbox
             var command = new SaveInboxItemCommand(
@@ -399,67 +412,6 @@ public sealed class NotificationEventConsumer(
         }
 
         return new FcmDispatchInternalResult(targeted, success, failed, cleaned);
-    }
-
-    private async Task<List<Guid>> ResolveRecipientsAsync(
-        JsonElement root,
-        Guid analysisId,
-        CancellationToken ct)
-    {
-        var list = new List<Guid>();
-
-        if (root.TryGetProperty("data", out var data))
-        {
-            if (data.TryGetProperty("recipientAccountIds", out var recipientArray) && recipientArray.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var elem in recipientArray.EnumerateArray())
-                {
-                    if (elem.TryGetGuid(out var accId) && accId != Guid.Empty && !list.Contains(accId))
-                    {
-                        list.Add(accId);
-                    }
-                }
-            }
-
-            if (data.TryGetProperty("actorAccountId", out var actorProp) && actorProp.TryGetGuid(out var actorId) && actorId != Guid.Empty)
-            {
-                if (!list.Contains(actorId))
-                {
-                    list.Add(actorId);
-                }
-            }
-        }
-
-        if (list.Count > 0)
-        {
-            return list;
-        }
-
-        // Query database analysis_requests to find the requester who created the analysis
-        try
-        {
-            await using var conn = await dataSource.OpenConnectionAsync(ct);
-            const string sql = "SELECT requester_id, owner_id FROM analysis.analysis_requests WHERE id = @id LIMIT 1;";
-            await using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("id", analysisId);
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            if (await reader.ReadAsync(ct))
-            {
-                var requesterId = reader.IsDBNull(0) ? Guid.Empty : reader.GetGuid(0);
-                var ownerId = reader.IsDBNull(1) ? Guid.Empty : reader.GetGuid(1);
-                var targetId = requesterId != Guid.Empty ? requesterId : ownerId;
-                if (targetId != Guid.Empty && !list.Contains(targetId))
-                {
-                    list.Add(targetId);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to query requester_id for analysis {AnalysisId}", analysisId);
-        }
-
-        return list;
     }
 
     private void Cleanup()

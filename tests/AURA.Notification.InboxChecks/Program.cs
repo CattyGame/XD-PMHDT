@@ -26,6 +26,7 @@ public class Program
 
         try
         {
+            await AuthorityBoundaryChecks.RunAsync(Assert);
             await TestAC1_InboxCreationAndEventDedupAsync();
             await TestAC2_AccountBoundaryAndUnreadManagementAsync();
             await TestAC3_FrontendContractAndFcmDecouplingAsync();
@@ -399,14 +400,14 @@ public class Program
             accountResolver,
             firebaseApp,
             config,
-            dataSource,
             NullLogger<NotificationEventConsumer>.Instance,
-            mockFcm);
+            mockFcm, new TestNotificationContextResolver(recipientId));
 
         var eventId = Guid.NewGuid();
         var analysisId = Guid.NewGuid();
         var tenantId = Guid.NewGuid();
 
+        var spoofedRecipient=Guid.NewGuid();
         var payload = new
         {
             eventId,
@@ -417,7 +418,7 @@ public class Program
             analysisId,
             data = new
             {
-                recipientAccountIds = new[] { recipientId },
+                recipientAccountIds = new[] { spoofedRecipient }, actorAccountId=spoofedRecipient,
                 riskLevel = "LOW",
                 riskAvailable = true
             }
@@ -428,6 +429,14 @@ public class Program
 
         Assert(success, "AC4.1 Consumer Execution: Xử lý thành công event analysis.completed qua NotificationEventConsumer");
 
+        Assert(await GetInboxItemByEventAsync(dataSource,spoofedRecipient,eventId) is null,
+            "Authority: supplied recipient/actor injection cannot create an inbox item");
+        Assert(await GetInboxItemByEventAsync(dataSource,recipientId,eventId) is not null,
+            "Authority: canonical resolver recipient gets durable inbox despite forged array");
+        var unavailable=new NotificationEventConsumer(Options.Create(new RabbitMqConsumerOptions()),inboxRepo,deviceRepo,accountResolver,firebaseApp,config,NullLogger<NotificationEventConsumer>.Instance,mockFcm);
+        var rejected=false;
+        try{await unavailable.ProcessNotificationEventAsync(json,default);}catch(InvalidOperationException){rejected=true;}
+        Assert(rejected,"Authority: missing dependency cannot ACK or fall back to event recipients");
         // Kiểm tra cơ chế Multicast: Chỉ gọi 1 lần SendMulticastAsync thay vì lặp từng thiết bị
         Assert(mockFcm.CallCount == 1,
             "AC4.2 Multicast Optimization: Gửi đồng thời tới toàn bộ thiết bị qua SendMulticastAsync (CallCount = 1)");
@@ -484,9 +493,8 @@ public class Program
             accountResolver,
             firebaseApp,
             config,
-            dataSource,
             NullLogger<NotificationEventConsumer>.Instance,
-            mockFcm);
+            mockFcm, new TestNotificationContextResolver(recipientId));
 
         var analysisId = Guid.NewGuid();
 
@@ -587,9 +595,8 @@ public class Program
             accountResolver,
             firebaseApp,
             config,
-            dataSource,
             NullLogger<NotificationEventConsumer>.Instance,
-            mockFcm);
+            mockFcm, new TestNotificationContextResolver(recipientId));
 
         var payload = new
         {
@@ -663,9 +670,8 @@ public class Program
             accountResolver,
             firebaseApp,
             config,
-            dataSource,
             NullLogger<NotificationEventConsumer>.Instance,
-            mockFcm);
+            mockFcm, new TestNotificationContextResolver(recipientId));
 
         var eventId = Guid.NewGuid();
         var analysisId = Guid.NewGuid();
@@ -793,4 +799,10 @@ public sealed class TestAccountResolver : IAccountResolver
         if (AccountToUid.TryGetValue(accountId, out var uid)) return Task.FromResult<string?>(uid);
         return Task.FromResult<string?>(accountId.ToString("D"));
     }
+}
+
+public sealed class TestNotificationContextResolver(Guid recipient):INotificationContextResolver
+{
+    public Task<NotificationContext> ResolveAsync(Guid eventId,Guid analysisId,Guid tenantId,CancellationToken ct)=>
+        Task.FromResult(new NotificationContext(eventId,analysisId,tenantId,true,[recipient],"COMPLETED",1));
 }

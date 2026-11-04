@@ -53,6 +53,7 @@ builder.Services.AddSingleton<FirebaseApp>(_ =>
         }
         catch
         {
+            if(!builder.Environment.IsDevelopment() || Environment.GetEnvironmentVariable("AURA_ALLOW_MOCK_NOTIFICATION")!="true")throw;
             credential = GoogleCredential.FromAccessToken("mock-test-token");
         }
     }
@@ -73,6 +74,12 @@ builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
 builder.Services.AddSingleton<TokenCipher>();
 builder.Services.AddSingleton<DeviceRegistrationRepository>();
 builder.Services.AddSingleton<NotificationInboxRepository>();
+builder.Services.AddHttpClient("IdentityAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Identity:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
+    .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
+builder.Services.AddHttpClient("AnalysisAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Analysis:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
+    .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
+builder.Services.AddSingleton<NotificationAuthorityClient>();
+builder.Services.AddSingleton<INotificationContextResolver,NotificationContextResolver>();
 builder.Services.AddSingleton<IAccountResolver, AccountResolver>();
 builder.Services.AddSingleton<IFcmClient, FirebaseAdminFcmClient>();
 builder.Services.Configure<RabbitMqConsumerOptions>(builder.Configuration.GetSection(RabbitMqConsumerOptions.SectionName));
@@ -203,7 +210,20 @@ app.Use(async (context, next) =>
             },
             "Firebase"));
 
-    await next(context);
+    try
+    {
+        await next(context);
+    }
+    catch(OperationCanceledException) when(context.RequestAborted.IsCancellationRequested)
+    {
+        return;
+    }
+    catch(Exception ex) when(ex is HttpRequestException or TimeoutException or OperationCanceledException)
+    {
+        if(context.Response.HasStarted)throw;
+        await ApiError(context,503,"ERR_AUTHORITY_UNAVAILABLE",
+            "Dịch vụ xác minh tài khoản tạm thời không khả dụng.",true).ExecuteAsync(context);
+    }
 });
 
 app.MapHealthChecks("/health");

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aura.invalid/contracts/sprint3/analysis-events-0.8.schema.json",
-  "title": "AURA Sprint 3 domain events 0.8",
-  "description": "Sprint3 target only. Event identifiers stable across redelivery. No images, keys, SAS URLs or tokens. failed is terminal only; Billing resolves generation from authoritative Analysis settlement binding.",
+  "$id": "https://aura.invalid/contracts/analysis-events-0.8.schema.json",
+  "title": "AURA ADR005 domain events0.8",
+  "description": "Canonical ADR005 events with stable operation identity. Historical0.7 remains separately published. No image bytes, object keys, URLs, credentials or clinical PHI in envelopes. Billing resolves actual reservation/generation from Analysis.",
   "type": "object",
   "required": [
     "eventId",
@@ -279,14 +279,43 @@
         "properties": {
           "data": {
             "type": "object",
-            "required": ["batchId", "patientId", "batchStatus", "totalImages", "completedImages", "failedImages"],
+            "required": [
+              "batchId",
+              "patientId",
+              "batchStatus",
+              "totalImages",
+              "completedImages",
+              "failedImages"
+            ],
             "properties": {
-              "batchId": { "type": "string", "format": "uuid" },
-              "patientId": { "type": "string", "format": "uuid" },
-              "batchStatus": { "enum": ["COMPLETED", "PARTIAL_FAILED", "FAILED"] },
-              "totalImages": { "type": "integer", "minimum": 1, "maximum": 100 },
-              "completedImages": { "type": "integer", "minimum": 0 },
-              "failedImages": { "type": "integer", "minimum": 0 }
+              "batchId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "batchStatus": {
+                "enum": [
+                  "COMPLETED",
+                  "PARTIAL_FAILED",
+                  "FAILED"
+                ]
+              },
+              "totalImages": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "completedImages": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failedImages": {
+                "type": "integer",
+                "minimum": 0
+              }
             },
             "additionalProperties": false
           }

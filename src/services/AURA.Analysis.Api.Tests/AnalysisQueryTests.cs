@@ -23,6 +23,8 @@ public sealed class AnalysisQueryTests
 
         public Task<InternalAnalysisState?> GetStateAsync(Guid analysisId, Guid tenantId, CancellationToken ct) =>
             Task.FromResult(State);
+        public Task<InternalAnalysisState?> GetNotificationStateAsync(InternalResolveRequest request,CancellationToken ct)=>
+            Task.FromResult(State); // Explicit fixture represents an already-bound event; PostgreSQL binding is tested separately.
     }
 
     [Fact]
