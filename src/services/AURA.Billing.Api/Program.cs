@@ -139,6 +139,8 @@ app.Use(async (context, next) =>
     await next();
 });
 
+app.UseAuraPrometheusMetrics();
+
 app.UseSwagger();
 app.UseSwaggerUI();
 
@@ -176,6 +178,7 @@ await app.Services.GetRequiredService<CreditReservationRepository>()
     .VerifyDatabaseAsync(CancellationToken.None);
 
 app.MapHealthChecks("/health");
+app.MapAuraMetrics();
 
 // Public package catalog remains anonymous and continues to read the legacy PoC catalog.
 app.MapGet("/api/v1/billing/packages", async (
@@ -761,7 +764,5 @@ app.MapPost("/internal/v1/billing/reconcile-stale", async Task<IResult> (
 .WithName("TriggerStaleReconciliation")
 .WithTags("Billing Internal")
 .Produces<ReconciliationReport>(StatusCodes.Status200OK);
-
-app.UseAuraPrometheusMetrics();
 
 app.Run();
