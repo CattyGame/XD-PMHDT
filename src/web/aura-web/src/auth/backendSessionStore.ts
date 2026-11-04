@@ -1,5 +1,7 @@
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth'
 import { getFirebaseAuth } from '../firebase/config'
+import { unregisterNotificationDevice } from '../api/notificationDevices'
+import { clearFcmOnLogout } from '../firebase/tokenLifecycle'
 import { BackendContextError, loadBackendContext, type BackendContext } from '../api/backendContext'
 
 export type BackendSessionState =
@@ -124,6 +126,10 @@ export function createBackendSessionStore() {
     currentUser = null
     publish({ status: 'loading', firebaseUid: auth.currentUser?.uid ?? null })
     try {
+      // Hủy liên kết thiết bị trước khi kết thúc phiên có token hợp lệ.
+      // Thao tác lỗi không được giữ người dùng đăng nhập vô thời hạn.
+      try { await unregisterNotificationDevice() } catch { /* Best effort; backend có thể tạm lỗi. */ }
+      try { await clearFcmOnLogout() } catch { /* Firebase có thể chưa được cấu hình. */ }
       await signOut(auth)
       if (!active || signOutOperation !== operation) return
       if (!auth.currentUser) publish({ status: 'anonymous' })
