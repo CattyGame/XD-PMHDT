@@ -19,6 +19,7 @@ export default function SessionHomePage() {
           <Link to="/" aria-current="page">Trang chủ</Link>
           {personalUpload && <Link to="/upload">Tải ảnh võng mạc</Link>}
           <Link to="/clinic-upload">Tải ảnh phòng khám</Link>
+          <Link to="/billing/packages">Mua gói / Credit</Link>
           {!context.roles.includes("SYSTEM_ADMIN") && <Link to="/batches">Theo dõi batch</Link>}
           {/* Mở hộp thư thông báo của tài khoản hiện tại */}
           {!context.roles.includes("SYSTEM_ADMIN") && (

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:firebase-sw": "vite build --config vite.firebase-sw.config.ts",
     "lint": "oxlint --ignore-pattern public/firebase-messaging-sw.js",
     "preview": "vite preview",
     "test": "vitest run"
