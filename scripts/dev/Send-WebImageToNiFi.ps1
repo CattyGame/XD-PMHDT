@@ -16,10 +16,14 @@ $ErrorActionPreference = "Stop"
 
 # Ho tro truyen ten ngan nhu "Image_02L.jpg" hoac "Image_03R"
 if (-not (Test-Path $ImagePath)) {
-    $datasetFolder = "D:\XD-PMHDT\datasets\CHASE_DB1\raw"
+    $projectRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
+    $datasetFolder = Join-Path $projectRoot "datasets\CHASE_DB1\raw"
+    if (-not (Test-Path $datasetFolder)) {
+        $datasetFolder = Join-Path $projectRoot "data-assets\CHASE_DB1\raw"
+    }
     $candidate1 = Join-Path $datasetFolder $ImagePath
     $candidate2 = Join-Path $datasetFolder "$ImagePath.jpg"
-    
+
     if (Test-Path $candidate1) {
         $ImagePath = $candidate1
     } elseif (Test-Path $candidate2) {
@@ -81,6 +85,8 @@ $seedProcId = "0cc30e88-9ff9-3280-5cf9-6fa711593bb6"
 $outPortId = "a5c69f11-f00a-382f-50b9-074973541860"
 $inPortId = "bbaf4812-77ad-3632-6002-bd712e6c8aa6"
 $recordProcId = "c7ffbd05-f0fd-3e98-332e-8357d855084f"
+$routeProcId = "0a743184-f08e-367a-2487-ffb6050a20f9"
+$retryProcId = "7cd22621-5df4-36d5-77d8-d4eeb3edc85f"
 
 # 3. Chuan bi Payload va Attributes
 $analysisId = "$($fileHash.Substring(0,8))-0000-4000-8000-000000000001"
@@ -140,14 +146,20 @@ function Set-ComponentState($url, $desiredState) {
 
 # 5. Bat cac thanh phan tiep nhan va xu ly
 Write-Host "[2/5] Khoi dong cac cong ket noi va Processor Record-Camera-Receipt..." -ForegroundColor White
+Set-ComponentState "https://127.0.0.1:8543/nifi-api/output-ports/$outPortId" "STOPPED"
+Set-ComponentState "https://127.0.0.1:8543/nifi-api/output-ports/$outPortId" "RUNNING"
+
 Set-ComponentState "https://127.0.0.1:8543/nifi-api/input-ports/$inPortId" "STOPPED"
 Set-ComponentState "https://127.0.0.1:8543/nifi-api/input-ports/$inPortId" "RUNNING"
 
 Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$recordProcId" "STOPPED"
 Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$recordProcId" "RUNNING"
 
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/output-ports/$outPortId" "STOPPED"
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/output-ports/$outPortId" "RUNNING"
+Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$routeProcId" "STOPPED"
+Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$routeProcId" "RUNNING"
+
+Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$retryProcId" "STOPPED"
+Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$retryProcId" "RUNNING"
 
 Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$seedProcId" "STOPPED"
 

@@ -11,7 +11,7 @@ $variables = @(
     "NOTIFICATION_ENCRYPTION_KEY_ID", "NOTIFICATION_ENCRYPTION_KEY",
     "IDENTITY_DB_PASSWORD", "PROFILE_DB_PASSWORD", "ANALYSIS_DB_PASSWORD",
     "BILLING_DB_PASSWORD", "NOTIFICATION_DB_PASSWORD",
-    "IDENTITY_SERVICE_CLIENT_SECRET", "BILLING_SERVICE_CLIENT_SECRET", "PROFILE_SERVICE_CLIENT_SECRET", "ANALYSIS_SERVICE_CLIENT_SECRET"
+    "IDENTITY_SERVICE_CLIENT_SECRET", "BILLING_SERVICE_CLIENT_SECRET", "PROFILE_SERVICE_CLIENT_SECRET", "ANALYSIS_SERVICE_CLIENT_SECRET", "ANALYSIS_WORKER_CLIENT_SECRET"
 )
 $original = @{}
 foreach ($name in $variables) { $original[$name] = [Environment]::GetEnvironmentVariable($name, "Process") }
@@ -91,26 +91,26 @@ try {
     $global:AuraM1EnvironmentCheckState.emptyAt = -1
 
     $plan = @(& $initialize -PlanOnly)
-    Assert-Check ($plan.Count -eq 21) "Migration plan includes batch progress, ICDR reviews, every service, Billing settlement inbox and final grants pass"
+    Assert-Check ($plan.Count -eq 32) "Migration plan includes batch progress, ICDR reviews, every service, Billing settlement inbox and final grants pass"
     Assert-Check ($plan[0] -eq "infra/postgres/migrations/001_notification_devices.sql") "Notification schema is bootstrapped first"
     Assert-Check ($plan[2] -eq "infra/postgres/migrations/002_identity_and_profile.sql") "Identity/Profile migration is included"
     Assert-Check ($plan[3] -eq "infra/postgres/migrations/003_doctor_assignments.sql") "Doctor assignments follow Profile schema"
     Assert-Check ($plan[4] -eq "infra/postgres/migrations/003_billing_poc_packages.sql") "Legacy Billing PoC migration is included"
     Assert-Check ($plan[5] -eq "infra/postgres/migrations/004_billing_business_schema.sql") "Billing business migration follows Billing PoC schema"
     Assert-Check ($plan[7] -eq "infra/postgres/migrations/analysis/002_upload_recovery.sql") "Upload recovery follows Analysis core and precedes final grants"
-    Assert-Check ($plan[8] -eq "infra/postgres/migrations/analysis/004_batch_processing.sql") "Batch processing follows upload recovery"
-    Assert-Check ($plan[9] -eq "infra/postgres/migrations/analysis/005_doctor_review_concurrency.sql") "Doctor review concurrency follows Analysis core"
-    Assert-Check ($plan[10] -eq "infra/postgres/migrations/analysis/006_screening_campaigns.sql") "Screening campaigns follows doctor review concurrency"
-    Assert-Check ($plan[11] -eq "infra/postgres/migrations/analysis/007_batch_engine_progress.sql") "Batch progress cache reconstruction follows campaign schema"
-    Assert-Check ($plan[12] -eq "infra/postgres/migrations/analysis/008_doctor_review_icdr.sql") "Doctor-approved ICDR grade follows the review schema"
-    Assert-Check ($plan[13] -eq "infra/postgres/migrations/005_camera_grants.sql") "Camera delegation grants follow Analysis core"
-    Assert-Check ($plan[14] -eq "infra/postgres/migrations/005_notification_inbox.sql") "Notification inbox follows camera grants"
-    Assert-Check ($plan[15] -eq "infra/postgres/migrations/006_billing_settlement_inbox.sql") "Billing settlement inbox follows notification inbox"
-    Assert-Check ($plan[16] -eq "infra/postgres/migrations/008_billing_payments.sql") "Billing payments follows settlement inbox"
-    Assert-Check ($plan[17] -eq "infra/postgres/migrations/009_billing_clinic_and_reconciliation.sql") "Billing clinic packages and reconciliation follow payments"
-    Assert-Check ($plan[18] -eq "infra/postgres/migrations/010_clinic_lifecycle_and_memberships.sql") "Clinic lifecycle and memberships follow billing clinic reconciliation"
-    Assert-Check ($plan[19] -eq "infra/postgres/migrations/011_clinic_patients_and_assignments.sql") "Clinic patients and doctor assignments extension follow clinic lifecycle"
-    Assert-Check ($plan[-1] -eq "infra/postgres/migrations/002_service_database_roles.sql") "Ownership and append-only restrictions are reapplied last"
+    Assert-Check ($plan[10] -eq "infra/postgres/migrations/analysis/004_batch_processing.sql") "Batch processing follows upload recovery"
+    Assert-Check ($plan[11] -eq "infra/postgres/migrations/analysis/005_doctor_review_concurrency.sql") "Doctor review concurrency follows Analysis core"
+    Assert-Check ($plan[12] -eq "infra/postgres/migrations/analysis/006_screening_campaigns.sql") "Screening campaigns follows doctor review concurrency"
+    Assert-Check ($plan[13] -eq "infra/postgres/migrations/analysis/007_batch_engine_progress.sql") "Batch progress cache reconstruction follows campaign schema"
+    Assert-Check ($plan[14] -eq "infra/postgres/migrations/analysis/008_doctor_review_icdr.sql") "Doctor-approved ICDR grade follows the review schema"
+    Assert-Check ($plan[19] -eq "infra/postgres/migrations/005_camera_grants.sql") "Camera delegation grants follow Analysis core"
+    Assert-Check ($plan[20] -eq "infra/postgres/migrations/005_notification_inbox.sql") "Notification inbox follows camera grants"
+    Assert-Check ($plan[21] -eq "infra/postgres/migrations/006_billing_settlement_inbox.sql") "Billing settlement inbox follows notification inbox"
+    Assert-Check ($plan[22] -eq "infra/postgres/migrations/008_billing_payments.sql") "Billing payments follows settlement inbox"
+    Assert-Check ($plan[23] -eq "infra/postgres/migrations/009_billing_clinic_and_reconciliation.sql") "Billing clinic packages and reconciliation follow payments"
+    Assert-Check ($plan[25] -eq "infra/postgres/migrations/010_clinic_lifecycle_and_memberships.sql") "Clinic lifecycle and memberships follow billing clinic reconciliation"
+    Assert-Check ($plan[26] -eq "infra/postgres/migrations/011_clinic_patients_and_assignments.sql") "Clinic patients and doctor assignments extension follow clinic lifecycle"
+    Assert-Check ($plan[-2] -eq "infra/postgres/migrations/002_service_database_roles.sql" -and $plan[-1] -eq "infra/postgres/migrations/015_runtime_boundary_hardening.sql") "Final blanket grants are followed by ADR005 append-only and runtime boundary hardening"
 
     $global:AuraM1EnvironmentCheckState.dockerCalls = New-Object System.Collections.Generic.List[string]
     $global:AuraM1EnvironmentCheckState.failOnCall = -1
@@ -128,7 +128,7 @@ try {
     }
     $originalEncoding = $OutputEncoding
     & $initialize -EnvFile ".env.example"
-    Assert-Check ($global:AuraM1EnvironmentCheckState.dockerCalls.Count -eq 22) "Migration runner invokes config validation and all twenty-one migrations"
+    Assert-Check ($global:AuraM1EnvironmentCheckState.dockerCalls.Count -eq 33) "Migration runner invokes config validation and all thirty-two migrations"
     Assert-Check ($OutputEncoding -eq $originalEncoding) "Migration runner restores pipeline encoding"
     Assert-Check (@($global:AuraM1EnvironmentCheckState.dockerCalls | Where-Object { $_ -like '*ALTER ROLE*' }).Count -eq 0) "Default migration run preserves existing passwords/logins"
     $global:AuraM1EnvironmentCheckState.dockerCalls.Clear()

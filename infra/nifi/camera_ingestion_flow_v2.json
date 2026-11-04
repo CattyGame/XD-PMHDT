@@ -8,7 +8,568 @@
       "x": 232,
       "y": 32
     },
-    "processGroups": [],
+    "processGroups": [
+      {
+        "identifier": "90a0dcba-230e-3030-87b6-346705a9452c",
+        "instanceIdentifier": "80d4c5aa-01a1-1000-d8d3-5fc4270b24d7",
+        "name": "AURA-S3-Reporting-Delivery-v1",
+        "comments": "S3 REPORTING INTEGRATION SUBFLOW v1; reviewed receipt-jdbc-v2. No test Seeds or image POST. All processors/ports/controller Disabled on import. Receipt input and output ports remain Disabled until controlled integration acceptance.",
+        "position": {
+          "x": 968.0,
+          "y": 96.0
+        },
+        "processGroups": [],
+        "remoteProcessGroups": [],
+        "processors": [
+          {
+            "identifier": "d21f650a-f96c-524f-a5e1-d6f64ed02146",
+            "instanceIdentifier": "c7ffbd05-f0fd-3e98-332e-8357d855084f",
+            "name": "Record-Camera-Receipt-Safe-v2",
+            "comments": "",
+            "position": {
+              "x": 528.0,
+              "y": 112.0
+            },
+            "type": "org.apache.nifi.processors.groovyx.ExecuteGroovyScript",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-groovyx-nar",
+              "version": "1.27.0"
+            },
+            "properties": {
+              "groovyx-script-body": "import groovy.json.JsonSlurper\nimport java.nio.charset.StandardCharsets\nimport java.sql.SQLException\nimport java.sql.SQLTransientException\nimport java.sql.SQLRecoverableException\nimport java.time.OffsetDateTime\nimport org.apache.nifi.processor.io.InputStreamCallback\n\n// CTL.reporting is a Controller Service reference, NOT SQL.reporting.\n// Connection acquisition must happen inside this script's guarded DB section.\n// SQL is fixed; neither FlowFile content nor attributes can supply a statement.\ndef ff = session.get()\nif (ff == null) return\n\ndef values\nString expectedJdbcBase\nint retries = 0\nboolean retryCounterValid = false\ntry {\n    expectedJdbcBase = context.getProperty('ReportingJdbcBase').value\n    if (expectedJdbcBase == null || !(expectedJdbcBase ==~ /jdbc:postgresql:\\/\\/[A-Za-z0-9.-]+:5432\\/aura_reporting/))\n        throw new IllegalArgumentException()\n    if (ff.getAttribute('camera.reporting.contract') != 'receipt-v1'\n        || ff.getAttribute('mime.type') != 'application/json'\n        || ff.getSize() < 1 || ff.getSize() > 8192) throw new IllegalArgumentException()\n    def counter = ff.getAttribute('camera.reporting.retries')\n    if (counter == null || !(counter ==~ /(?:[0-9]|10)/)) throw new IllegalArgumentException()\n    retries = Integer.parseInt(counter)\n    retryCounterValid = true\n    byte[] payload\n    session.read(ff, { input ->\n        def output = new ByteArrayOutputStream()\n        byte[] buffer = new byte[1024]\n        int count\n        while ((count = input.read(buffer)) != -1) {\n            if (output.size() + count > 8192) throw new IllegalArgumentException()\n            output.write(buffer, 0, count)\n        }\n        payload = output.toByteArray()\n    } as InputStreamCallback)\n    def body = new JsonSlurper().parseText(new String(payload, StandardCharsets.UTF_8))\n    def expectedKeys = ['requestId','deviceId','batchId','imageCount',\n        'sourceAcceptedAt','correlationId','analysisId','processingStatus'] as Set\n    if (!(body instanceof Map)) throw new IllegalArgumentException()\n    def uuid = { value ->\n        if (!(value instanceof String) || !(value ==~ /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)\n            || UUID.fromString(value) == new UUID(0L, 0L)) throw new IllegalArgumentException()\n        value\n    }\n    def request = uuid(body.requestId)\n    def batch = uuid(body.batchId)\n    uuid(body.analysisId)\n    def imgHash = body.imageSha256 ?: body.image_hash_sha256\n    if (!(body.deviceId instanceof String) || !(body.deviceId ==~ /[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/)\n        || !(imgHash instanceof String) || !(imgHash ==~ /[0-9a-f]{64}/)\n        || !(body.correlationId instanceof String) || !(body.correlationId ==~ /[A-Za-z0-9._-]{1,64}/)\n        || !(body.imageCount instanceof Integer) || body.imageCount != 1\n        || !(body.sourceAcceptedAt instanceof String)\n        || !(body.processingStatus in ['QUEUED','DUPLICATE'])) throw new IllegalArgumentException()\n    def accepted = OffsetDateTime.parse(body.sourceAcceptedAt).toInstant()\n    if (ff.getAttribute('camera.receipt.request_id') != request\n        || ff.getAttribute('camera.receipt.batch_id') != batch\n        || ff.getAttribute('filename') != request + '.receipt.json') throw new IllegalArgumentException()\n    values = [request, body.deviceId, imgHash, batch, '1', body.sourceAcceptedAt, body.correlationId]\n    values.eachWithIndex { value, index ->\n        if (ff.getAttribute('sql.args.' + (index + 1) + '.type') != '12'\n            || ff.getAttribute('sql.args.' + (index + 1) + '.value') != value) throw new IllegalArgumentException()\n    }\n    if (ff.attributes.keySet().any { it.startsWith('sql.args.') && !(it ==~ /sql\\.args\\.[1-7]\\.(?:type|value)/) })\n        throw new IllegalArgumentException()\n} catch (Exception ignored) {\n    ff = session.putAllAttributes(ff, [\n        'camera.reporting.writer.version':'receipt-jdbc-v2',\n        'camera.reporting.outcome':'HOLD',\n        'reporting.status':'HOLD',\n        'camera.reporting.reason':'INVALID_RECEIPT_CONTRACT',\n        'quarantine.reason':'INVALID_RECEIPT_CONTRACT',\n        'camera.reporting.commit_state':'NOT_ATTEMPTED',\n        'camera.reporting.sqlstate':'NONE',\n        'camera.reporting.last_retry_count':retryCounterValid ? Integer.toString(retries) : 'INVALID',\n        'camera.reporting.cleanup_failed':'false'])\n    session.transfer(ff, REL_FAILURE)\n    return\n}\n\ndef connection = null\ndef statement = null\nboolean committed = false\nboolean commitAttempted = false\nboolean cleanupFailed = false\nString outcome = 'HOLD'\nString reason = 'REPORTING_UNCLASSIFIED_FAILURE'\nString sqlState = 'NONE'\n\ntry {\n    if (ff.getAttribute('camera.simulate.transient') == 'true' && retries == 0) {\n        throw new SQLTransientException('Simulated transient connection timeout', '08006')\n    }\n    connection = CTL.reporting.getConnection(ff.attributes)\n    def metadata = connection.getMetaData()\n    if (metadata.getURL().split('\\\\?', 2)[0] != expectedJdbcBase\n        || metadata.getUserName() != 'aura_reporting_writer') throw new IllegalStateException()\n    connection.setAutoCommit(false)\n    statement = connection.prepareStatement('CALL reporting.record_camera_receipt(CAST(? AS uuid),CAST(? AS text),CAST(? AS text),CAST(? AS uuid),CAST(? AS integer),CAST(? AS timestamptz),CAST(? AS text));')\n    statement.setQueryTimeout(10)\n    values.eachWithIndex { value, index -> statement.setString(index + 1, value) }\n    statement.execute()\n    commitAttempted = true\n    connection.commit()\n    committed = true\n    outcome = 'RECORDED'\n    reason = 'RECEIPT_COMMITTED'\n} catch (Exception error) {\n    def pending = new ArrayDeque()\n    def seen = Collections.newSetFromMap(new IdentityHashMap())\n    def states = []\n    boolean transientFailure = false\n    pending.add(error)\n    int examined = 0\n    while (!pending.isEmpty() && examined++ < 32) {\n        def item = pending.removeFirst()\n        if (!seen.add(item)) continue\n        if (item instanceof SQLException) {\n            def state = item.getSQLState()\n            if (state != null && state ==~ /[0-9A-Z]{5}/) states.add(state)\n            if (item instanceof SQLTransientException || item instanceof SQLRecoverableException) transientFailure = true\n            if (item.nextException != null) pending.add(item.nextException)\n        }\n        if (item instanceof java.net.ConnectException || item instanceof java.net.UnknownHostException\n            || item instanceof java.net.SocketTimeoutException) transientFailure = true\n        if (item.cause != null) pending.add(item.cause)\n    }\n    boolean permanent = states.any { it.startsWith('22') || it.startsWith('23') || it.startsWith('28')\n        || it.startsWith('42') || it == 'P0001' }\n    transientFailure = transientFailure || states.any { it.startsWith('08') || it.startsWith('53')\n        || it in ['40001','40P01','55P03','57014','57P01','57P02','57P03'] }\n    sqlState = states ? states[0] : 'NONE'\n    outcome = !permanent && transientFailure ? 'RETRY' : 'HOLD'\n    reason = outcome == 'RETRY' ? 'REPORTING_TRANSIENT_FAILURE' : 'REPORTING_RECONCILE_REQUIRED'\n} finally {\n    if (connection != null && !committed) {\n        try { connection.rollback() } catch (Exception ignored) { cleanupFailed = true }\n    }\n    if (statement != null) {\n        try { statement.close() } catch (Exception ignored) { cleanupFailed = true }\n    }\n    if (connection != null) {\n        try { connection.close() } catch (Exception ignored) { cleanupFailed = true }\n    }\n}\n\nif (!committed && commitAttempted) {\n    outcome = 'HOLD'\n    reason = 'REPORTING_COMMIT_UNKNOWN'\n} else if (cleanupFailed) {\n    outcome = 'HOLD'\n    reason = committed ? 'REPORTING_COMMITTED_CLEANUP_FAILED' : 'REPORTING_CLEANUP_FAILED'\n}\n\nString reportingStatus = outcome == 'RECORDED' ? 'COMMITTED' : outcome\nString quarantineReason = outcome == 'HOLD' ? (sqlState == '23505' ? 'CONFLICTING_RECEIPT_SQLSTATE_23505' : reason) : ''\n\nff = session.putAllAttributes(ff, [\n    'camera.reporting.writer.version':'receipt-jdbc-v2',\n    'camera.reporting.outcome':outcome,\n    'reporting.status':reportingStatus,\n    'camera.reporting.reason':reason,\n    'quarantine.reason':quarantineReason,\n    'camera.reporting.sqlstate':sqlState,\n    'camera.reporting.last_retry_count':Integer.toString(retries),\n    'camera.reporting.commit_state':committed ? 'COMMITTED' : commitAttempted ? 'UNKNOWN' : 'NOT_COMMITTED',\n    'camera.reporting.cleanup_failed':Boolean.toString(cleanupFailed)])\nsession.transfer(ff, outcome == 'RECORDED' && committed && !cleanupFailed ? REL_SUCCESS : REL_FAILURE)\n",
+              "groovyx-failure-strategy": "rollback",
+              "ReportingJdbcBase": "jdbc:postgresql://reporting-postgres:5432/aura_reporting",
+              "CTL.reporting": "5a87681d-848a-385d-0981-9087e0af43d5"
+            },
+            "propertyDescriptors": {},
+            "style": {},
+            "schedulingPeriod": "1 sec",
+            "schedulingStrategy": "TIMER_DRIVEN",
+            "executionNode": "ALL",
+            "penaltyDuration": "30 sec",
+            "yieldDuration": "1 sec",
+            "bulletinLevel": "WARN",
+            "runDurationMillis": 0,
+            "concurrentlySchedulableTaskCount": 1,
+            "autoTerminatedRelationships": [],
+            "scheduledState": "RUNNING",
+            "retryCount": 10,
+            "retriedRelationships": [],
+            "backoffMechanism": "PENALIZE_FLOWFILE",
+            "maxBackoffPeriod": "10 mins",
+            "componentType": "PROCESSOR",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "819da7ee-195c-5613-972d-3c722e1a818f",
+            "instanceIdentifier": "7cd22621-5df4-36d5-77d8-d4eeb3edc85f",
+            "name": "Bounded-Reporting-Retry-Delivery-v1",
+            "comments": "",
+            "position": {
+              "x": 728.0,
+              "y": 696.0
+            },
+            "type": "org.apache.nifi.processors.standard.RetryFlowFile",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "properties": {
+              "penalize-retries": "true",
+              "maximum-retries": "10",
+              "Fail on Non-numerical Overwrite": "true",
+              "reuse-mode": "fail",
+              "retry-attribute": "camera.reporting.retries"
+            },
+            "propertyDescriptors": {},
+            "style": {},
+            "schedulingPeriod": "0 sec",
+            "schedulingStrategy": "TIMER_DRIVEN",
+            "executionNode": "ALL",
+            "penaltyDuration": "5 sec",
+            "yieldDuration": "1 sec",
+            "bulletinLevel": "WARN",
+            "runDurationMillis": 25,
+            "concurrentlySchedulableTaskCount": 1,
+            "autoTerminatedRelationships": [],
+            "scheduledState": "RUNNING",
+            "retryCount": 10,
+            "retriedRelationships": [],
+            "backoffMechanism": "PENALIZE_FLOWFILE",
+            "maxBackoffPeriod": "10 mins",
+            "componentType": "PROCESSOR",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "2ac0fe98-fba8-5eba-924c-981ca166efec",
+            "instanceIdentifier": "0a743184-f08e-367a-2487-ffb6050a20f9",
+            "name": "Route-Reporting-Result-v2",
+            "comments": "",
+            "position": {
+              "x": 680.0,
+              "y": 400.0
+            },
+            "type": "org.apache.nifi.processors.standard.RouteOnAttribute",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-standard-nar",
+              "version": "1.27.0"
+            },
+            "properties": {
+              "Routing Strategy": "Route to Property name",
+              "Retry": "${camera.reporting.writer.version:equals('receipt-jdbc-v2'):and(${camera.reporting.outcome:equals('RETRY')}):and(${camera.reporting.commit_state:equals('NOT_COMMITTED')}):and(${camera.reporting.cleanup_failed:equals('false')})}",
+              "Hold": "${camera.reporting.outcome:equals('HOLD')}"
+            },
+            "propertyDescriptors": {},
+            "style": {},
+            "schedulingPeriod": "0 sec",
+            "schedulingStrategy": "TIMER_DRIVEN",
+            "executionNode": "ALL",
+            "penaltyDuration": "30 sec",
+            "yieldDuration": "1 sec",
+            "bulletinLevel": "WARN",
+            "runDurationMillis": 25,
+            "concurrentlySchedulableTaskCount": 1,
+            "autoTerminatedRelationships": [],
+            "scheduledState": "RUNNING",
+            "retryCount": 10,
+            "retriedRelationships": [],
+            "backoffMechanism": "PENALIZE_FLOWFILE",
+            "maxBackoffPeriod": "10 mins",
+            "componentType": "PROCESSOR",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          }
+        ],
+        "inputPorts": [
+          {
+            "identifier": "8e111bf4-6fc0-5426-a9a3-bb81fb58e66c",
+            "instanceIdentifier": "bbaf4812-77ad-3632-6002-bd712e6c8aa6",
+            "name": "Accepted-Camera-Receipt",
+            "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+            "position": {
+              "x": 24.0,
+              "y": 32.0
+            },
+            "type": "INPUT_PORT",
+            "concurrentlySchedulableTaskCount": 1,
+            "scheduledState": "RUNNING",
+            "allowRemoteAccess": false,
+            "componentType": "INPUT_PORT",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          }
+        ],
+        "outputPorts": [
+          {
+            "identifier": "7bdd87b5-137c-5ed5-b00c-e31bd6f09647",
+            "instanceIdentifier": "21fa6aa5-75ea-33e7-0b2f-1ffadcf63114",
+            "name": "Reporting-Reconcile",
+            "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+            "position": {
+              "x": 1408.0,
+              "y": 432.0
+            },
+            "type": "OUTPUT_PORT",
+            "concurrentlySchedulableTaskCount": 1,
+            "scheduledState": "DISABLED",
+            "allowRemoteAccess": false,
+            "componentType": "OUTPUT_PORT",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "be84480c-00a4-560b-95cf-ac53e53d6fa2",
+            "instanceIdentifier": "89892c6a-4a1d-3d36-711f-cb5a122128e2",
+            "name": "Recorded-Receipt",
+            "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+            "position": {
+              "x": 1304.0,
+              "y": 152.0
+            },
+            "type": "OUTPUT_PORT",
+            "concurrentlySchedulableTaskCount": 1,
+            "scheduledState": "ENABLED",
+            "allowRemoteAccess": false,
+            "componentType": "OUTPUT_PORT",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "f6a80396-c923-5aff-941b-a16db7e3c6e2",
+            "instanceIdentifier": "d336bdcc-6ff3-3f62-92cb-4c42e3e2e47f",
+            "name": "Reporting-Exhausted",
+            "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+            "position": {
+              "x": 1416.0,
+              "y": 720.0
+            },
+            "type": "OUTPUT_PORT",
+            "concurrentlySchedulableTaskCount": 1,
+            "scheduledState": "DISABLED",
+            "allowRemoteAccess": false,
+            "componentType": "OUTPUT_PORT",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          }
+        ],
+        "connections": [
+          {
+            "identifier": "91943a06-d7fc-5da8-a8ef-63f9fe425761",
+            "instanceIdentifier": "d43a1600-dff1-3eb3-c7e1-6c252cfc628c",
+            "name": "failure",
+            "source": {
+              "id": "819da7ee-195c-5613-972d-3c722e1a818f",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Bounded-Reporting-Retry-Delivery-v1",
+              "comments": "",
+              "instanceIdentifier": "7cd22621-5df4-36d5-77d8-d4eeb3edc85f"
+            },
+            "destination": {
+              "id": "7bdd87b5-137c-5ed5-b00c-e31bd6f09647",
+              "type": "OUTPUT_PORT",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Reporting-Reconcile",
+              "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+              "instanceIdentifier": "21fa6aa5-75ea-33e7-0b2f-1ffadcf63114"
+            },
+            "labelIndex": 1,
+            "zIndex": 0,
+            "selectedRelationships": [
+              "failure"
+            ],
+            "backPressureObjectThreshold": 10,
+            "backPressureDataSizeThreshold": "1 MB",
+            "flowFileExpiration": "0 sec",
+            "prioritizers": [],
+            "bends": [],
+            "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+            "partitioningAttribute": "",
+            "loadBalanceCompression": "DO_NOT_COMPRESS",
+            "componentType": "CONNECTION",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "e3a15027-cd0e-5978-89dd-e9cd08d75178",
+            "instanceIdentifier": "8af5bd1e-b95f-38df-98bd-1599b97c7f6b",
+            "name": "Hold, unmatched",
+            "source": {
+              "id": "2ac0fe98-fba8-5eba-924c-981ca166efec",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Route-Reporting-Result-v2",
+              "comments": "",
+              "instanceIdentifier": "0a743184-f08e-367a-2487-ffb6050a20f9"
+            },
+            "destination": {
+              "id": "7bdd87b5-137c-5ed5-b00c-e31bd6f09647",
+              "type": "OUTPUT_PORT",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Reporting-Reconcile",
+              "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+              "instanceIdentifier": "21fa6aa5-75ea-33e7-0b2f-1ffadcf63114"
+            },
+            "labelIndex": 1,
+            "zIndex": 0,
+            "selectedRelationships": [
+              "Hold",
+              "unmatched"
+            ],
+            "backPressureObjectThreshold": 10,
+            "backPressureDataSizeThreshold": "1 MB",
+            "flowFileExpiration": "0 sec",
+            "prioritizers": [],
+            "bends": [],
+            "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+            "partitioningAttribute": "",
+            "loadBalanceCompression": "DO_NOT_COMPRESS",
+            "componentType": "CONNECTION",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "8e5aa612-c967-5398-9630-85fa2863c884",
+            "instanceIdentifier": "e23fc6f9-a4a6-3288-0865-7eb96496f956",
+            "name": "success",
+            "source": {
+              "id": "d21f650a-f96c-524f-a5e1-d6f64ed02146",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Record-Camera-Receipt-Safe-v2",
+              "comments": "",
+              "instanceIdentifier": "c7ffbd05-f0fd-3e98-332e-8357d855084f"
+            },
+            "destination": {
+              "id": "be84480c-00a4-560b-95cf-ac53e53d6fa2",
+              "type": "OUTPUT_PORT",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Recorded-Receipt",
+              "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+              "instanceIdentifier": "89892c6a-4a1d-3d36-711f-cb5a122128e2"
+            },
+            "labelIndex": 1,
+            "zIndex": 0,
+            "selectedRelationships": [
+              "success"
+            ],
+            "backPressureObjectThreshold": 1000,
+            "backPressureDataSizeThreshold": "1 MB",
+            "flowFileExpiration": "0 sec",
+            "prioritizers": [],
+            "bends": [],
+            "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+            "partitioningAttribute": "",
+            "loadBalanceCompression": "DO_NOT_COMPRESS",
+            "componentType": "CONNECTION",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "fe11b49d-7c66-5931-8f44-8253b27c9dcd",
+            "instanceIdentifier": "63585e0b-e9cb-3a31-2b16-6e9b3ed758aa",
+            "name": "Retry",
+            "source": {
+              "id": "2ac0fe98-fba8-5eba-924c-981ca166efec",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Route-Reporting-Result-v2",
+              "comments": "",
+              "instanceIdentifier": "0a743184-f08e-367a-2487-ffb6050a20f9"
+            },
+            "destination": {
+              "id": "819da7ee-195c-5613-972d-3c722e1a818f",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Bounded-Reporting-Retry-Delivery-v1",
+              "comments": "",
+              "instanceIdentifier": "7cd22621-5df4-36d5-77d8-d4eeb3edc85f"
+            },
+            "labelIndex": 1,
+            "zIndex": 0,
+            "selectedRelationships": [
+              "Retry"
+            ],
+            "backPressureObjectThreshold": 10,
+            "backPressureDataSizeThreshold": "1 MB",
+            "flowFileExpiration": "0 sec",
+            "prioritizers": [],
+            "bends": [],
+            "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+            "partitioningAttribute": "",
+            "loadBalanceCompression": "DO_NOT_COMPRESS",
+            "componentType": "CONNECTION",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "d112e0af-d52d-5ac7-bde8-60c9558440bd",
+            "instanceIdentifier": "b4b49463-3f88-33e3-fb36-03aee3464746",
+            "name": "retries_exceeded",
+            "source": {
+              "id": "819da7ee-195c-5613-972d-3c722e1a818f",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Bounded-Reporting-Retry-Delivery-v1",
+              "comments": "",
+              "instanceIdentifier": "7cd22621-5df4-36d5-77d8-d4eeb3edc85f"
+            },
+            "destination": {
+              "id": "f6a80396-c923-5aff-941b-a16db7e3c6e2",
+              "type": "OUTPUT_PORT",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Reporting-Exhausted",
+              "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+              "instanceIdentifier": "d336bdcc-6ff3-3f62-92cb-4c42e3e2e47f"
+            },
+            "labelIndex": 1,
+            "zIndex": 0,
+            "selectedRelationships": [
+              "retries_exceeded"
+            ],
+            "backPressureObjectThreshold": 10,
+            "backPressureDataSizeThreshold": "1 MB",
+            "flowFileExpiration": "0 sec",
+            "prioritizers": [],
+            "bends": [],
+            "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+            "partitioningAttribute": "",
+            "loadBalanceCompression": "DO_NOT_COMPRESS",
+            "componentType": "CONNECTION",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "e5420ad1-de0e-55fd-b798-3b55f6377ebd",
+            "instanceIdentifier": "dc7b622a-d84e-3777-2604-f11992c2f43f",
+            "name": "retry",
+            "source": {
+              "id": "819da7ee-195c-5613-972d-3c722e1a818f",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Bounded-Reporting-Retry-Delivery-v1",
+              "comments": "",
+              "instanceIdentifier": "7cd22621-5df4-36d5-77d8-d4eeb3edc85f"
+            },
+            "destination": {
+              "id": "d21f650a-f96c-524f-a5e1-d6f64ed02146",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Record-Camera-Receipt-Safe-v2",
+              "comments": "",
+              "instanceIdentifier": "c7ffbd05-f0fd-3e98-332e-8357d855084f"
+            },
+            "labelIndex": 1,
+            "zIndex": 0,
+            "selectedRelationships": [
+              "retry"
+            ],
+            "backPressureObjectThreshold": 10,
+            "backPressureDataSizeThreshold": "1 MB",
+            "flowFileExpiration": "0 sec",
+            "prioritizers": [],
+            "bends": [
+              {
+                "x": 600.0,
+                "y": 760.0
+              },
+              {
+                "x": 330.0,
+                "y": 760.0
+              },
+              {
+                "x": 528.0,
+                "y": 440.0
+              }
+            ],
+            "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+            "partitioningAttribute": "",
+            "loadBalanceCompression": "DO_NOT_COMPRESS",
+            "componentType": "CONNECTION",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "6cbef117-216f-5c9c-b410-9da6d7d0ab2b",
+            "instanceIdentifier": "929baae1-97d8-3f6e-b474-f2c381863a96",
+            "name": "receipt-v1",
+            "source": {
+              "id": "8e111bf4-6fc0-5426-a9a3-bb81fb58e66c",
+              "type": "INPUT_PORT",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Accepted-Camera-Receipt",
+              "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+              "instanceIdentifier": "bbaf4812-77ad-3632-6002-bd712e6c8aa6"
+            },
+            "destination": {
+              "id": "d21f650a-f96c-524f-a5e1-d6f64ed02146",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Record-Camera-Receipt-Safe-v2",
+              "comments": "",
+              "instanceIdentifier": "c7ffbd05-f0fd-3e98-332e-8357d855084f"
+            },
+            "labelIndex": 1,
+            "zIndex": 0,
+            "selectedRelationships": [],
+            "backPressureObjectThreshold": 10,
+            "backPressureDataSizeThreshold": "1 MB",
+            "flowFileExpiration": "0 sec",
+            "prioritizers": [],
+            "bends": [],
+            "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+            "partitioningAttribute": "",
+            "loadBalanceCompression": "DO_NOT_COMPRESS",
+            "componentType": "CONNECTION",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          },
+          {
+            "identifier": "0af7a0c7-e526-5a96-ae43-f4781e8d1e3c",
+            "instanceIdentifier": "09e6da20-d653-309b-3999-ec0d43b48b3e",
+            "name": "failure",
+            "source": {
+              "id": "d21f650a-f96c-524f-a5e1-d6f64ed02146",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Record-Camera-Receipt-Safe-v2",
+              "comments": "",
+              "instanceIdentifier": "c7ffbd05-f0fd-3e98-332e-8357d855084f"
+            },
+            "destination": {
+              "id": "2ac0fe98-fba8-5eba-924c-981ca166efec",
+              "type": "PROCESSOR",
+              "groupId": "90a0dcba-230e-3030-87b6-346705a9452c",
+              "name": "Route-Reporting-Result-v2",
+              "comments": "",
+              "instanceIdentifier": "0a743184-f08e-367a-2487-ffb6050a20f9"
+            },
+            "labelIndex": 1,
+            "zIndex": 0,
+            "selectedRelationships": [
+              "failure"
+            ],
+            "backPressureObjectThreshold": 10,
+            "backPressureDataSizeThreshold": "1 MB",
+            "flowFileExpiration": "0 sec",
+            "prioritizers": [],
+            "bends": [],
+            "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+            "partitioningAttribute": "",
+            "loadBalanceCompression": "DO_NOT_COMPRESS",
+            "componentType": "CONNECTION",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          }
+        ],
+        "labels": [],
+        "funnels": [],
+        "controllerServices": [
+          {
+            "identifier": "314c2ad1-bd5a-5930-a208-2726de04c4f6",
+            "instanceIdentifier": "5a87681d-848a-385d-0981-9087e0af43d5",
+            "name": "AURA-S3-Reporting-Delivery-DBCP",
+            "comments": "",
+            "type": "org.apache.nifi.dbcp.DBCPConnectionPool",
+            "bundle": {
+              "group": "org.apache.nifi",
+              "artifact": "nifi-dbcp-service-nar",
+              "version": "1.27.0"
+            },
+            "properties": {
+              "dbcp-min-idle-conns": "0",
+              "Max Wait Time": "5 sec",
+              "Database Driver Class Name": "org.postgresql.Driver",
+              "dbcp-min-evictable-idle-time": "30 mins",
+              "Max Total Connections": "2",
+              "dbcp-max-conn-lifetime": "-1",
+              "Validation-query": "SELECT 1",
+              "Database Connection URL": "jdbc:postgresql://reporting-postgres:5432/aura_reporting?connectTimeout=5&socketTimeout=15&options=-c%20statement_timeout%3D10000%20-c%20lock_timeout%3D5000",
+              "dbcp-time-between-eviction-runs": "-1",
+              "Database User": "aura_reporting_writer",
+              "dbcp-soft-min-evictable-idle-time": "-1",
+              "database-driver-locations": "/opt/nifi/nifi-current/drivers/postgresql-42.7.14.jar",
+              "dbcp-max-idle-conns": "2",
+              "Password": "enc{96d1ee18964e4d62f7e6329cc6e4243c1d09ad49691d37b3117a80ed435d4f50e8f214f6a9f60ab6a868c63959a3f78d6d67affc3b95fa9b76ba7b9dc0410e5a116d8d1153ed134007a1c49311ee7281}"
+            },
+            "propertyDescriptors": {},
+            "controllerServiceApis": [
+              {
+                "type": "org.apache.nifi.dbcp.DBCPService",
+                "bundle": {
+                  "group": "org.apache.nifi",
+                  "artifact": "nifi-standard-services-api-nar",
+                  "version": "1.27.0"
+                }
+              }
+            ],
+            "scheduledState": "ENABLED",
+            "bulletinLevel": "WARN",
+            "componentType": "CONTROLLER_SERVICE",
+            "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
+          }
+        ],
+        "variables": {},
+        "defaultFlowFileExpiration": "0 sec",
+        "defaultBackPressureObjectThreshold": 10,
+        "defaultBackPressureDataSizeThreshold": "1 MB",
+        "logFileSuffix": "",
+        "componentType": "PROCESS_GROUP",
+        "flowFileConcurrency": "UNBOUNDED",
+        "flowFileOutboundPolicy": "STREAM_WHEN_AVAILABLE",
+        "groupIdentifier": "2e399f7a-bc56-32cc-b751-e9dd2950a19f"
+      }
+    ],
     "remoteProcessGroups": [],
     "processors": [
       {

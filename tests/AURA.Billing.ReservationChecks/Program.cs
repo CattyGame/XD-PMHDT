@@ -32,6 +32,8 @@ public class Program
             await TestSCRUM346_PaymentSandboxAndIdempotentCreditAsync();
             await TestSCRUM348_ClinicBillingAndAutoRefundAsync();
             await TestSCRUM349_ResilienceAndFinancialReconciliationAsync();
+            await TestSCRUM365_ClinicPackagesAndEntitlementsAsync();
+            await TestSCRUM366_BatchRefundAndReconciliationAsync();
 
             Console.WriteLine();
             Console.WriteLine("====================================================================");
@@ -1253,4 +1255,833 @@ public class Program
         Assert(currentTotalWalletBalance >= 0,
             "TC-349.3 (AC3): Đạt chứng nhận an toàn dữ liệu: Số dư tài chính không bao giờ âm, mọi giao dịch có dấu vết kiểm toán");
     }
+
+    // =========================================================================
+    // NHÓM SCRUM-365: BILLING CẤP TỔ CHỨC (CLINIC PACKAGES & ENTITLEMENTS)
+    // =========================================================================
+    private static async Task TestSCRUM365_ClinicPackagesAndEntitlementsAsync()
+    {
+        Console.WriteLine("\n[SCRUM-365] Clinic Packages (500 & 5000 Credits), Entitlements & IDOR Guard:");
+
+        var connStr = "Host=127.0.0.1;Port=5432;Database=aura_dev;Username=aura_dev;Password=b324846608e64afc9d2ece68f9cdacad;";
+        await using var pgConn = new Npgsql.NpgsqlConnection(connStr);
+        await pgConn.OpenAsync();
+
+        using var httpClient = new HttpClient();
+        httpClient.BaseAddress = new Uri("http://localhost:5002");
+        httpClient.Timeout = TimeSpan.FromSeconds(10);
+
+        // ---------------------------------------------------------------------
+        // TC-365.1 (AC1): Package Catalog có Gói phòng khám 500 credits và Gói chiến dịch 5.000 credits
+        // ---------------------------------------------------------------------
+        var catalogRes = await httpClient.GetAsync("/api/v1/billing/packages");
+        Assert(catalogRes.IsSuccessStatusCode, "TC-365.1 (AC1): GET /api/v1/billing/packages trả về HTTP 200 OK");
+
+        var catalogJson = await catalogRes.Content.ReadAsStringAsync();
+        Assert(catalogJson.Contains("Gói phòng khám") && catalogJson.Contains("500"),
+            "TC-365.1 (AC1): Catalog chứa Gói phòng khám Cơ bản / Enterprise (500 credits, 7.000.000 VNĐ)");
+        Assert(catalogJson.Contains("Gói Chiến dịch") && catalogJson.Contains("5000"),
+            "TC-365.1 (AC1): Catalog chứa Gói Chiến dịch Tầm soát Lớn (5.000 credits, 65.000.000 VNĐ)");
+
+        // ---------------------------------------------------------------------
+        // Chuẩn bị dữ liệu Seed: Phòng khám A và Phòng khám B
+        // ---------------------------------------------------------------------
+        var clinicAId = Guid.NewGuid();
+        var tenantAId = clinicAId;
+        var clinicBId = Guid.NewGuid();
+        var tenantBId = clinicBId;
+
+        var clinicAdminA = Guid.NewGuid();
+        var doctorA = Guid.NewGuid();
+        var clinicAdminB = Guid.NewGuid();
+        var doctorB = Guid.NewGuid();
+        var strangerId = Guid.NewGuid();
+
+        // 1. Seed Tenants and Clinics
+        await using (var seedTenantCmd = new Npgsql.NpgsqlCommand("""
+            INSERT INTO profile.tenants (tenant_id, tenant_kind, owner_principal_id, created_at)
+            VALUES
+                (@t_a, 'CLINIC', @c_a, now()),
+                (@t_b, 'CLINIC', @c_b, now())
+            ON CONFLICT (tenant_id) DO NOTHING;
+            """, pgConn))
+        {
+            seedTenantCmd.Parameters.AddWithValue("t_a", tenantAId);
+            seedTenantCmd.Parameters.AddWithValue("c_a", clinicAId);
+            seedTenantCmd.Parameters.AddWithValue("t_b", tenantBId);
+            seedTenantCmd.Parameters.AddWithValue("c_b", clinicBId);
+            await seedTenantCmd.ExecuteNonQueryAsync();
+        }
+
+        await using (var seedClinicCmd = new Npgsql.NpgsqlCommand("""
+            INSERT INTO profile.clinics (clinic_id, tenant_id, name, status, created_at, updated_at)
+            VALUES
+                (@c_a, @t_a, 'Phòng Khám Đa Khoa An Khang', 'ACTIVE', now(), now()),
+                (@c_b, @t_b, 'Phòng Khám Quốc Tế Bình An', 'ACTIVE', now(), now())
+            ON CONFLICT (clinic_id) DO NOTHING;
+            """, pgConn))
+        {
+            seedClinicCmd.Parameters.AddWithValue("c_a", clinicAId);
+            seedClinicCmd.Parameters.AddWithValue("t_a", tenantAId);
+            seedClinicCmd.Parameters.AddWithValue("c_b", clinicBId);
+            seedClinicCmd.Parameters.AddWithValue("t_b", tenantBId);
+            await seedClinicCmd.ExecuteNonQueryAsync();
+        }
+
+        // 2. Seed Memberships
+        await using (var seedMembersCmd = new Npgsql.NpgsqlCommand("""
+            INSERT INTO profile.memberships (membership_id, clinic_id, account_id, role, status, created_at, updated_at)
+            VALUES
+                (gen_random_uuid(), @c_a, @admin_a, 'CLINIC_ADMIN', 'ACTIVE', now(), now()),
+                (gen_random_uuid(), @c_a, @doc_a, 'DOCTOR', 'ACTIVE', now(), now()),
+                (gen_random_uuid(), @c_b, @admin_b, 'CLINIC_ADMIN', 'ACTIVE', now(), now()),
+                (gen_random_uuid(), @c_b, @doc_b, 'DOCTOR', 'ACTIVE', now(), now())
+            ON CONFLICT DO NOTHING;
+            """, pgConn))
+        {
+            seedMembersCmd.Parameters.AddWithValue("c_a", clinicAId);
+            seedMembersCmd.Parameters.AddWithValue("admin_a", clinicAdminA);
+            seedMembersCmd.Parameters.AddWithValue("doc_a", doctorA);
+            seedMembersCmd.Parameters.AddWithValue("c_b", clinicBId);
+            seedMembersCmd.Parameters.AddWithValue("admin_b", clinicAdminB);
+            seedMembersCmd.Parameters.AddWithValue("doc_b", doctorB);
+            await seedMembersCmd.ExecuteNonQueryAsync();
+        }
+
+        // ---------------------------------------------------------------------
+        // TC-365.2 (AC1): ClinicAdmin mua Gói Cơ bản 500 ảnh thành công & Nạp ví
+        // ---------------------------------------------------------------------
+        var order500IdempKey = Guid.NewGuid();
+        var create500Payload = new
+        {
+            packageId = 4, // Gói phòng khám 500 credits
+            tenantId = clinicAId,
+            billingOwner = new
+            {
+                type = "CLINIC",
+                id = clinicAId
+            },
+            paymentMethod = "SANDBOX_MOCK"
+        };
+
+        var req500 = new HttpRequestMessage(HttpMethod.Post, "/api/v1/billing/orders")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(create500Payload), System.Text.Encoding.UTF8, "application/json")
+        };
+        req500.Headers.Add("Idempotency-Key", order500IdempKey.ToString("D"));
+        req500.Headers.Add("X-Clinic-ID", clinicAId.ToString("D"));
+        req500.Headers.Add("X-Actor-ID", clinicAdminA.ToString("D"));
+        req500.Headers.Add("X-Actor-Role", "CLINIC_ADMIN");
+
+        var res500 = await httpClient.SendAsync(req500);
+        Assert(res500.StatusCode == System.Net.HttpStatusCode.Created,
+            "TC-365.2 (AC1): ClinicAdmin A tạo đơn hàng Gói phòng khám 500 credits thành công HTTP 201 Created");
+
+        var body500 = await res500.Content.ReadAsStringAsync();
+        using var doc500 = System.Text.Json.JsonDocument.Parse(body500);
+        var order500Id = Guid.Parse(doc500.RootElement.GetProperty("orderId").GetString()!);
+        var credits500 = doc500.RootElement.GetProperty("credits").GetInt32();
+        var amount500 = doc500.RootElement.GetProperty("amount").GetDecimal();
+
+        Assert(credits500 == 500 && amount500 == 7000000.00m,
+            "TC-365.2 (AC1): Snapshot đơn hàng lưu trữ đúng 500 credits và đơn giá 7.000.000 VNĐ");
+
+        // Thanh toán Sandbox cho đơn 500 credits
+        var pay500Req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/billing/sandbox/pay")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { orderId = order500Id, simulateFailure = false }), System.Text.Encoding.UTF8, "application/json")
+        };
+        pay500Req.Headers.Add("X-Clinic-ID", clinicAId.ToString("D"));
+        pay500Req.Headers.Add("X-Actor-ID", clinicAdminA.ToString("D"));
+
+        var pay500Res = await httpClient.SendAsync(pay500Req);
+        Assert(pay500Res.IsSuccessStatusCode,
+            "TC-365.2 (AC1): Cổng Sandbox thanh toán đơn 500 credits thành công HTTP 200 OK");
+
+        // Kiểm tra số dư ví phòng khám A: đúng 500 credits
+        await using (var checkBalCmd = new Npgsql.NpgsqlCommand(
+            "SELECT balance FROM billing.credit_wallets WHERE owner_type = 'CLINIC' AND owner_id = @id;", pgConn))
+        {
+            checkBalCmd.Parameters.AddWithValue("id", clinicAId);
+            var balanceA = (int)(await checkBalCmd.ExecuteScalarAsync())!;
+            Assert(balanceA == 500,
+                "TC-365.2 (AC1): Số dư ví phòng khám A trong billing.credit_wallets được nạp chính xác 500 credits");
+        }
+
+        // ---------------------------------------------------------------------
+        // TC-365.3 (AC1): ClinicAdmin mua Gói Chiến dịch 5.000 ảnh & Cộng dồn số dư
+        // ---------------------------------------------------------------------
+        var order5000IdempKey = Guid.NewGuid();
+        var create5000Payload = new
+        {
+            packageId = 5, // Gói Chiến dịch 5.000 credits
+            tenantId = clinicAId,
+            billingOwner = new
+            {
+                type = "CLINIC",
+                id = clinicAId
+            },
+            paymentMethod = "SANDBOX_MOCK"
+        };
+
+        var req5000 = new HttpRequestMessage(HttpMethod.Post, "/api/v1/billing/orders")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(create5000Payload), System.Text.Encoding.UTF8, "application/json")
+        };
+        req5000.Headers.Add("Idempotency-Key", order5000IdempKey.ToString("D"));
+        req5000.Headers.Add("X-Clinic-ID", clinicAId.ToString("D"));
+        req5000.Headers.Add("X-Actor-ID", clinicAdminA.ToString("D"));
+        req5000.Headers.Add("X-Actor-Role", "CLINIC_ADMIN");
+
+        var res5000 = await httpClient.SendAsync(req5000);
+        Assert(res5000.StatusCode == System.Net.HttpStatusCode.Created,
+            "TC-365.3 (AC1): ClinicAdmin A tạo đơn hàng Gói Chiến dịch 5.000 credits thành công HTTP 201 Created");
+
+        var body5000 = await res5000.Content.ReadAsStringAsync();
+        using var doc5000 = System.Text.Json.JsonDocument.Parse(body5000);
+        var order5000Id = Guid.Parse(doc5000.RootElement.GetProperty("orderId").GetString()!);
+        var credits5000 = doc5000.RootElement.GetProperty("credits").GetInt32();
+        var amount5000 = doc5000.RootElement.GetProperty("amount").GetDecimal();
+
+        Assert(credits5000 == 5000 && amount5000 == 65000000.00m,
+            "TC-365.3 (AC1): Snapshot đơn hàng lưu trữ đúng 5.000 credits và đơn giá 65.000.000 VNĐ");
+
+        // Thanh toán Sandbox cho đơn 5.000 credits
+        var pay5000Req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/billing/sandbox/pay")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { orderId = order5000Id, simulateFailure = false }), System.Text.Encoding.UTF8, "application/json")
+        };
+        pay5000Req.Headers.Add("X-Clinic-ID", clinicAId.ToString("D"));
+        pay5000Req.Headers.Add("X-Actor-ID", clinicAdminA.ToString("D"));
+
+        var pay5000Res = await httpClient.SendAsync(pay5000Req);
+        Assert(pay5000Res.IsSuccessStatusCode,
+            "TC-365.3 (AC1): Cổng Sandbox thanh toán đơn 5.000 credits thành công HTTP 200 OK");
+
+        // Kiểm tra số dư ví phòng khám A: 500 + 5000 = 5500 credits
+        await using (var checkBalCmd2 = new Npgsql.NpgsqlCommand(
+            "SELECT balance FROM billing.credit_wallets WHERE owner_type = 'CLINIC' AND owner_id = @id;", pgConn))
+        {
+            checkBalCmd2.Parameters.AddWithValue("id", clinicAId);
+            var balanceA2 = (int)(await checkBalCmd2.ExecuteScalarAsync())!;
+            Assert(balanceA2 == 5500,
+                "TC-365.3 (AC1): Số dư ví phòng khám A được cộng dồn chính xác 5.500 credits (500 + 5.000)");
+        }
+
+        // ---------------------------------------------------------------------
+        // TC-365.4 (AC1): Bất biến Snapshot đơn hàng (Database Trigger Guard)
+        // ---------------------------------------------------------------------
+        var triggerBlocked = false;
+        try
+        {
+            await using var tamperCmd = new Npgsql.NpgsqlCommand(
+                "UPDATE billing.orders SET credits_snapshot = 999999 WHERE id = @id;", pgConn);
+            tamperCmd.Parameters.AddWithValue("id", order5000Id);
+            await tamperCmd.ExecuteNonQueryAsync();
+        }
+        catch (Npgsql.PostgresException ex) when (ex.Message.Contains("immutable") || ex.SqlState == "55000")
+        {
+            triggerBlocked = true;
+        }
+        Assert(triggerBlocked,
+            "TC-365.4 (AC1): Trigger guard_order_snapshot_update bảo vệ snapshot bất biến tuyệt đối chống sửa đổi");
+
+        // ---------------------------------------------------------------------
+        // TC-365.5 (AC2): Ngăn chặn trừ credit chéo giữa các Clinic (Multi-tenant Guard)
+        // ---------------------------------------------------------------------
+        var crossClinicReq = new
+        {
+            analysisId = Guid.NewGuid(),
+            tenantId = clinicBId,
+            actorAccountId = doctorB,
+            patientId = Guid.NewGuid(),
+            billingOwner = new
+            {
+                type = "CLINIC",
+                id = clinicAId // Ví thuộc Clinic A!
+            },
+            units = 1,
+            generation = 1
+        };
+
+        var reserveToken = await GetServiceTokenAsync("billing:reserve");
+        var crossReserveHttpReq = new HttpRequestMessage(HttpMethod.Post, "/internal/v1/billing/reservations")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(crossClinicReq), System.Text.Encoding.UTF8, "application/json")
+        };
+        crossReserveHttpReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString("D"));
+        crossReserveHttpReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", reserveToken);
+
+        var crossReserveHttpRes = await httpClient.SendAsync(crossReserveHttpReq);
+        Assert(crossReserveHttpRes.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+               crossReserveHttpRes.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable,
+            "TC-365.5 (AC2): Bác sĩ Clinic B trừ credit chéo từ ví Clinic A bị từ chối triệt để (HTTP 403 Forbidden)");
+
+        // Kiểm tra số dư Clinic A vẫn bất khả xâm phạm (5500 credits)
+        await using (var checkBalCmd3 = new Npgsql.NpgsqlCommand(
+            "SELECT balance FROM billing.credit_wallets WHERE owner_type = 'CLINIC' AND owner_id = @id;", pgConn))
+        {
+            checkBalCmd3.Parameters.AddWithValue("id", clinicAId);
+            var balanceA3 = (int)(await checkBalCmd3.ExecuteScalarAsync())!;
+            Assert(balanceA3 == 5500,
+                "TC-365.5 (AC2): Ví của Clinic A được bảo vệ nguyên vẹn 5.500 credits, không bị trừ thất thoát");
+        }
+
+        // ---------------------------------------------------------------------
+        // TC-365.6 (Master Audit - Chống IDOR khi tạo Đơn hàng)
+        // ---------------------------------------------------------------------
+        // 1. Doctor cố tình mua gói khám thay ClinicAdmin
+        var docOrderReq = new HttpRequestMessage(HttpMethod.Post, "/api/v1/billing/orders")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                packageId = 4,
+                tenantId = clinicAId,
+                billingOwner = new { type = "CLINIC", id = clinicAId }
+            }), System.Text.Encoding.UTF8, "application/json")
+        };
+        docOrderReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString("D"));
+        docOrderReq.Headers.Add("X-Clinic-ID", clinicAId.ToString("D"));
+        docOrderReq.Headers.Add("X-Actor-ID", doctorA.ToString("D"));
+        docOrderReq.Headers.Add("X-Actor-Role", "DOCTOR");
+
+        var docOrderRes = await httpClient.SendAsync(docOrderReq);
+        Assert(docOrderRes.StatusCode == System.Net.HttpStatusCode.Forbidden,
+            "TC-365.6 (IDOR Guard): Bác sĩ tạo đơn hàng mua credit cho phòng khám bị từ chối (HTTP 403 Forbidden)");
+
+        // 2. Admin Clinic B cố tình giả mạo header X-Clinic-ID sang Clinic A
+        var tamperClinicReq = new HttpRequestMessage(HttpMethod.Post, "/api/v1/billing/orders")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                packageId = 4,
+                tenantId = clinicAId,
+                billingOwner = new { type = "CLINIC", id = clinicAId }
+            }), System.Text.Encoding.UTF8, "application/json")
+        };
+        tamperClinicReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString("D"));
+        tamperClinicReq.Headers.Add("X-Clinic-ID", clinicBId.ToString("D"));
+        tamperClinicReq.Headers.Add("X-Actor-ID", clinicAdminB.ToString("D"));
+        tamperClinicReq.Headers.Add("X-Actor-Role", "CLINIC_ADMIN");
+
+        var tamperClinicRes = await httpClient.SendAsync(tamperClinicReq);
+        Assert(tamperClinicRes.StatusCode == System.Net.HttpStatusCode.Forbidden,
+            "TC-365.6 (IDOR Guard): Mâu thuẫn X-Clinic-ID và BillingOwner bị từ chối an toàn (HTTP 403 Forbidden)");
+
+        // 3. Người lạ không thuộc phòng khám cố tình tạo đơn
+        var strangerReq = new HttpRequestMessage(HttpMethod.Post, "/api/v1/billing/orders")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                packageId = 4,
+                tenantId = clinicAId,
+                billingOwner = new { type = "CLINIC", id = clinicAId }
+            }), System.Text.Encoding.UTF8, "application/json")
+        };
+        strangerReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString("D"));
+        strangerReq.Headers.Add("X-Clinic-ID", clinicAId.ToString("D"));
+        strangerReq.Headers.Add("X-Actor-ID", strangerId.ToString("D"));
+
+        var strangerRes = await httpClient.SendAsync(strangerReq);
+        Assert(strangerRes.StatusCode == System.Net.HttpStatusCode.Forbidden,
+            "TC-365.6 (IDOR Guard): Người không thuộc phòng khám cố tình tạo đơn bị từ chối (HTTP 403 Forbidden)");
+
+        // ---------------------------------------------------------------------
+        // TC-365.7 (Master Audit - Chống IDOR khi Truy vấn và Thanh toán Đơn hàng)
+        // ---------------------------------------------------------------------
+        var idorGetReq = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/billing/orders/{order5000Id:D}");
+        idorGetReq.Headers.Add("X-Clinic-ID", clinicBId.ToString("D"));
+        idorGetReq.Headers.Add("X-Actor-ID", clinicAdminB.ToString("D"));
+
+        var idorGetRes = await httpClient.SendAsync(idorGetReq);
+        Assert(idorGetRes.StatusCode == System.Net.HttpStatusCode.Forbidden,
+            "TC-365.7 (IDOR Guard): Admin Clinic B truy vấn đơn hàng của Clinic A bị từ chối (HTTP 403 Forbidden)");
+
+        var idorPayReq = new HttpRequestMessage(HttpMethod.Post, "/api/v1/billing/sandbox/pay")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { orderId = order5000Id }), System.Text.Encoding.UTF8, "application/json")
+        };
+        idorPayReq.Headers.Add("X-Clinic-ID", clinicBId.ToString("D"));
+        idorPayReq.Headers.Add("X-Actor-ID", clinicAdminB.ToString("D"));
+
+        var idorPayRes = await httpClient.SendAsync(idorPayReq);
+        Assert(idorPayRes.StatusCode == System.Net.HttpStatusCode.Forbidden,
+            "TC-365.7 (IDOR Guard): Admin Clinic B thanh toán đơn hàng của Clinic A bị từ chối (HTTP 403 Forbidden)");
+
+        // ---------------------------------------------------------------------
+        // TC-365.8 (Master Audit - Chống Double Spending khi Webhook Callback Replay)
+        // ---------------------------------------------------------------------
+        var webhookSecret = "aura_billing_sandbox_hmac_secret_2026";
+        var sigService = new PaymentSignatureService();
+        var txId = $"SANDBOX-REPLAY-TX-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var sig = sigService.ComputeSignature(order5000Id, txId, 65000000.00m, "VND", "SUCCESS", ts, webhookSecret);
+
+        var callbackPayload = new
+        {
+            orderId = order5000Id,
+            transactionId = txId,
+            amount = 65000000.00m,
+            currency = "VND",
+            paymentStatus = "SUCCESS",
+            timestamp = ts,
+            signature = sig
+        };
+
+        var allReplaysHandled = true;
+        for (int i = 0; i < 5; i++)
+        {
+            var cbReq = new HttpRequestMessage(HttpMethod.Post, "/api/v1/billing/payments/callback")
+            {
+                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(callbackPayload), System.Text.Encoding.UTF8, "application/json")
+            };
+            cbReq.Headers.Add("X-Payment-Method", "SANDBOX_MOCK");
+
+            var cbRes = await httpClient.SendAsync(cbReq);
+            var cbBody = await cbRes.Content.ReadAsStringAsync();
+            using var cbDoc = System.Text.Json.JsonDocument.Parse(cbBody);
+            var creditsAdded = cbDoc.RootElement.GetProperty("creditsAdded").GetInt32();
+            var isReplayed = cbDoc.RootElement.GetProperty("replayed").GetBoolean();
+
+            if (creditsAdded != 0 || !isReplayed)
+            {
+                allReplaysHandled = false;
+                break;
+            }
+        }
+
+        Assert(allReplaysHandled,
+            "TC-365.8 (Anti-Double-Spending): Webhook gửi lặp lại 5 lần được dedup an toàn (replayed=true, creditsAdded=0)");
+
+        await using (var checkFinalBalCmd = new Npgsql.NpgsqlCommand(
+            "SELECT balance FROM billing.credit_wallets WHERE owner_type = 'CLINIC' AND owner_id = @id;", pgConn))
+        {
+            checkFinalBalCmd.Parameters.AddWithValue("id", clinicAId);
+            var finalBalA = (int)(await checkFinalBalCmd.ExecuteScalarAsync())!;
+            Assert(finalBalA == 5500,
+                "TC-365.8 (Anti-Double-Spending): Số dư ví phòng khám A giữ vững 5.500 credits, không xảy ra nạp trùng");
+        }
+    }
+
+
+    // =========================================================================
+
+    // =========================================================================
+    // NHÓM SCRUM-366: IDEMPOTENT BATCH PARTIAL REFUND & LEDGER RECONCILIATION
+    // =========================================================================
+    private static async Task TestSCRUM366_BatchRefundAndReconciliationAsync()
+    {
+        Console.WriteLine("\n[SCRUM-366] Idempotent Batch Partial Refund & Ledger Reconciliation (P0) Verification:");
+
+        using var httpClient = new HttpClient();
+        httpClient.BaseAddress = new Uri("http://localhost:5002");
+        httpClient.Timeout = TimeSpan.FromSeconds(30);
+
+        var connStr = "Host=127.0.0.1;Port=5432;Database=aura_dev;Username=aura_dev;Password=b324846608e64afc9d2ece68f9cdacad;";
+        await using var pgConn = new Npgsql.NpgsqlConnection(connStr);
+        await pgConn.OpenAsync();
+
+        var clinicAId = Guid.NewGuid();
+        var clinicBId = Guid.NewGuid();
+        Guid walletAId;
+
+        // 1. Khởi tạo ví cho Clinic A với 200 credits
+        await using (var seedCmd = new Npgsql.NpgsqlCommand("""
+            INSERT INTO billing.credit_wallets (id, owner_type, owner_id, environment, balance)
+            VALUES (gen_random_uuid(), 'CLINIC', @clinic_id, 'TEST', 200)
+            RETURNING id;
+            """, pgConn))
+        {
+            seedCmd.Parameters.AddWithValue("clinic_id", clinicAId);
+            walletAId = (Guid)(await seedCmd.ExecuteScalarAsync())!;
+        }
+
+        // Khởi tạo ví cho Clinic B với 50 credits
+        await using (var seedBCmd = new Npgsql.NpgsqlCommand("""
+            INSERT INTO billing.credit_wallets (id, owner_type, owner_id, environment, balance)
+            VALUES (gen_random_uuid(), 'CLINIC', @clinic_id, 'TEST', 50);
+            """, pgConn))
+        {
+            seedBCmd.Parameters.AddWithValue("clinic_id", clinicBId);
+            await seedBCmd.ExecuteNonQueryAsync();
+        }
+
+        // 2. Khởi tạo 100 reservations (1 credit mỗi ảnh) đại diện cho Batch 100 ảnh
+        var reservationIds = new List<Guid>();
+        for (int i = 0; i < 100; i++)
+        {
+            var resId = Guid.NewGuid();
+            var analysisId = Guid.NewGuid();
+            var idemp = Guid.NewGuid();
+            reservationIds.Add(resId);
+
+            await using var cmd = new Npgsql.NpgsqlCommand("""
+                INSERT INTO billing.credit_reservations (
+                    id, tenant_id, analysis_id, generation, wallet_id, actor_account_id,
+                    patient_id, billing_owner_type, billing_owner_id, units, environment,
+                    state, idempotency_key, request_fingerprint, created_at, updated_at
+                ) VALUES (
+                    @id, @tenant_id, @analysis_id, 1, @wallet_id, gen_random_uuid(),
+                    gen_random_uuid(), 'CLINIC', @tenant_id, 1, 'TEST',
+                    'RESERVED', @idemp, 'fingerprint-366', now(), now()
+                );
+                UPDATE billing.credit_wallets SET balance = balance - 1 WHERE id = @wallet_id;
+                INSERT INTO billing.credit_ledger_entries (
+                    wallet_id, tenant_id, reservation_id, entry_type, amount, balance_after,
+                    idempotency_key, request_fingerprint, created_at
+                ) VALUES (
+                    @wallet_id, @tenant_id, @id, 'RESERVE', -1, 200 - @i - 1,
+                    @idemp, 'fingerprint-366', now()
+                );
+                """, pgConn);
+            cmd.Parameters.AddWithValue("id", resId);
+            cmd.Parameters.AddWithValue("tenant_id", clinicAId);
+            cmd.Parameters.AddWithValue("analysis_id", analysisId);
+            cmd.Parameters.AddWithValue("wallet_id", walletAId);
+            cmd.Parameters.AddWithValue("idemp", idemp);
+            cmd.Parameters.AddWithValue("i", i);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        Assert(reservationIds.Count == 100,
+            "TC-366.1 (AC1): Khởi tạo và giữ chỗ thành công 100/100 reservations cho Batch lớn (mỗi ảnh 1 credit)");
+
+        // Kiểm tra số dư ví Clinic A sau khi giữ chỗ: 200 - 100 = 100 credits
+        await using (var checkBalCmd1 = new Npgsql.NpgsqlCommand("SELECT balance FROM billing.credit_wallets WHERE id = @id;", pgConn))
+        {
+            checkBalCmd1.Parameters.AddWithValue("id", walletAId);
+            var bal1 = (int)(await checkBalCmd1.ExecuteScalarAsync())!;
+            Assert(bal1 == 100,
+                $"TC-366.1 (AC1): Số dư ví sau khi giữ chỗ 100 ảnh giảm chính xác về 100 credits (Hiện tại: {bal1})");
+        }
+
+        // 3. Worker phân tích xong 95 ảnh thành công -> Ghi nhận CAPTURED cho 95 reservations
+        var successIds = reservationIds.Take(95).ToList();
+        var failedIds = reservationIds.Skip(95).Take(5).ToList();
+
+        for (int i = 0; i < 95; i++)
+        {
+            var resId = successIds[i];
+            await using var capCmd = new Npgsql.NpgsqlCommand("""
+                UPDATE billing.credit_reservations
+                SET state = 'CAPTURED', captured_at = now(), updated_at = now()
+                WHERE id = @id AND state = 'RESERVED';
+
+                INSERT INTO billing.credit_ledger_entries (
+                    wallet_id, tenant_id, reservation_id, entry_type, amount, balance_after,
+                    idempotency_key, request_fingerprint, created_at
+                ) VALUES (
+                    @wallet_id, @tenant_id, @id, 'CAPTURE', 0, 100,
+                    gen_random_uuid(), 'fingerprint-capture-366', now()
+                );
+                """, pgConn);
+            capCmd.Parameters.AddWithValue("id", resId);
+            capCmd.Parameters.AddWithValue("tenant_id", clinicAId);
+            capCmd.Parameters.AddWithValue("wallet_id", walletAId);
+            await capCmd.ExecuteNonQueryAsync();
+        }
+
+        Assert(successIds.Count == 95,
+            "TC-366.1 (AC1): Phân tích và Capture thành công 95/100 ảnh hợp lệ");
+
+        // 4. Batch hoàn tất với 5 ảnh lỗi -> Analysis API gọi Batch Refund tự động
+        var releaseToken = await GetServiceTokenAsync("billing:release");
+        var batchIdempKey = Guid.NewGuid();
+        var batchId = Guid.NewGuid();
+
+        var refundPayload = new
+        {
+            tenantId = clinicAId,
+            batchId = batchId,
+            items = failedIds.Select(id => new
+            {
+                reservationId = id,
+                reason = "IMAGE_CORRUPT_BATCH_PARTIAL_REFUND"
+            }).ToList()
+        };
+
+        var refundReq = new HttpRequestMessage(HttpMethod.Post, "/internal/v1/billing/reservations/batch-refund")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(refundPayload), System.Text.Encoding.UTF8, "application/json")
+        };
+        refundReq.Headers.Add("Idempotency-Key", batchIdempKey.ToString("D"));
+        refundReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", releaseToken);
+
+        var refundRes = await httpClient.SendAsync(refundReq);
+        Assert(refundRes.StatusCode == System.Net.HttpStatusCode.OK,
+            "TC-366.1 (AC1): Gọi POST /internal/v1/billing/reservations/batch-refund thành công HTTP 200 OK");
+
+        var refundBody = await refundRes.Content.ReadAsStringAsync();
+        using var refundDoc = System.Text.Json.JsonDocument.Parse(refundBody);
+        var totalRequested = refundDoc.RootElement.GetProperty("totalRequested").GetInt32();
+        var refundedCount = refundDoc.RootElement.GetProperty("refundedCount").GetInt32();
+        var creditsRefunded = refundDoc.RootElement.GetProperty("creditsRefunded").GetInt32();
+        var itemsArr = refundDoc.RootElement.GetProperty("results").EnumerateArray().ToList();
+
+        Assert(totalRequested == 5 && refundedCount == 5 && creditsRefunded == 5,
+            $"TC-366.1 (AC1): Hoàn trả chính xác 5/5 credits cho 5 ảnh lỗi (totalRequested={totalRequested}, refunded={refundedCount}, credits={creditsRefunded})");
+
+        var allItemsReleased = itemsArr.All(item =>
+            item.GetProperty("status").GetString() == "RELEASED" &&
+            item.GetProperty("refunded").GetBoolean());
+        Assert(allItemsReleased,
+            "TC-366.1 (AC1): Toàn bộ 5 items đều ghi nhận trạng thái RELEASED với refunded=true");
+
+        // Kiểm tra số dư ví cuối cùng: 100 + 5 = 105 credits (Khớp tuyệt đối: 200 - 95 = 105)
+        await using (var checkFinalBalCmd = new Npgsql.NpgsqlCommand("SELECT balance FROM billing.credit_wallets WHERE id = @id;", pgConn))
+        {
+            checkFinalBalCmd.Parameters.AddWithValue("id", walletAId);
+            var finalBal = (int)(await checkFinalBalCmd.ExecuteScalarAsync())!;
+            Assert(finalBal == 105,
+                $"TC-366.1 (AC1): Số dư ví cuối cùng là 105 credits (Khấu trừ thực tế đúng 95 credits cho 95 ảnh thành công)");
+        }
+
+        // ---------------------------------------------------------------------
+        // TC-366.2 (AC2): ĐỐI SOÁT TOÀN VẸN SỔ CÁI (LEDGER RECONCILIATION INTEGRITY)
+        // ---------------------------------------------------------------------
+        int reserveLedgerCount = 0;
+        int captureLedgerCount = 0;
+        int releaseLedgerCount = 0;
+        int netLedgerSum = 0;
+
+        await using (var ledgerQueryCmd = new Npgsql.NpgsqlCommand("""
+            SELECT entry_type, amount, balance_after
+            FROM billing.credit_ledger_entries
+            WHERE wallet_id = @wallet_id
+            ORDER BY created_at ASC;
+            """, pgConn))
+        {
+            ledgerQueryCmd.Parameters.AddWithValue("wallet_id", walletAId);
+            await using var lReader = await ledgerQueryCmd.ExecuteReaderAsync();
+            while (await lReader.ReadAsync())
+            {
+                var entryType = lReader.GetString(0);
+                var amount = lReader.GetInt32(1);
+                netLedgerSum += amount;
+
+                if (entryType == "RESERVE") reserveLedgerCount++;
+                else if (entryType == "CAPTURE") captureLedgerCount++;
+                else if (entryType == "RELEASE") releaseLedgerCount++;
+            }
+        }
+
+        Assert(reserveLedgerCount == 100,
+            $"TC-366.2 (AC2): Sổ cái ghi nhận đủ 100 bút toán RESERVE (amount = -1, ghi nhận: {reserveLedgerCount})");
+        Assert(captureLedgerCount == 95,
+            $"TC-366.2 (AC2): Sổ cái ghi nhận đủ 95 bút toán CAPTURE (amount = 0, ghi nhận: {captureLedgerCount})");
+        Assert(releaseLedgerCount == 5,
+            $"TC-366.2 (AC2): Sổ cái ghi nhận đủ 5 bút toán RELEASE (amount = +1, ghi nhận: {releaseLedgerCount})");
+
+        var calculatedBalance = 200 + netLedgerSum; // 200 - 100 + 5 = 105
+        var discrepancy = 105 - calculatedBalance;
+        Assert(calculatedBalance == 105 && discrepancy == 0,
+            $"TC-366.2 (AC2): Đối soát tài chính khớp tuyệt đối: Số dư tính từ sổ cái = {calculatedBalance}, Sai số = {discrepancy} (zero error)");
+
+        // ---------------------------------------------------------------------
+        // TC-366.3 (MASTER AUDIT): IDEMPOTENT REPLAY & CHỐNG DOUBLE SPENDING
+        // ---------------------------------------------------------------------
+        var replayReq = new HttpRequestMessage(HttpMethod.Post, "/internal/v1/billing/reservations/batch-refund")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(refundPayload), System.Text.Encoding.UTF8, "application/json")
+        };
+        replayReq.Headers.Add("Idempotency-Key", batchIdempKey.ToString("D")); // Giữ nguyên cùng Idempotency-Key
+        replayReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", releaseToken);
+
+        var replayRes = await httpClient.SendAsync(replayReq);
+        Assert(replayRes.StatusCode == System.Net.HttpStatusCode.OK,
+            "TC-366.3 (Idempotency): Gửi lặp lại Batch Refund request cùng key trả về HTTP 200 OK");
+
+        var replayBody = await replayRes.Content.ReadAsStringAsync();
+        using var replayDoc = System.Text.Json.JsonDocument.Parse(replayBody);
+        var replayRefundedCount = replayDoc.RootElement.GetProperty("refundedCount").GetInt32();
+        var replayCreditsRefunded = replayDoc.RootElement.GetProperty("creditsRefunded").GetInt32();
+        var replayItems = replayDoc.RootElement.GetProperty("results").EnumerateArray().ToList();
+
+        Assert(replayRefundedCount == 0 && replayCreditsRefunded == 0,
+            $"TC-366.3 (Anti-Double-Spending): Replay không hoàn thêm credit (refundedCount={replayRefundedCount}, creditsRefunded={replayCreditsRefunded})");
+
+        var allAlreadyReleased = replayItems.All(i =>
+            i.GetProperty("status").GetString() == "ALREADY_RELEASED" &&
+            !i.GetProperty("refunded").GetBoolean());
+        Assert(allAlreadyReleased,
+            "TC-366.3 (Idempotency): Toàn bộ items trả về ALREADY_RELEASED và refunded=false");
+
+        // Kiểm tra số dư ví không bị tăng khống
+        await using (var checkReplayBalCmd = new Npgsql.NpgsqlCommand("SELECT balance FROM billing.credit_wallets WHERE id = @id;", pgConn))
+        {
+            checkReplayBalCmd.Parameters.AddWithValue("id", walletAId);
+            var balAfterReplay = (int)(await checkReplayBalCmd.ExecuteScalarAsync())!;
+            Assert(balAfterReplay == 105,
+                $"TC-366.3 (Anti-Double-Spending): Số dư ví Clinic A vẫn bảo toàn nguyên vẹn 105 credits, không bị nạp trùng");
+        }
+
+        // ---------------------------------------------------------------------
+        // TC-366.4 (MASTER AUDIT): POST-ANALYSIS REFUND CHO RESERVATION ĐÃ CAPTURED (ADJUSTMENT)
+        // ---------------------------------------------------------------------
+        var capturedItemToRefund = successIds.Take(2).ToList();
+        var postRefundKey = Guid.NewGuid();
+        var postRefundPayload = new
+        {
+            tenantId = clinicAId,
+            batchId = Guid.NewGuid(),
+            items = capturedItemToRefund.Select(id => new
+            {
+                reservationId = id,
+                reason = "DEFECT_FOUND_POST_ANALYSIS_REFUND"
+            }).ToList()
+        };
+
+        var postRefundReq = new HttpRequestMessage(HttpMethod.Post, "/internal/v1/billing/reservations/batch-refund")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(postRefundPayload), System.Text.Encoding.UTF8, "application/json")
+        };
+        postRefundReq.Headers.Add("Idempotency-Key", postRefundKey.ToString("D"));
+        postRefundReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", releaseToken);
+
+        var postRefundRes = await httpClient.SendAsync(postRefundReq);
+        Assert(postRefundRes.StatusCode == System.Net.HttpStatusCode.OK,
+            "TC-366.4 (Post-Analysis Refund): Gọi Batch Refund cho ảnh đã CAPTURED thành công HTTP 200 OK");
+
+        var postRefundBody = await postRefundRes.Content.ReadAsStringAsync();
+        using var postRefundDoc = System.Text.Json.JsonDocument.Parse(postRefundBody);
+        var postRefundedCount = postRefundDoc.RootElement.GetProperty("refundedCount").GetInt32();
+        var postCreditsRefunded = postRefundDoc.RootElement.GetProperty("creditsRefunded").GetInt32();
+        var postItems = postRefundDoc.RootElement.GetProperty("results").EnumerateArray().ToList();
+
+        Assert(postRefundedCount == 2 && postCreditsRefunded == 2,
+            $"TC-366.4 (Post-Analysis Refund): Hoàn chính xác 2 credits đã trừ cho 2 ảnh phát hiện lỗi sau phân tích");
+
+        var allPostItemsRefunded = postItems.All(i =>
+            i.GetProperty("status").GetString() == "REFUNDED" &&
+            i.GetProperty("refunded").GetBoolean());
+        Assert(allPostItemsRefunded,
+            "TC-366.4 (Post-Analysis Refund): Items trả về trạng thái REFUNDED (refunded=true)");
+
+        // Kiểm tra sổ cái ghi nhận bút toán ADJUSTMENT
+        int adjustmentCount = 0;
+        await using (var checkAdjCmd = new Npgsql.NpgsqlCommand("""
+            SELECT count(*) FROM billing.credit_ledger_entries
+            WHERE wallet_id = @wallet_id AND entry_type = 'ADJUSTMENT';
+            """, pgConn))
+        {
+            checkAdjCmd.Parameters.AddWithValue("wallet_id", walletAId);
+            adjustmentCount = Convert.ToInt32(await checkAdjCmd.ExecuteScalarAsync());
+        }
+        Assert(adjustmentCount == 2,
+            $"TC-366.4 (Post-Analysis Refund): Sổ cái ghi nhận chính xác 2 bút toán ADJUSTMENT (+1 amount mỗi bút toán)");
+
+        // Số dư ví tăng lên 107
+        await using (var checkAdjBalCmd = new Npgsql.NpgsqlCommand("SELECT balance FROM billing.credit_wallets WHERE id = @id;", pgConn))
+        {
+            checkAdjBalCmd.Parameters.AddWithValue("id", walletAId);
+            var balAdj = (int)(await checkAdjBalCmd.ExecuteScalarAsync())!;
+            Assert(balAdj == 107,
+                $"TC-366.4 (Post-Analysis Refund): Số dư ví Clinic A tăng chính xác lên 107 credits (105 + 2)");
+        }
+
+        // Replay Post-Analysis Refund
+        var postReplayReq = new HttpRequestMessage(HttpMethod.Post, "/internal/v1/billing/reservations/batch-refund")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(postRefundPayload), System.Text.Encoding.UTF8, "application/json")
+        };
+        postReplayReq.Headers.Add("Idempotency-Key", postRefundKey.ToString("D"));
+        postReplayReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", releaseToken);
+
+        var postReplayRes = await httpClient.SendAsync(postReplayReq);
+        var postReplayBody = await postReplayRes.Content.ReadAsStringAsync();
+        using var postReplayDoc = System.Text.Json.JsonDocument.Parse(postReplayBody);
+        var postReplayCredits = postReplayDoc.RootElement.GetProperty("creditsRefunded").GetInt32();
+        var postReplayItems = postReplayDoc.RootElement.GetProperty("results").EnumerateArray().ToList();
+
+        Assert(postReplayCredits == 0 && postReplayItems.All(i => i.GetProperty("status").GetString() == "ALREADY_REFUNDED"),
+            "TC-366.4 (Post-Analysis Refund): Replay Post-Refund trả về ALREADY_REFUNDED và 0 credits refunded");
+
+        // ---------------------------------------------------------------------
+        // TC-366.5 (MASTER AUDIT): BẢO VỆ ĐA KHÁCH THUÊ (MULTI-TENANT IDOR GUARD)
+        // ---------------------------------------------------------------------
+        var crossClinicPayload = new
+        {
+            tenantId = clinicBId, // Tenant là Clinic B nhưng cố tình refund reservation của Clinic A!
+            batchId = Guid.NewGuid(),
+            items = new[]
+            {
+                new { reservationId = failedIds[0], reason = "ILLEGAL_CROSS_CLINIC_REFUND" }
+            }
+        };
+
+        var crossClinicReq = new HttpRequestMessage(HttpMethod.Post, "/internal/v1/billing/reservations/batch-refund")
+        {
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(crossClinicPayload), System.Text.Encoding.UTF8, "application/json")
+        };
+        crossClinicReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString("D"));
+        crossClinicReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", releaseToken);
+
+        var crossClinicRes = await httpClient.SendAsync(crossClinicReq);
+        var crossClinicBody = await crossClinicRes.Content.ReadAsStringAsync();
+        using var crossClinicDoc = System.Text.Json.JsonDocument.Parse(crossClinicBody);
+        var crossCredits = crossClinicDoc.RootElement.GetProperty("creditsRefunded").GetInt32();
+        var crossItemStatus = crossClinicDoc.RootElement.GetProperty("results")[0].GetProperty("status").GetString();
+
+        Assert(crossCredits == 0 && crossItemStatus == "FORBIDDEN",
+            "TC-366.5 (Multi-Tenant IDOR Guard): Cố tình hoàn credit của phòng khám khác bị chặn triệt để (status=FORBIDDEN, credits=0)");
+
+        // ---------------------------------------------------------------------
+        // TC-366.6 (MASTER AUDIT): TRANH CHẤP ĐỒNG THỜI & CHỐNG DEADLOCK (40P01 ELIMINATION)
+        // ---------------------------------------------------------------------
+        // Tạo 10 reservations mới
+        var stressIds = new List<Guid>();
+        for (int i = 0; i < 10; i++)
+        {
+            var resId = Guid.NewGuid();
+            stressIds.Add(resId);
+            await using var stressCmd = new Npgsql.NpgsqlCommand("""
+                INSERT INTO billing.credit_reservations (
+                    id, tenant_id, analysis_id, generation, wallet_id, actor_account_id,
+                    patient_id, billing_owner_type, billing_owner_id, units, environment,
+                    state, idempotency_key, request_fingerprint, created_at, updated_at
+                ) VALUES (
+                    @id, @tenant_id, gen_random_uuid(), 1, @wallet_id, gen_random_uuid(),
+                    gen_random_uuid(), 'CLINIC', @tenant_id, 1, 'TEST',
+                    'RESERVED', gen_random_uuid(), 'stress-fingerprint', now(), now()
+                );
+                UPDATE billing.credit_wallets SET balance = balance - 1 WHERE id = @wallet_id;
+                INSERT INTO billing.credit_ledger_entries (
+                    wallet_id, tenant_id, reservation_id, entry_type, amount, balance_after,
+                    idempotency_key, request_fingerprint, created_at
+                ) VALUES (
+                    @wallet_id, @tenant_id, @id, 'RESERVE', -1, 107 - @i - 1,
+                    gen_random_uuid(), 'stress-fingerprint', now()
+                );
+                """, pgConn);
+            stressCmd.Parameters.AddWithValue("id", resId);
+            stressCmd.Parameters.AddWithValue("tenant_id", clinicAId);
+            stressCmd.Parameters.AddWithValue("wallet_id", walletAId);
+            stressCmd.Parameters.AddWithValue("i", i);
+            await stressCmd.ExecuteNonQueryAsync();
+        }
+
+        // 5 luồng đồng thời gọi batch refund với danh sách đảo lộn thứ tự (Reversed & Shuffled)
+        var concurrentTasks = Enumerable.Range(0, 5).Select(async threadIdx =>
+        {
+            var shuffled = threadIdx % 2 == 0 ? stressIds.AsEnumerable().Reverse().ToList() : stressIds.ToList();
+            var req = new HttpRequestMessage(HttpMethod.Post, "/internal/v1/billing/reservations/batch-refund")
+            {
+                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    tenantId = clinicAId,
+                    batchId = Guid.NewGuid(),
+                    items = shuffled.Select(id => new { reservationId = id, reason = $"CONCURRENT_TEST_{threadIdx}" }).ToList()
+                }), System.Text.Encoding.UTF8, "application/json")
+            };
+            req.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString("D"));
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", releaseToken);
+            return await httpClient.SendAsync(req);
+        });
+
+        var concurrentResponses = await Task.WhenAll(concurrentTasks);
+        var allSucceeded = concurrentResponses.All(r => r.IsSuccessStatusCode);
+        Assert(allSucceeded,
+            "TC-366.6 (Deadlock Freedom): 5 luồng xử lý đồng thời danh sách đảo chiều hoàn tất 100% không bị Deadlock (40P01)");
+    }
+
 }

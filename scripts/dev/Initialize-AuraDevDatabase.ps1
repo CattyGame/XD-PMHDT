@@ -19,19 +19,30 @@ $migrations = @(
     "infra/postgres/migrations/004_billing_business_schema.sql",
     "infra/postgres/migrations/analysis/001_analysis_core.sql",
     "infra/postgres/migrations/analysis/002_upload_recovery.sql",
+    "infra/postgres/migrations/analysis/002_outbox_publisher.sql",
+    "infra/postgres/migrations/analysis/003_outbox_claim_generation.sql",
     "infra/postgres/migrations/analysis/004_batch_processing.sql",
     "infra/postgres/migrations/analysis/005_doctor_review_concurrency.sql",
     "infra/postgres/migrations/analysis/006_screening_campaigns.sql",
     "infra/postgres/migrations/analysis/007_batch_engine_progress.sql",
     "infra/postgres/migrations/analysis/008_doctor_review_icdr.sql",
+    "infra/postgres/migrations/analysis/007_worker_fencing_and_lease.sql",
+    "infra/postgres/migrations/analysis/008_worker_consistency.sql",
+    "infra/postgres/migrations/analysis/009_upload_sessions.sql",
+    "infra/postgres/migrations/analysis/010_report_snapshots.sql",
     "infra/postgres/migrations/005_camera_grants.sql",
     "infra/postgres/migrations/005_notification_inbox.sql",
     "infra/postgres/migrations/006_billing_settlement_inbox.sql",
     "infra/postgres/migrations/008_billing_payments.sql",
     "infra/postgres/migrations/009_billing_clinic_and_reconciliation.sql",
+    "infra/postgres/migrations/010_billing_clinic_campaign_packages.sql",
     "infra/postgres/migrations/010_clinic_lifecycle_and_memberships.sql",
     "infra/postgres/migrations/011_clinic_patients_and_assignments.sql",
-    "infra/postgres/migrations/002_service_database_roles.sql"
+    "infra/postgres/migrations/012_clinic_invitations.sql",
+    "infra/postgres/migrations/013_billing_refunds.sql",
+    "infra/postgres/migrations/014_identity_doctor_capability_audit.sql",
+    "infra/postgres/migrations/002_service_database_roles.sql",
+    "infra/postgres/migrations/015_runtime_boundary_hardening.sql"
 )
 
 foreach ($migration in $migrations) {

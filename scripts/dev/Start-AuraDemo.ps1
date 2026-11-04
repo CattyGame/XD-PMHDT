@@ -1,24 +1,38 @@
-# Script khoi dong nhanh he thong AURA Demo
+# Script khoi dong toan bo he thong AURA
+$rootDir = (Resolve-Path "$PSScriptRoot\..\..").Path
+
 Write-Host "Dang khoi dong cac container Docker..." -ForegroundColor Cyan
-docker start aura-postgres-1 aura-s3-reporting-postgres-1 aura-s3-rabbitmq-1 aura-s3-nifi-1 aura-ai77-539ab735c32d401c
+docker start aura-postgres-1 aura-redis-1 aura-azurite-1 aura-ai-core-1 aura-s3-reporting-postgres-1 aura-s3-rabbitmq-1 aura-s3-nifi-1 aura-ai77-539ab735c32d401c aura-rabbitmq-amqp-forwarder
 
 Write-Host "Dang khoi dong cac backend services (.NET)..." -ForegroundColor Cyan
 $env:GOOGLE_APPLICATION_CREDENTIALS = "$env:USERPROFILE\.aura\credentials\aura-dev-service-account.json"
-Start-Process dotnet -ArgumentList "run --launch-profile http" -WorkingDirectory "D:\XD-PMHDT\src\services\AURA.Identity.Api" -WindowStyle Hidden
-Start-Process dotnet -ArgumentList "run --launch-profile http" -WorkingDirectory "D:\XD-PMHDT\src\services\AURA.Profile.Api" -WindowStyle Hidden
-Start-Process dotnet -ArgumentList "run --launch-profile http" -WorkingDirectory "D:\XD-PMHDT\src\gateway\AURA.ApiGateway" -WindowStyle Hidden
+
+function Start-AuraService($dir, $cmd) {
+    Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+        CommandLine = "cmd.exe /c cd /d `"$dir`" && $cmd"
+    } | Out-Null
+}
+
+Start-AuraService "$rootDir\src\services\AURA.Identity.Api" "dotnet run --launch-profile http"
+Start-AuraService "$rootDir\src\services\AURA.Profile.Api" "dotnet run --launch-profile http"
+Start-AuraService "$rootDir\src\services\AURA.Billing.Api" "dotnet run --launch-profile http"
+Start-AuraService "$rootDir\src\services\AURA.Analysis.Api" "dotnet run --launch-profile http"
+Start-AuraService "$rootDir\src\gateway\AURA.ApiGateway" "dotnet run --launch-profile http"
 
 Write-Host "Dang khoi dong Web Frontend..." -ForegroundColor Cyan
-Start-Process npm -ArgumentList "run dev" -WorkingDirectory "D:\XD-PMHDT\src\web\aura-web" -WindowStyle Hidden
+Start-AuraService "$rootDir\src\web\aura-web" "npm run dev"
 
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Green
 Write-Host "HE THONG AURA DA KHOI DONG THANH CONG!" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Green
-Write-Host "1. Web AURA:           http://localhost:5173" -ForegroundColor Yellow
-Write-Host "   (Tai khoan: Google cua ban)" -ForegroundColor Gray
-Write-Host "2. Apache NiFi:        https://127.0.0.1:8543/nifi" -ForegroundColor Yellow
-Write-Host "   (aura-s3-admin / C0JbotAsPE-jQySsqgHY-xK1hefZXa5SM1bq0auqAeKpEwz-)" -ForegroundColor Gray
-Write-Host "3. RabbitMQ:           http://localhost:15372" -ForegroundColor Yellow
-Write-Host "   (aura_dev / 20fa035cbaa24341b75d05dad081935a)" -ForegroundColor Gray
+Write-Host "1. Web AURA (Frontend):    http://localhost:5173" -ForegroundColor Yellow
+Write-Host "2. API Gateway:            http://localhost:5000" -ForegroundColor Yellow
+Write-Host "3. Analysis API:           http://localhost:5001" -ForegroundColor Yellow
+Write-Host "4. Billing API:            http://localhost:5002" -ForegroundColor Yellow
+Write-Host "5. Identity API:           http://127.0.0.1:5004" -ForegroundColor Yellow
+Write-Host "6. Profile API:            http://127.0.0.1:5005" -ForegroundColor Yellow
+Write-Host "7. AI Core (FastAPI):      http://127.0.0.1:8000" -ForegroundColor Yellow
+Write-Host "8. Apache NiFi:            https://127.0.0.1:8543/nifi" -ForegroundColor Yellow
+Write-Host "9. RabbitMQ Management:    http://localhost:15372" -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Green

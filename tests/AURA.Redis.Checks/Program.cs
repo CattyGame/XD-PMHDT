@@ -86,19 +86,26 @@ Check("AC1.3: Độ trễ thao tác Cache đáp ứng tiêu chuẩn khắt khe <
 // -----------------------------------------------------------------------------
 Console.WriteLine("\n--- [AC2] RabbitMQ Worker Scaling & QoS Prefetch Template Checks ---");
 
-Check("AC2.1: Template compose.workers.yaml hỗ trợ cấu hình cụm 2 đến 4 Worker replicas", () =>
+Check("AC2.1: Template compose.workers.yaml cấu hình 4 replicas, Resource Quota (1.5 CPU, 1GB RAM) và RabbitMQ", () =>
 {
     var workerCompose = Path.Combine(repoRoot, "compose.workers.yaml");
     if (!File.Exists(workerCompose)) throw new FileNotFoundException("Thiếu compose.workers.yaml.");
 
     var content = File.ReadAllText(workerCompose);
     if (!content.Contains("replicas: 4")) throw new Exception("Template scaling phải cấu hình 4 replicas.");
-    if (!content.Contains("RABBITMQ_PREFETCH_COUNT: 10")) throw new Exception("RabbitMQ prefetch count phải là 10.");
+    if (!content.Contains("cpus: '1.5'") && !content.Contains("cpus: 1.5")) throw new Exception("CPU limit phải là 1.5.");
+    if (!content.Contains("memory: 1024M") && !content.Contains("memory: 1G")) throw new Exception("Memory limit phải là 1024M.");
+    if (!content.Contains("reservations:")) throw new Exception("Thiếu quota reservations.");
+    var hasPrefetch = content.Contains("RABBITMQ_PREFETCH_COUNT: 10")
+        || content.Contains("RABBITMQ_PREFETCH_COUNT: 2")
+        || content.Contains("WORKER_PREFETCH_COUNT");
+    if (!hasPrefetch) throw new Exception("RabbitMQ prefetch count phải được cấu hình (10 cho throughput hoặc 2 cho fair dispatch).");
     if (!content.Contains("RABBITMQ_VHOST: /aura-s3")) throw new Exception("Vhost phải là /aura-s3.");
     if (!content.Contains("RABBITMQ_HEARTBEAT_SECONDS: 60")) throw new Exception("Heartbeat phải được đặt 60s.");
+    if (!content.Contains("Maximum Pool Size=20")) throw new Exception("Postgres connection string phải cấu hình Maximum Pool Size=20.");
 });
 
-Check("AC2.2: Script Test-RabbitMqScaling.ps1 tồn tại và hỗ trợ đẩy 100 jobs xử lý hàng loạt", () =>
+Check("AC2.2: Script Test-RabbitMqScaling.ps1 (100 jobs), QoS Fair Dispatch và YARP Gateway Upload 100MB", () =>
 {
     var scriptPath = Path.Combine(repoRoot, "scripts", "dev", "Test-RabbitMqScaling.ps1");
     if (!File.Exists(scriptPath)) throw new FileNotFoundException("Thiếu Test-RabbitMqScaling.ps1.");
@@ -106,6 +113,20 @@ Check("AC2.2: Script Test-RabbitMqScaling.ps1 tồn tại và hỗ trợ đẩy 
     var scriptContent = File.ReadAllText(scriptPath);
     if (!scriptContent.Contains("TotalJobs = 100")) throw new Exception("Script phải cấu hình mặc định 100 jobs.");
     if (!scriptContent.Contains("aura.s3.analysis.jobs")) throw new Exception("Script phải nhắm vào hàng đợi aura.s3.analysis.jobs.");
+
+    var consumerPath = Path.Combine(repoRoot, "src", "services", "Aura.Worker.Analysis", "Messaging", "JobRunConsumer.cs");
+    if (File.Exists(consumerPath))
+    {
+        var consumerContent = File.ReadAllText(consumerPath);
+        if (!consumerContent.Contains("BasicQos")) throw new Exception("JobRunConsumer phải cấu hình BasicQos.");
+    }
+
+    var gwSettingsPath = Path.Combine(repoRoot, "src", "gateway", "AURA.ApiGateway", "appsettings.json");
+    if (File.Exists(gwSettingsPath))
+    {
+        var gwContent = File.ReadAllText(gwSettingsPath);
+        if (!gwContent.Contains("104857600")) throw new Exception("YARP Gateway MaxRequestBodyBytes phải cấu hình tối thiểu 100MB (104857600).");
+    }
 });
 
 // -----------------------------------------------------------------------------

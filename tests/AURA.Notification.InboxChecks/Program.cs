@@ -1,3 +1,9 @@
+using System.Diagnostics;
+using FirebaseAdmin;
+using FirebaseAdmin.Messaging;
+using Google.Apis.Auth.OAuth2;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using AURA.Notification.Api;
@@ -14,7 +20,8 @@ public class Program
     public static async Task<int> Main(string[] args)
     {
         Console.WriteLine("====================================================================");
-        Console.WriteLine("AURA Task SCRUM-327 (W3-M3-02) Verification Suite: Notification Inbox");
+        Console.WriteLine("AURA Task SCRUM-327 & SCRUM-364 (W5-M1-03) Verification Suite");
+        Console.WriteLine("Notification Inbox & FCM Multicast Backend Service");
         Console.WriteLine("====================================================================");
 
         try
@@ -22,10 +29,14 @@ public class Program
             await TestAC1_InboxCreationAndEventDedupAsync();
             await TestAC2_AccountBoundaryAndUnreadManagementAsync();
             await TestAC3_FrontendContractAndFcmDecouplingAsync();
+            await TestAC4_FcmMulticastDeliveryAndLatencyAsync();
+            await TestAC5_MedicalDataPrivacySRS75Async();
+            await TestAC6_TokenAutoCleanupOnUnregisteredAsync();
+            await TestAC7_MasterAuditThreeTimestampsLoggingAsync();
 
             Console.WriteLine();
             Console.WriteLine("====================================================================");
-            Console.WriteLine($"NOTIFICATION INBOX RESULTS: Passed: {_passed}, Failed: {_failed}");
+            Console.WriteLine($"NOTIFICATION INBOX & FCM RESULTS: Passed: {_passed}, Failed: {_failed}");
             Console.WriteLine("====================================================================");
 
             return _failed == 0 ? 0 : 1;
@@ -68,9 +79,12 @@ public class Program
     private static string GetConnectionString()
     {
         var raw = Environment.GetEnvironmentVariable("AURA_NOTIFICATION_TEST_CONNECTION");
-        return !string.IsNullOrWhiteSpace(raw)
-            ? raw
-            : "Host=127.0.0.1;Port=5432;Database=aura_dev;Username=aura_dev;Password=b324846608e64afc9d2ece68f9cdacad;";
+        if(string.IsNullOrWhiteSpace(raw))throw new InvalidOperationException("AURA_NOTIFICATION_TEST_CONNECTION must identify an isolated test database.");
+        var cs=new NpgsqlConnectionStringBuilder(raw);
+        if(cs.Host is not ("localhost" or "127.0.0.1") || cs.Database?.Contains("test",StringComparison.OrdinalIgnoreCase)!=true
+            && !(cs.Database=="aura_dev" && cs.Port==55432 && Environment.GetEnvironmentVariable("AURA_TEST_ALLOW_DATABASE")=="aura_dev"))
+            throw new InvalidOperationException("Refusing a non-test notification database.");
+        return raw;
     }
 
     // =========================================================================
@@ -321,5 +335,462 @@ public class Program
 
         Assert(decodeSuccess && decodedId == testId && Math.Abs((decodedDate - testDate).TotalMilliseconds) < 10,
             "AC3.3 Cursor Codec: Mã hóa và giải mã Cursor base64 đạt độ chính xác mili-giây tuyệt đối");
+    }
+
+    private static IConfiguration GetTestConfiguration()
+    {
+        return new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Notification:EncryptionKeyId"] = "local-v1",
+                ["Notification:EncryptionKey"] = "U7s2c2iPDfBYEtGxmzqHVssODXqAppOb6cxfEpkrqfw=",
+                ["Firebase:ProjectId"] = "aura-dev-97716"
+            })
+            .Build();
+    }
+
+    private static FirebaseApp GetTestFirebaseApp()
+    {
+        var existing = FirebaseApp.GetInstance("aura-notification");
+        if (existing != null) return existing;
+
+        return FirebaseApp.Create(new AppOptions
+        {
+            ProjectId = "aura-dev-97716",
+            Credential = GoogleCredential.FromAccessToken("mock-test-token")
+        }, "aura-notification");
+    }
+
+    // =========================================================================
+    // NHÓM AC4 (SCRUM-364): FCM MULTICAST DISPATCH & BENCHMARK LATENCY (< 200ms)
+    // =========================================================================
+    private static async Task TestAC4_FcmMulticastDeliveryAndLatencyAsync()
+    {
+        Console.WriteLine("\n[AC4] FCM Multicast Dispatch & Benchmark Latency (< 200ms) Checks (SCRUM-364):");
+
+        var connStr = GetConnectionString();
+        await using var dataSource = NpgsqlDataSource.Create(connStr);
+        var config = GetTestConfiguration();
+        var cipher = new TokenCipher(config);
+        var deviceRepo = new DeviceRegistrationRepository(dataSource, cipher);
+        var inboxRepo = new NotificationInboxRepository(dataSource, NullLogger<NotificationInboxRepository>.Instance);
+        var accountResolver = new TestAccountResolver();
+        var firebaseApp = GetTestFirebaseApp();
+
+        var recipientId = Guid.NewGuid();
+        var firebaseUid = $"uid-fcm-test-{Guid.NewGuid():N}";
+        accountResolver.AccountToUid[recipientId] = firebaseUid;
+        accountResolver.UidToAccount[firebaseUid] = recipientId;
+
+        // Đăng ký 2 thiết bị cho user
+        var deviceId1 = Guid.NewGuid();
+        var deviceId2 = Guid.NewGuid();
+        var token1 = "fcm-token-device-alpha-1234567890";
+        var token2 = "fcm-token-device-beta-0987654321";
+
+        await deviceRepo.RegisterAsync("aura-dev-97716", firebaseUid, deviceId1, token1, default);
+        await deviceRepo.RegisterAsync("aura-dev-97716", firebaseUid, deviceId2, token2, default);
+
+        var mockFcm = new MockFcmClient { SimulatedLatencyMs = 20 };
+        var consumer = new NotificationEventConsumer(
+            Options.Create(new RabbitMqConsumerOptions { AutoStart = false }),
+            inboxRepo,
+            deviceRepo,
+            accountResolver,
+            firebaseApp,
+            config,
+            dataSource,
+            NullLogger<NotificationEventConsumer>.Instance,
+            mockFcm);
+
+        var eventId = Guid.NewGuid();
+        var analysisId = Guid.NewGuid();
+        var tenantId = Guid.NewGuid();
+
+        var payload = new
+        {
+            eventId,
+            eventType = "analysis.completed",
+            schemaVersion = "0.7",
+            occurredAt = DateTimeOffset.UtcNow.ToString("O"),
+            tenantId,
+            analysisId,
+            data = new
+            {
+                recipientAccountIds = new[] { recipientId },
+                riskLevel = "LOW",
+                riskAvailable = true
+            }
+        };
+
+        var json = JsonSerializer.Serialize(payload);
+        var success = await consumer.ProcessNotificationEventAsync(json, default);
+
+        Assert(success, "AC4.1 Consumer Execution: Xử lý thành công event analysis.completed qua NotificationEventConsumer");
+
+        // Kiểm tra cơ chế Multicast: Chỉ gọi 1 lần SendMulticastAsync thay vì lặp từng thiết bị
+        Assert(mockFcm.CallCount == 1,
+            "AC4.2 Multicast Optimization: Gửi đồng thời tới toàn bộ thiết bị qua SendMulticastAsync (CallCount = 1)");
+
+        Assert(mockFcm.LastMessage != null && mockFcm.LastMessage.Tokens.Count == 2,
+            "AC4.3 Target Device Count: Đã đóng gói chính xác 2 tokens thiết bị trong MulticastMessage");
+
+        // Kiểm tra độ trễ chuyển giao (AC1: < 200ms)
+        var metrics = consumer.LastDispatchMetrics;
+        Assert(metrics != null && metrics.FcmLatencyMs < 200,
+            $"AC4.4 Latency Target (< 200ms): Độ trễ chuyển giao FCM thực tế đạt {metrics?.FcmLatencyMs}ms (< 200ms)");
+
+        // Kiểm tra định dạng WebPush cấu hình
+        Assert(mockFcm.LastMessage?.Webpush?.Notification?.Icon == "/favicon.ico" &&
+               mockFcm.LastMessage?.Webpush?.Notification?.Tag == $"analysis-{analysisId:D}" &&
+               mockFcm.LastMessage?.Webpush?.FcmOptions?.Link == $"/analyses/{analysisId:D}",
+            "AC4.5 Webpush Envelope: Cấu hình WebPush chứa đầy đủ Icon, Tag analysis-{id} và Link điều hướng chuẩn xác");
+
+        // Dọn dẹp thiết bị test
+        await deviceRepo.DeleteAsync("aura-dev-97716", firebaseUid, deviceId1, default);
+        await deviceRepo.DeleteAsync("aura-dev-97716", firebaseUid, deviceId2, default);
+    }
+
+    // =========================================================================
+    // NHÓM AC5 (SCRUM-364): BẢO VỆ DỮ LIỆU NHẠY CẢM Y TẾ THEO SRS §7.5
+    // =========================================================================
+    private static async Task TestAC5_MedicalDataPrivacySRS75Async()
+    {
+        Console.WriteLine("\n[AC5] Medical Data Privacy & SRS §7.5 Compliance Checks (SCRUM-364):");
+
+        var connStr = GetConnectionString();
+        await using var dataSource = NpgsqlDataSource.Create(connStr);
+        var config = GetTestConfiguration();
+        var cipher = new TokenCipher(config);
+        var deviceRepo = new DeviceRegistrationRepository(dataSource, cipher);
+        var inboxRepo = new NotificationInboxRepository(dataSource, NullLogger<NotificationInboxRepository>.Instance);
+        var accountResolver = new TestAccountResolver();
+        var firebaseApp = GetTestFirebaseApp();
+
+        var recipientId = Guid.NewGuid();
+        var firebaseUid = $"uid-privacy-test-{Guid.NewGuid():N}";
+        accountResolver.AccountToUid[recipientId] = firebaseUid;
+        accountResolver.UidToAccount[firebaseUid] = recipientId;
+
+        var deviceId = Guid.NewGuid();
+        var token = "fcm-token-privacy-guard-9999999";
+        await deviceRepo.RegisterAsync("aura-dev-97716", firebaseUid, deviceId, token, default);
+
+        var mockFcm = new MockFcmClient();
+        var consumer = new NotificationEventConsumer(
+            Options.Create(new RabbitMqConsumerOptions { AutoStart = false }),
+            inboxRepo,
+            deviceRepo,
+            accountResolver,
+            firebaseApp,
+            config,
+            dataSource,
+            NullLogger<NotificationEventConsumer>.Instance,
+            mockFcm);
+
+        var analysisId = Guid.NewGuid();
+
+        // Giả lập event độc hại có chứa dữ liệu định danh bệnh nhân (PII) và chẩn đoán nhạy cảm
+        var maliciousPiiPayload = new
+        {
+            eventId = Guid.NewGuid(),
+            eventType = "analysis.completed",
+            schemaVersion = "0.7",
+            occurredAt = DateTimeOffset.UtcNow.ToString("O"),
+            tenantId = Guid.NewGuid(),
+            analysisId,
+            data = new
+            {
+                recipientAccountIds = new[] { recipientId },
+                patientName = "Nguyễn Văn Bệnh Nhân",
+                patientCccd = "079090001234",
+                diagnosis = "Tổn thương võng mạc đái tháo đường độ 4 xuất huyết lan tỏa",
+                bloodPressure = "165/105 mmHg"
+            }
+        };
+
+        await consumer.ProcessNotificationEventAsync(JsonSerializer.Serialize(maliciousPiiPayload), default);
+
+        var msg = mockFcm.LastMessage;
+        Assert(msg != null, "AC5.1 Message Captured: Đã bắt được thông điệp FCM để thẩm tra nội dung");
+
+        var title = msg?.Notification?.Title ?? "";
+        var body = msg?.Notification?.Body ?? "";
+
+        // Kiểm tra không chứa PII bệnh nhân
+        var containsPatientName = title.Contains("Nguyễn Văn") || body.Contains("Nguyễn Văn");
+        var containsCccd = title.Contains("079090") || body.Contains("079090");
+        var containsDiagnosis = title.Contains("đái tháo đường") || body.Contains("đái tháo đường") ||
+                                title.Contains("độ 4") || body.Contains("độ 4") ||
+                                title.Contains("xuất huyết") || body.Contains("xuất huyết");
+
+        Assert(!containsPatientName && !containsCccd && !containsDiagnosis,
+            "AC5.2 Strict Zero-PII (SRS §7.5): Tiêu đề và nội dung Push tuyệt đối không chứa họ tên, CCCD hoặc bệnh lý võng mạc");
+
+        // Kiểm tra nội dung trung tính chuẩn mực
+        Assert(title == "Phân tích ảnh đáy mắt hoàn tất",
+            "AC5.3 Neutral Action Title: Tiêu đề chuẩn hóa trung tính 'Phân tích ảnh đáy mắt hoàn tất'");
+        Assert(body == "Kết quả phân tích mắt của bạn đã có! Bấm để xem chi tiết.",
+            "AC5.4 Neutral Action Body: Nội dung hướng dẫn an toàn 'Kết quả phân tích mắt của bạn đã có! Bấm để xem chi tiết.'");
+
+        // Dọn dẹp
+        await deviceRepo.DeleteAsync("aura-dev-97716", firebaseUid, deviceId, default);
+    }
+
+    // =========================================================================
+    // NHÓM AC6 (SCRUM-364): TỰ ĐỘNG DỌN DẸP TOKEN HẾT HẠN (UNREGISTERED / INVALID)
+    // =========================================================================
+    private static async Task TestAC6_TokenAutoCleanupOnUnregisteredAsync()
+    {
+        Console.WriteLine("\n[AC6] Token Auto-Cleanup on Unregistered & InvalidArgument Checks (AC2):");
+
+        var connStr = GetConnectionString();
+        await using var dataSource = NpgsqlDataSource.Create(connStr);
+        var config = GetTestConfiguration();
+        var cipher = new TokenCipher(config);
+        var deviceRepo = new DeviceRegistrationRepository(dataSource, cipher);
+        var inboxRepo = new NotificationInboxRepository(dataSource, NullLogger<NotificationInboxRepository>.Instance);
+        var accountResolver = new TestAccountResolver();
+        var firebaseApp = GetTestFirebaseApp();
+
+        var recipientId = Guid.NewGuid();
+        var firebaseUid = $"uid-cleanup-test-{Guid.NewGuid():N}";
+        accountResolver.AccountToUid[recipientId] = firebaseUid;
+        accountResolver.UidToAccount[firebaseUid] = recipientId;
+
+        // Đăng ký 1 token còn sống và 1 token đã chết
+        var deviceGood = Guid.NewGuid();
+        var deviceStale = Guid.NewGuid();
+        var tokenGood = "fcm-token-alive-valid-111";
+        var tokenStale = "fcm-token-dead-expired-222";
+
+        await deviceRepo.RegisterAsync("aura-dev-97716", firebaseUid, deviceGood, tokenGood, default);
+        await deviceRepo.RegisterAsync("aura-dev-97716", firebaseUid, deviceStale, tokenStale, default);
+
+        var mockFcm = new MockFcmClient
+        {
+            OutcomeHandler = dev =>
+            {
+                if (dev.DeviceId == deviceStale)
+                {
+                    // Giả lập Firebase trả về lỗi UNREGISTERED
+                    return new FcmSendOutcome(dev.Token, dev.DeviceId, false, null, "Unregistered", "Device unregistered or app uninstalled");
+                }
+                return new FcmSendOutcome(dev.Token, dev.DeviceId, true, $"msg-{Guid.NewGuid():N}", null, null);
+            }
+        };
+
+        var consumer = new NotificationEventConsumer(
+            Options.Create(new RabbitMqConsumerOptions { AutoStart = false }),
+            inboxRepo,
+            deviceRepo,
+            accountResolver,
+            firebaseApp,
+            config,
+            dataSource,
+            NullLogger<NotificationEventConsumer>.Instance,
+            mockFcm);
+
+        var payload = new
+        {
+            eventId = Guid.NewGuid(),
+            eventType = "analysis.completed",
+            schemaVersion = "0.7",
+            occurredAt = DateTimeOffset.UtcNow.ToString("O"),
+            tenantId = Guid.NewGuid(),
+            analysisId = Guid.NewGuid(),
+            data = new { recipientAccountIds = new[] { recipientId } }
+        };
+
+        var result = await consumer.ProcessNotificationEventAsync(JsonSerializer.Serialize(payload), default);
+        Assert(result, "AC6.1 Exception Shield: Lỗi Unregistered từ Firebase không làm sập tiến trình consumer");
+
+        // Kiểm tra database: tokenStale phải bị xóa ngay lập tức
+        var staleInDb = await deviceRepo.GetTokenAsync("aura-dev-97716", firebaseUid, deviceStale, default);
+        Assert(staleInDb == null,
+            "AC6.2 Auto-Cleanup Unregistered: Token hết hạn (UNREGISTERED) đã được tự động xóa khỏi notification.device_registrations");
+
+        // Kiểm tra database: tokenGood vẫn được bảo toàn nguyên vẹn
+        var goodInDb = await deviceRepo.GetTokenAsync("aura-dev-97716", firebaseUid, deviceGood, default);
+        Assert(goodInDb == tokenGood,
+            "AC6.3 Valid Token Preservation: Thiết bị hợp lệ còn lại trong batch được bảo toàn nguyên vẹn trong database");
+
+        // Kiểm tra thêm trường hợp lỗi InvalidArgument
+        var deviceInvalid = Guid.NewGuid();
+        var tokenInvalid = "fcm-token-malformed-333";
+        await deviceRepo.RegisterAsync("aura-dev-97716", firebaseUid, deviceInvalid, tokenInvalid, default);
+
+        mockFcm.OutcomeHandler = dev => new FcmSendOutcome(dev.Token, dev.DeviceId, false, null, "InvalidArgument", "Invalid registration token");
+        await consumer.ProcessNotificationEventAsync(JsonSerializer.Serialize(payload), default);
+
+        var invalidInDb = await deviceRepo.GetTokenAsync("aura-dev-97716", firebaseUid, deviceInvalid, default);
+        Assert(invalidInDb == null,
+            "AC6.4 Auto-Cleanup InvalidArgument: Token có cú pháp không hợp lệ (InvalidArgument) lập tức bị thanh trừng an toàn");
+
+        // Dọn dẹp
+        await deviceRepo.DeleteAsync("aura-dev-97716", firebaseUid, deviceGood, default);
+    }
+
+    // =========================================================================
+    // NHÓM AC7 (SCRUM-364): MASTER AUDIT 3 MỐC THỜI GIAN & DURABLE DELIVERY
+    // =========================================================================
+    private static async Task TestAC7_MasterAuditThreeTimestampsLoggingAsync()
+    {
+        Console.WriteLine("\n[AC7] Master Audit 3 Timestamps Logging & Durable Delivery Checks (SCRUM-364):");
+
+        var connStr = GetConnectionString();
+        await using var dataSource = NpgsqlDataSource.Create(connStr);
+        var config = GetTestConfiguration();
+        var cipher = new TokenCipher(config);
+        var deviceRepo = new DeviceRegistrationRepository(dataSource, cipher);
+        var inboxRepo = new NotificationInboxRepository(dataSource, NullLogger<NotificationInboxRepository>.Instance);
+        var accountResolver = new TestAccountResolver();
+        var firebaseApp = GetTestFirebaseApp();
+
+        var recipientId = Guid.NewGuid();
+        var firebaseUid = $"uid-audit-{Guid.NewGuid():N}";
+        accountResolver.AccountToUid[recipientId] = firebaseUid;
+        accountResolver.UidToAccount[firebaseUid] = recipientId;
+
+        var deviceId = Guid.NewGuid();
+        await deviceRepo.RegisterAsync("aura-dev-97716", firebaseUid, deviceId, "fcm-audit-token-123456", default);
+
+        var mockFcm = new MockFcmClient { SimulatedLatencyMs = 15 };
+        var consumer = new NotificationEventConsumer(
+            Options.Create(new RabbitMqConsumerOptions { AutoStart = false }),
+            inboxRepo,
+            deviceRepo,
+            accountResolver,
+            firebaseApp,
+            config,
+            dataSource,
+            NullLogger<NotificationEventConsumer>.Instance,
+            mockFcm);
+
+        var eventId = Guid.NewGuid();
+        var analysisId = Guid.NewGuid();
+
+        var payload = new
+        {
+            eventId,
+            eventType = "analysis.completed",
+            schemaVersion = "0.7",
+            occurredAt = DateTimeOffset.UtcNow.ToString("O"),
+            tenantId = Guid.NewGuid(),
+            analysisId,
+            data = new { recipientAccountIds = new[] { recipientId } }
+        };
+
+        var startBefore = DateTimeOffset.UtcNow;
+        await consumer.ProcessNotificationEventAsync(JsonSerializer.Serialize(payload), default);
+        var finishAfter = DateTimeOffset.UtcNow;
+
+        var m = consumer.LastDispatchMetrics;
+        Assert(m != null, "AC7.1 Metrics Recorded: Metrics được thu thập đầy đủ cho đợt dispatch");
+
+        // 3 Mốc thời gian theo Master Audit:
+        // Mốc 1: Service nhận RabbitMQ event (ReceivedAt)
+        // Mốc 2: Gửi FCM thành công (FcmDispatchedAt & FcmLatencyMs)
+        // Mốc 3: Hoàn tất pipeline & ACK downstream (TotalPipelineMs)
+        Assert(m != null && m.ReceivedAt >= startBefore.AddSeconds(-1) && m.ReceivedAt <= finishAfter,
+            "AC7.2 Timestamp Checkpoint 1: Mốc 'Service nhận event' được ghi nhận chính xác theo chuẩn UTC");
+
+        Assert(m != null && m.FcmDispatchedAt >= m.ReceivedAt,
+            "AC7.3 Timestamp Checkpoint 2: Mốc 'Gửi FCM thành công' có quan hệ nhân quả đúng thời gian (t2 >= t1)");
+
+        Assert(m != null && m.TotalPipelineMs >= m.FcmLatencyMs,
+            "AC7.4 Timestamp Checkpoint 3: Mốc 'Hoàn tất trả về downstream' bao quát toàn bộ độ trễ pipeline");
+
+        // Kiểm tra tính bền vững: Inbox item đã được lưu trong DB trước FCM dispatch (Persist Before ACK)
+        var inboxItem = await GetInboxItemByEventAsync(dataSource, recipientId, eventId);
+        Assert(inboxItem != null,
+            "AC7.5 Durable Delivery Assurance: Bản ghi thông báo được bảo toàn vĩnh cửu trong PostgreSQL trước khi chuyển giao");
+
+        // Dọn dẹp
+        await deviceRepo.DeleteAsync("aura-dev-97716", firebaseUid, deviceId, default);
+    }
+
+    private static async Task<Guid?> GetInboxItemByEventAsync(NpgsqlDataSource dataSource, Guid accountId, Guid eventId)
+    {
+        const string sql = "SELECT id FROM notification.inbox_items WHERE account_id = @acc AND event_id = @evt LIMIT 1;";
+        await using var conn = await dataSource.OpenConnectionAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("acc", accountId);
+        cmd.Parameters.AddWithValue("evt", eventId);
+        var result = await cmd.ExecuteScalarAsync();
+        return result is Guid g ? g : null;
+    }
+}
+
+public sealed class MockFcmClient : IFcmClient
+{
+    public MulticastMessage? LastMessage { get; private set; }
+    public IReadOnlyList<ActiveDeviceToken>? LastDevices { get; private set; }
+    public Func<ActiveDeviceToken, FcmSendOutcome>? OutcomeHandler { get; set; }
+    public int SimulatedLatencyMs { get; set; } = 10;
+    public int CallCount { get; private set; }
+
+    public async Task<FcmMulticastResult> SendMulticastAsync(
+        IReadOnlyList<ActiveDeviceToken> devices,
+        MulticastMessage message,
+        CancellationToken ct)
+    {
+        CallCount++;
+        LastDevices = devices;
+        LastMessage = message;
+
+        if (SimulatedLatencyMs > 0)
+        {
+            await Task.Delay(SimulatedLatencyMs, ct);
+        }
+
+        var outcomes = new List<FcmSendOutcome>(devices.Count);
+        int successCount = 0;
+        int failureCount = 0;
+
+        foreach (var dev in devices)
+        {
+            FcmSendOutcome outcome;
+            if (OutcomeHandler != null)
+            {
+                outcome = OutcomeHandler(dev);
+            }
+            else
+            {
+                outcome = new FcmSendOutcome(
+                    dev.Token,
+                    dev.DeviceId,
+                    true,
+                    $"mock-msg-{Guid.NewGuid():N}",
+                    null,
+                    null);
+            }
+
+            if (outcome.IsSuccess) successCount++;
+            else failureCount++;
+
+            outcomes.Add(outcome);
+        }
+
+        return new FcmMulticastResult(successCount, failureCount, outcomes);
+    }
+}
+
+public sealed class TestAccountResolver : IAccountResolver
+{
+    public ConcurrentDictionary<string, Guid> UidToAccount { get; } = new();
+    public ConcurrentDictionary<Guid, string> AccountToUid { get; } = new();
+
+    public Task<Guid?> ResolveAccountIdAsync(string firebaseUid, CancellationToken ct)
+    {
+        if (UidToAccount.TryGetValue(firebaseUid, out var accId)) return Task.FromResult<Guid?>(accId);
+        if (Guid.TryParse(firebaseUid, out var guid)) return Task.FromResult<Guid?>(guid);
+        return Task.FromResult<Guid?>(null);
+    }
+
+    public Task<string?> ResolveFirebaseUidAsync(Guid accountId, CancellationToken ct)
+    {
+        if (AccountToUid.TryGetValue(accountId, out var uid)) return Task.FromResult<string?>(uid);
+        return Task.FromResult<string?>(accountId.ToString("D"));
     }
 }

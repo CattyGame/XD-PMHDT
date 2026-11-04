@@ -8,13 +8,21 @@ services:
       dockerfile: src/services/Aura.Worker.Analysis/Dockerfile
     environment:
       DOTNET_ENVIRONMENT: Production
+      ServiceAuth__ClientId: analysis-worker
+      ServiceAuth__ClientSecret: ${ANALYSIS_WORKER_CLIENT_SECRET:?Set ANALYSIS_WORKER_CLIENT_SECRET in .env and issuer registry}
+      ServiceAuth__IdentityBaseUrl: http://identity-api:8080
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
       RabbitMq__VirtualHost: /aura-s3
+      RABBITMQ_VHOST: /aura-s3
       RabbitMq__UserName: s3-worker
       RabbitMq__Password: ${RABBITMQ_WORKER_PASSWORD:?Set RABBITMQ_WORKER_PASSWORD in .env}
-      WorkerOptions__Prefetch: 10
+      WorkerOptions__Prefetch: ${WORKER_PREFETCH_COUNT:-2}
+      RABBITMQ_PREFETCH_COUNT: ${WORKER_PREFETCH_COUNT:-2}
+      RabbitMq__RequestedHeartbeat: 60
+      RABBITMQ_HEARTBEAT_SECONDS: 60
       ConnectionStrings__Redis: redis:6379
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=aura_dev;Username=aura_analysis_app;Password=${ANALYSIS_DB_PASSWORD:?Set ANALYSIS_DB_PASSWORD in .env};Maximum Pool Size=20;Timeout=5;Command Timeout=5"
     deploy:
       mode: replicated
       replicas: 4

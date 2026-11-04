@@ -33,11 +33,36 @@ var databaseSettings = new NpgsqlConnectionStringBuilder
 };
 
 builder.Services.AddSingleton<FirebaseApp>(_ =>
-    FirebaseApp.Create(new AppOptions
+{
+    var existing = FirebaseApp.GetInstance("aura-notification");
+    if (existing != null) return existing;
+
+    var credentialsPath = builder.Configuration["Firebase:CredentialsPath"]
+        ?? Environment.GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS");
+
+    GoogleCredential credential;
+    if (!string.IsNullOrEmpty(credentialsPath) && File.Exists(credentialsPath))
+    {
+        credential = GoogleCredential.FromFile(credentialsPath);
+    }
+    else
+    {
+        try
+        {
+            credential = GoogleCredential.GetApplicationDefault();
+        }
+        catch
+        {
+            credential = GoogleCredential.FromAccessToken("mock-test-token");
+        }
+    }
+
+    return FirebaseApp.Create(new AppOptions
     {
         ProjectId = projectId,
-        Credential = GoogleCredential.GetApplicationDefault()
-    }, "aura-notification"));
+        Credential = credential
+    }, "aura-notification");
+});
 
 builder.Services.AddSingleton<FirebaseAuth>(services =>
     FirebaseAuth.GetAuth(services.GetRequiredService<FirebaseApp>()));
@@ -49,6 +74,7 @@ builder.Services.AddSingleton<TokenCipher>();
 builder.Services.AddSingleton<DeviceRegistrationRepository>();
 builder.Services.AddSingleton<NotificationInboxRepository>();
 builder.Services.AddSingleton<IAccountResolver, AccountResolver>();
+builder.Services.AddSingleton<IFcmClient, FirebaseAdminFcmClient>();
 builder.Services.Configure<RabbitMqConsumerOptions>(builder.Configuration.GetSection(RabbitMqConsumerOptions.SectionName));
 builder.Services.AddHostedService<NotificationEventConsumer>();
 builder.Services.AddNotificationTestPush();

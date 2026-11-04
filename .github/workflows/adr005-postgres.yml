@@ -1,0 +1,174 @@
+name: ADR005 PostgreSQL acceptance
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adr005-postgres-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: aura_dev
+          POSTGRES_PASSWORD: ci-adr005-only
+          POSTGRES_DB: aura_dev
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U aura_dev -d aura_dev"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 55432
+      PGUSER: aura_dev
+      PGDATABASE: aura_dev
+      PGPASSWORD: ci-adr005-only
+      AURA_TEST_ALLOW_DATABASE: aura_dev
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.401
+
+      - name: Configure explicit isolated database fixtures
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/adr005/results"
+          python3 - <<'PY'
+          import os
+          connection = "Host=127.0.0.1;Port=55432;Database=aura_dev;Username=aura_dev;Password=ci-adr005-only;Timeout=5;Command Timeout=30"
+          names = ("ADR005_TEST_POSTGRES", "AURA_SCRUM345_TEST_CONNECTION_STRING",
+                   "AURA_SCRUM370_TEST_CONNECTION_STRING", "AURA_TEST_POSTGRES",
+                   "AURA_NOTIFICATION_TEST_CONNECTION", "AURA_ADR005_PROFILE_TEST_CONNECTION",
+                   "AURA_ANALYSIS_PERSISTENCE_TEST_CONNECTION", "AURA_ANALYSIS_JOURNAL_TEST_CONNECTION",
+                   "AURA_ANALYSIS_BATCH_TEST_CONNECTION")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
+              for name in names:
+                  stream.write(f"{name}={connection}\n")
+          PY
+
+      - name: Extract the exact initializer plan
+        shell: pwsh
+        run: |
+          ./scripts/dev/Initialize-AuraDevDatabase.ps1 -PlanOnly |
+            Set-Content -Encoding utf8NoBOM "$env:RUNNER_TEMP/adr005/migrations.txt"
+
+      - name: Fresh PostgreSQL migrations in initializer order
+        id: fresh
+        shell: bash
+        run: |
+          command -v psql
+          while IFS= read -r migration; do
+            psql -X -v ON_ERROR_STOP=1 -f "${migration%$'\r'}"
+          done < "$RUNNER_TEMP/adr005/migrations.txt" 2>&1 | tee "$RUNNER_TEMP/adr005/migrations-fresh.log"
+
+      - name: Reapply the exact upgrade and role-hardening plan
+        id: upgrade
+        shell: bash
+        run: |
+          while IFS= read -r migration; do
+            psql -X -v ON_ERROR_STOP=1 -f "${migration%$'\r'}"
+          done < "$RUNNER_TEMP/adr005/migrations.txt" 2>&1 | tee "$RUNNER_TEMP/adr005/migrations-upgrade.log"
+
+      - name: Restore solution
+        run: dotnet restore AURA.sln
+
+      - name: Build the checked-out candidate
+        id: build
+        shell: bash
+        run: dotnet build AURA.sln --configuration Release --no-restore 2>&1 | tee "$RUNNER_TEMP/adr005/build.log"
+
+      - name: Contract route validation
+        id: contracts
+        shell: bash
+        run: python3 scripts/validate_openapi.py 2>&1 | tee "$RUNNER_TEMP/adr005/contracts.log"
+
+      - name: Required Analysis, Billing and Worker tests including PostgreSQL
+        id: tests
+        shell: bash
+        run: |
+          status=0
+          for component in analysis billing worker; do
+            case "$component" in
+              analysis) project=src/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj ;;
+              billing) project=src/services/AURA.Billing.Api.Tests/AURA.Billing.Api.Tests.csproj ;;
+              worker) project=tests/Aura.Worker.Analysis.Tests/Aura.Worker.Analysis.Tests.csproj ;;
+            esac
+            mkdir -p "$RUNNER_TEMP/adr005/results/$component"
+            dotnet test "$project" --configuration Release --no-build --no-restore \
+              --logger trx --results-directory "$RUNNER_TEMP/adr005/results/$component" \
+              2>&1 | tee "$RUNNER_TEMP/adr005/$component-tests.log" || status=1
+          done
+          exit "$status"
+
+      - name: Reject skipped or missing required TRX results
+        run: python3 scripts/release/create_candidate_manifest.py --verify-trx "${{ runner.temp }}/adr005/results"
+
+      - name: Profile security checks against real PostgreSQL runtime privileges
+        id: profile
+        shell: bash
+        run: >-
+          dotnet run --project tests/AURA.Profile.MultiTenantChecks/AURA.Profile.MultiTenantChecks.csproj
+          --configuration Release --no-build --no-launch-profile -- --database
+          2>&1 | tee "$RUNNER_TEMP/adr005/profile-security.log"
+
+      - name: Notification database and retry checks
+        id: notification
+        shell: bash
+        run: >-
+          dotnet run --project tests/AURA.Notification.InboxChecks/AURA.Notification.InboxChecks.csproj
+          --configuration Release --no-launch-profile
+          2>&1 | tee "$RUNNER_TEMP/adr005/notification-tests.log"
+
+      - name: Generate candidate artifact with honest remaining release blockers
+        if: always()
+        shell: bash
+        env:
+          BUILD_RESULT: ${{ steps.build.outcome }}
+          FRESH_RESULT: ${{ steps.fresh.outcome }}
+          UPGRADE_RESULT: ${{ steps.upgrade.outcome }}
+          CONTRACT_RESULT: ${{ steps.contracts.outcome }}
+          PROFILE_RESULT: ${{ steps.profile.outcome }}
+          NOTIFICATION_RESULT: ${{ steps.notification.outcome }}
+        run: |
+          check_status() { if [ "$1" = success ]; then printf PASS; else printf BLOCKED; fi; }
+          python3 scripts/release/create_candidate_manifest.py \
+            --mode TEST --output "$RUNNER_TEMP/adr005/candidate-$GITHUB_SHA.json" \
+            --image postgres=postgres:17 \
+            --evidence-run-id "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --trx "analysis-tests=$RUNNER_TEMP/adr005/results/analysis" \
+            --trx "billing-tests=$RUNNER_TEMP/adr005/results/billing" \
+            --trx "worker-tests=$RUNNER_TEMP/adr005/results/worker" \
+            --check "dotnet-build=$(check_status "$BUILD_RESULT")" --evidence "dotnet-build=$RUNNER_TEMP/adr005/build.log" \
+            --check "migrations-fresh=$(check_status "$FRESH_RESULT")" --evidence "migrations-fresh=$RUNNER_TEMP/adr005/migrations-fresh.log" \
+            --check "migrations-upgrade=$(check_status "$UPGRADE_RESULT")" --evidence "migrations-upgrade=$RUNNER_TEMP/adr005/migrations-upgrade.log" \
+            --check "contract-tests=$(check_status "$CONTRACT_RESULT")" --evidence "contract-tests=$RUNNER_TEMP/adr005/contracts.log" \
+            --check "profile-security=$(check_status "$PROFILE_RESULT")" --evidence "profile-security=$RUNNER_TEMP/adr005/profile-security.log" \
+            --check "notification-tests=$(check_status "$NOTIFICATION_RESULT")" --evidence "notification-tests=$RUNNER_TEMP/adr005/notification-tests.log"
+
+      - name: Upload TRX, migration logs and candidate JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adr005-postgres-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/adr005/
+          if-no-files-found: error

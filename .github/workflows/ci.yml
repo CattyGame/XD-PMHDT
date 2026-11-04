@@ -24,7 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate Analysis OpenAPI 0.8 against controller routes
+      - name: Validate Analysis OpenAPI 0.9 against controller routes
         run: python3 scripts/validate_openapi.py
 
       - name: Setup .NET
@@ -280,8 +280,19 @@ jobs:
           if-no-files-found: warn
 
       - name: Build and start applications
+        shell: bash
         run: |
-          docker compose --env-file .env.example up \
+          # This job verifies the synthetic mock transport only, not real AI/Worker acceptance.
+          # Keep all three opt-ins scoped to this CI override; LIVE defaults remain fail-closed.
+          cat > "$RUNNER_TEMP/aura-ci-ai-mock.yml" <<'YAML'
+          services:
+            ai-core:
+              environment:
+                AURA_AI_ENGINE: mock
+                AURA_ALLOW_MOCK: "true"
+                AURA_RUNTIME_MODE: TEST
+          YAML
+          docker compose --env-file .env.example -f compose.yaml -f "$RUNNER_TEMP/aura-ci-ai-mock.yml" up \
             -d --build analysis-api api-gateway ai-core identity-api profile-api billing-api
 
       - name: Check M1 service wiring

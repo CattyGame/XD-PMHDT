@@ -51,6 +51,7 @@ $identityClientPath = Join-Path $ServiceAuthDirectory "clients\identity-api.json
 $billingClientPath = Join-Path $ServiceAuthDirectory "clients\billing-api.json"
 $profileClientPath = Join-Path $ServiceAuthDirectory "clients\profile-api.json"
 $analysisClientPath = Join-Path $ServiceAuthDirectory "clients\analysis-api.json"
+$workerClientPath = Join-Path $ServiceAuthDirectory "clients\analysis-worker.json"
 
 foreach ($clientPath in @($identityClientPath, $billingClientPath, $profileClientPath, $analysisClientPath)) {
     if (-not (Test-Path -LiteralPath $clientPath -PathType Leaf)) {
@@ -81,6 +82,12 @@ $analysisServiceClientSecret = [string]$analysisClient.clientSecret
 $identityServiceClientSecret = [string]$identityClient.clientSecret
 $billingServiceClientSecret = [string]$billingClient.clientSecret
 $profileServiceClientSecret = [string]$profileClient.clientSecret
+$workerServiceClientSecret = $null
+if(Test-Path -LiteralPath $workerClientPath -PathType Leaf) {
+    $workerClient=Get-Content -LiteralPath $workerClientPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if($workerClient.clientId -ne 'analysis-worker' -or [string]::IsNullOrWhiteSpace([string]$workerClient.clientSecret)) {throw 'Invalid Worker service client credentials.'}
+    $workerServiceClientSecret=[string]$workerClient.clientSecret
+}
 
 # Validate project without printing credential contents.
 $credential = Get-Content -LiteralPath $CredentialPath -Raw |
@@ -156,6 +163,7 @@ try {
         BILLING_SERVICE_CLIENT_SECRET = $billingServiceClientSecret
         PROFILE_SERVICE_CLIENT_SECRET = $profileServiceClientSecret
         ANALYSIS_SERVICE_CLIENT_SECRET = $analysisServiceClientSecret
+        ANALYSIS_WORKER_CLIENT_SECRET = $workerServiceClientSecret
 
         # Npgsql connection strings quote these values in compose.yaml.
         IDENTITY_DB_PASSWORD = $identityPassword.Replace('"', '""')
@@ -185,6 +193,8 @@ finally {
     $billingServiceClientSecret = $null
     $profileServiceClientSecret = $null
     $analysisServiceClientSecret = $null
+    $workerServiceClientSecret = $null
+    $workerClient = $null
     $analysisClient = $null
     $identityClient = $null
     $billingClient = $null

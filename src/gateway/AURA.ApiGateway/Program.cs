@@ -194,22 +194,23 @@ app.Use(async (context, next) =>
     }
 });
 
-app.UseMiddleware<GatewayFirebaseAuthMiddleware>();
-
 app.Use(async (context, next) =>
 {
     var path = context.Request.Path.Value ?? "";
+    var trimmedPath = path.TrimEnd('/');
 
-    var isAnalysisUpload =
+    var isLargeUploadRoute =
         HttpMethods.IsPost(context.Request.Method) &&
-        string.Equals(
-            path.TrimEnd('/'),
-            "/api/v1/analyses",
-            StringComparison.OrdinalIgnoreCase);
+        (string.Equals(trimmedPath, "/api/v1/analyses", StringComparison.OrdinalIgnoreCase) ||
+         trimmedPath.StartsWith("/api/v1/analyses/", StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(trimmedPath, "/api/v1/batches", StringComparison.OrdinalIgnoreCase) ||
+         trimmedPath.StartsWith("/api/v1/batches/", StringComparison.OrdinalIgnoreCase));
 
-    var limit = isAnalysisUpload
+    const long standardRouteLimit = 5L * 1024 * 1024; // 5MB limit for non-upload endpoints (DoS protection)
+
+    var limit = isLargeUploadRoute
         ? maxUploadBodyBytes
-        : maxRequestBodyBytes;
+        : Math.Min(maxRequestBodyBytes > 0 ? maxRequestBodyBytes : standardRouteLimit, standardRouteLimit);
 
     if (context.Request.ContentLength is long contentLength &&
         contentLength > limit)
@@ -241,6 +242,8 @@ app.Use(async (context, next) =>
 
     await next(context);
 });
+
+app.UseMiddleware<GatewayFirebaseAuthMiddleware>();
 
 app.MapHealthChecks("/health");
 app.MapAuraMetrics();
