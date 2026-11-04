@@ -11,7 +11,7 @@ public class DomainEventEnvelope<TData>
     public string EventType { get; set; } = string.Empty;
 
     [JsonPropertyName("schemaVersion")]
-    public string SchemaVersion { get; set; } = "0.7";
+    public string SchemaVersion { get; set; } = "0.8";
 
     [JsonPropertyName("occurredAt")]
     public string OccurredAt { get; set; } = string.Empty;

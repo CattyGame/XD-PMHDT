@@ -19,7 +19,7 @@ public static class OutboxEventFactory
         {
             EventId = Guid.NewGuid(),
             EventType = "analysis.completed",
-            SchemaVersion = "0.7",
+            SchemaVersion = "0.8",
             OccurredAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
             TenantId = tenantId,
             CorrelationId = correlationId,
@@ -63,7 +63,7 @@ public static class OutboxEventFactory
         {
             EventId = Guid.NewGuid(),
             EventType = "analysis.failed",
-            SchemaVersion = "0.7",
+            SchemaVersion = "0.8",
             OccurredAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
             TenantId = tenantId,
             CorrelationId = correlationId,
@@ -105,7 +105,7 @@ public static class OutboxEventFactory
         {
             EventId = batchId,
             EventType = "batch.completed",
-            SchemaVersion = "0.7",
+            SchemaVersion = "0.8",
             OccurredAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
             TenantId = tenantId,
             CorrelationId = correlationId,

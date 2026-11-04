@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura.invalid/contracts/sprint3/analysis-events-0.8.schema.json",
+  "title": "AURA Sprint 3 domain events 0.8",
+  "description": "Sprint3 target only. Event identifiers stable across redelivery. No images, keys, SAS URLs or tokens. failed is terminal only; Billing resolves generation from authoritative Analysis settlement binding.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "eventType",
+    "schemaVersion",
+    "occurredAt",
+    "tenantId",
+    "correlationId",
+    "analysisId",
+    "data"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "eventType": {
+      "enum": [
+        "analysis.requested",
+        "analysis.completed",
+        "analysis.failed",
+        "analysis.reviewed",
+        "batch.completed"
+      ]
+    },
+    "schemaVersion": {
+      "const": "0.8"
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "tenantId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "correlationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,64}$"
+    },
+    "analysisId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "data": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "analysis.requested"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "patientId",
+              "batchId"
+            ],
+            "properties": {
+              "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "batchId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "analysis.completed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "patientId",
+              "riskLevel",
+              "modelVersion",
+              "isMock",
+              "configVersion",
+              "thresholdVersion",
+              "resultVersion",
+              "riskAvailable"
+            ],
+            "properties": {
+              "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "riskLevel": {
+                "enum": [
+                  "LOW",
+                  "MODERATE",
+                  "HIGH",
+                  null
+                ]
+              },
+              "modelVersion": {
+                "type": "string"
+              },
+              "isMock": {
+                "type": "boolean"
+              },
+              "configVersion": {
+                "type": "string"
+              },
+              "thresholdVersion": {
+                "type": "string"
+              },
+              "resultVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "riskAvailable": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "riskAvailable": {
+                      "const": false
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "riskLevel": {
+                      "const": null
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "riskLevel": {
+                      "enum": [
+                        "LOW",
+                        "MODERATE",
+                        "HIGH"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "analysis.failed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "patientId",
+              "errorCode",
+              "retryable",
+              "terminalStatus"
+            ],
+            "properties": {
+              "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "retryable": {
+                "const": false
+              },
+              "errorCode": {
+                "enum": [
+                  "ERR_AI_FAILED",
+                  "ERR_TIMEOUT",
+                  "ERR_NETWORK",
+                  "ERR_IMAGE_LOW_QUALITY",
+                  "ERR_IMAGE_MISSING",
+                  "ERR_UNAUTHORIZED",
+                  "ERR_VALIDATION",
+                  "ERR_AI_OUTPUT_INVALID"
+                ]
+              },
+              "terminalStatus": {
+                "enum": [
+                  "FAILED",
+                  "LOW_QUALITY",
+                  "REJECTED"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "analysis.reviewed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "patientId",
+              "reviewStatus",
+              "version",
+              "aiResultVersion"
+            ],
+            "properties": {
+              "patientId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "reviewStatus": {
+                "enum": [
+                  "REVIEWED"
+                ]
+              },
+              "aiResultVersion": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "batch.completed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["batchId", "patientId", "batchStatus", "totalImages", "completedImages", "failedImages"],
+            "properties": {
+              "batchId": { "type": "string", "format": "uuid" },
+              "patientId": { "type": "string", "format": "uuid" },
+              "batchStatus": { "enum": ["COMPLETED", "PARTIAL_FAILED", "FAILED"] },
+              "totalImages": { "type": "integer", "minimum": 1, "maximum": 100 },
+              "completedImages": { "type": "integer", "minimum": 0 },
+              "failedImages": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  ]
+}

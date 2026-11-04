@@ -159,12 +159,12 @@ public sealed class NotificationEventConsumer(
             !root.TryGetProperty("eventType", out var eventTypeProp) || !root.TryGetProperty("tenantId", out var tenantIdProp) ||
             !tenantIdProp.TryGetGuid(out var tenantId))
         {
-            logger.LogWarning("Discarding malformed notification event envelope: {Json}", json);
+            logger.LogWarning("Discarding malformed notification event envelope.");
             return true;
         }
 
         var eventType = eventTypeProp.GetString();
-        if (eventType is not ("analysis.completed" or "analysis.failed" or "billing.payment.success"))
+        if (eventType is not ("analysis.completed" or "analysis.failed" or "batch.completed" or "billing.payment.success"))
         {
             logger.LogInformation("Ignoring non-terminal event type {EventType}", eventType);
             return true;
@@ -179,7 +179,7 @@ public sealed class NotificationEventConsumer(
 
         var inboxType = eventType switch
         {
-            "analysis.completed" => "ANALYSIS_COMPLETED",
+            "analysis.completed" or "batch.completed" => "ANALYSIS_COMPLETED",
             "billing.payment.success" => "PAYMENT_SUCCESS",
             _ => "ANALYSIS_FAILED"
         };
@@ -188,18 +188,20 @@ public sealed class NotificationEventConsumer(
         var title = eventType switch
         {
             "analysis.completed" => "Phân tích ảnh đáy mắt hoàn tất",
+            "batch.completed" => "Đợt xử lý ảnh đã kết thúc",
             "billing.payment.success" => "Thanh toán thành công",
             _ => "Phân tích ảnh đáy mắt không thành công"
         };
         var bodyText = eventType switch
         {
             "analysis.completed" => "Kết quả phân tích mắt của bạn đã có! Bấm để xem chi tiết.",
+            "batch.completed" => "Trạng thái đợt xử lý đã được cập nhật. Bấm để xem chi tiết.",
             "billing.payment.success" => "Giao dịch thanh toán đã được xác nhận. Bấm để xem gói cước.",
             _ => "Không thể phân tích ảnh đáy mắt do chất lượng ảnh không đạt tiêu chuẩn."
         };
         var targetPath = eventType == "billing.payment.success"
             ? "/billing/packages"
-            : $"/analyses/{analysisId:D}";
+            : eventType=="batch.completed"?$"/batches/{analysisId:D}":$"/analyses/{analysisId:D}";
 
         int totalDevicesTargeted = 0;
         int totalSuccess = 0;

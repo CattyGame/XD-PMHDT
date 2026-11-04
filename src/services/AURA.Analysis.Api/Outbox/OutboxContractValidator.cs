@@ -26,7 +26,7 @@ internal static class OutboxContractValidator
     {
         if (!Keys(e,job ? new[]{"messageId","messageType","schemaVersion","occurredAt","tenantId","correlationId","jobId","analysisId","batchId","imageFileId","attempt"}
                         : new[]{"eventId","eventType","schemaVersion","occurredAt","tenantId","correlationId","analysisId","data"})) return false;
-        if (Str(e,"schemaVersion")!=(job?"0.6":"0.7") || !Uuid(e,job?"messageId":"eventId") || !Uuid(e,"tenantId") || !Uuid(e,"analysisId")) return false;
+        if ((job?Str(e,"schemaVersion")!="0.6":Str(e,"schemaVersion") is not ("0.7" or "0.8")) || !Uuid(e,job?"messageId":"eventId") || !Uuid(e,"tenantId") || !Uuid(e,"analysisId")) return false;
         var stamp=Str(e,"occurredAt"); var corr=Str(e,"correlationId");
         if (stamp is null || !Timestamp.IsMatch(stamp) || !DateTimeOffset.TryParse(stamp,CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal,out _) || corr is null || !Correlation.IsMatch(corr)) return false;
         if (job) return Str(e,"messageType")=="analysis.job.run" && Uuid(e,"jobId") && Uuid(e,"batchId") && Uuid(e,"imageFileId") && Integer(e,"attempt");
@@ -43,9 +43,11 @@ internal static class OutboxContractValidator
                     && (Str(d,"terminalStatus") is "FAILED" or "LOW_QUALITY" or "REJECTED")
                     && (Str(d,"errorCode") is "ERR_AI_FAILED" or "ERR_TIMEOUT" or "ERR_NETWORK" or "ERR_IMAGE_LOW_QUALITY" or "ERR_IMAGE_MISSING" or "ERR_UNAUTHORIZED" or "ERR_VALIDATION" or "ERR_AI_OUTPUT_INVALID");
             case "batch.completed":
+                if(Str(e,"schemaVersion")=="0.8" && Str(d,"batchStatus")=="PARTIAL_COMPLETED"
+                    || Str(e,"schemaVersion")=="0.7" && Str(d,"batchStatus")=="PARTIAL_FAILED")return false;
                 if (!Keys(d,"batchId","patientId","batchStatus","totalImages","completedImages","failedImages")
                     || !Uuid(d,"batchId") || !Uuid(d,"patientId")
-                    || Str(d,"batchStatus") is not ("COMPLETED" or "PARTIAL_FAILED" or "FAILED")
+                    || Str(d,"batchStatus") is not ("COMPLETED" or "PARTIAL_FAILED" or "PARTIAL_COMPLETED" or "FAILED")
                     || !NonNegativeInteger(d,"completedImages") || !NonNegativeInteger(d,"failedImages")
                     || !Integer(d,"totalImages") || d.GetProperty("totalImages").GetInt32() > 100) return false;
                 return d.GetProperty("completedImages").GetInt32() + d.GetProperty("failedImages").GetInt32()
@@ -53,7 +55,7 @@ internal static class OutboxContractValidator
                     && Uuid(e,"analysisId") && (Str(d,"batchStatus") switch
                     {
                         "COMPLETED" => d.GetProperty("failedImages").GetInt32() == 0,
-                        "PARTIAL_FAILED" => d.GetProperty("completedImages").GetInt32() > 0 && d.GetProperty("failedImages").GetInt32() > 0,
+                        "PARTIAL_FAILED" or "PARTIAL_COMPLETED" => d.GetProperty("completedImages").GetInt32() > 0 && d.GetProperty("failedImages").GetInt32() > 0,
                         "FAILED" => d.GetProperty("completedImages").GetInt32() == 0 && d.GetProperty("failedImages").GetInt32() > 0,
                         _ => false
                     });

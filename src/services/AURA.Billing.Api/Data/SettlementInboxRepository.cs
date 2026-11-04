@@ -529,9 +529,9 @@ public sealed class SettlementInboxRepository(NpgsqlDataSource dataSource)
         {
             throw new ArgumentException("Unsupported Analysis event type.", nameof(incoming));
         }
-        if (!string.Equals(incoming.SchemaVersion, "0.7", StringComparison.Ordinal))
+        if (incoming.SchemaVersion is not ("0.7" or "0.8"))
         {
-            throw new ArgumentException("Settlement inbox accepts Analysis event schema 0.7 only.", nameof(incoming));
+            throw new ArgumentException("Settlement inbox accepts Analysis event schema0.7 or0.8 only.", nameof(incoming));
         }
         var correlationId = incoming.CorrelationId;
         if (string.IsNullOrWhiteSpace(correlationId) || !CorrelationPattern.IsMatch(correlationId))

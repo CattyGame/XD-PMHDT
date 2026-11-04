@@ -46,14 +46,14 @@ public static class OutboxMessageMapper
 
             string typeProp = isJob ? "messageType" : "eventType";
             string idProp = isJob ? "messageId" : "eventId";
-            string version = isJob ? "0.6" : "0.7";
+            string? version = Str(root,"schemaVersion");
 
             var type = Str(root, typeProp);
             if (type is null) return Fail(OutboxErrors.InvalidMessage);
             if (isJob ? type != JobType : !EventTypes.Contains(type)) return Fail(OutboxErrors.UnroutableType);
             if (!string.Equals(type, r.EventType, StringComparison.Ordinal)) return Fail(OutboxErrors.TypeMismatch);
 
-            if (Str(root, "schemaVersion") != version) return Fail(OutboxErrors.SchemaVersionMismatch);
+            if(isJob?version!="0.6":version is not ("0.7" or "0.8"))return Fail(OutboxErrors.SchemaVersionMismatch);
             if (!string.Equals(r.SchemaVersion, version, StringComparison.Ordinal)) return Fail(OutboxErrors.SchemaVersionMismatch);
 
             if (!Guid(root, idProp, out var id)) return Fail(OutboxErrors.InvalidMessage);

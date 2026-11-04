@@ -1,0 +1,36 @@
+# Explicit functional research runtime; merge after compose.yaml and compose.dev.yaml.
+# Broker consumers/publisher still require separately provisioned credentials and topology.
+services:
+  analysis-api:
+    environment:
+      Analysis__EnableHttpEndpoints: "true"
+      ConnectionStrings__Redis: "redis:6379"
+      ServiceAuth__Issuer: "aura-identity-local"
+      ServiceAuth__Audience: "aura-analysis"
+      ServiceAuth__PublicKeyPath: /run/aura-service-auth/public/signing-public.pem
+    volumes:
+      - type: bind
+        source: "${AURA_SERVICE_AUTH_HOME:?Set AURA_SERVICE_AUTH_HOME}/public"
+        target: /run/aura-service-auth/public
+        read_only: true
+        bind: {create_host_path: false}
+  profile-api:
+    environment:
+      Services__Analysis__BaseUrl: "http://analysis-api:8080"
+  ai-core:
+    environment:
+      AURA_AI_ENGINE: frangi
+      AURA_ALLOW_MOCK: "false"
+      AURA_RUNTIME_MODE: LIVE
+      AURA_FRANGI_CONFIG_PATH: /app/config/ai-frangi.yaml
+      AURA_SERVICE_AUTH_ISSUER: aura-identity-local
+      AURA_SERVICE_AUTH_AUDIENCE: aura-ai
+      AURA_SERVICE_AUTH_SCOPE: ai:analyze
+      AURA_SERVICE_AUTH_ALLOWED_CLIENTS: analysis-worker
+      AURA_SERVICE_AUTH_PUBLIC_KEY_PATH: /run/aura-service-auth/public/signing-public.pem
+    volumes:
+      - type: bind
+        source: "${AURA_SERVICE_AUTH_HOME:?Set AURA_SERVICE_AUTH_HOME}/public"
+        target: /run/aura-service-auth/public
+        read_only: true
+        bind: {create_host_path: false}

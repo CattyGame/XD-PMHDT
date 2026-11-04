@@ -42,7 +42,8 @@ $migrations = @(
     "infra/postgres/migrations/013_billing_refunds.sql",
     "infra/postgres/migrations/014_identity_doctor_capability_audit.sql",
     "infra/postgres/migrations/002_service_database_roles.sql",
-    "infra/postgres/migrations/015_runtime_boundary_hardening.sql"
+    "infra/postgres/migrations/015_runtime_boundary_hardening.sql",
+    "infra/postgres/migrations/016_billing_event_compatibility.sql"
 )
 
 foreach ($migration in $migrations) {

@@ -82,12 +82,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-          example:
-            error:
-              code: ERR_PROFILE_NOT_READY
-              message: Hồ sơ chưa được khởi tạo. Hãy gọi bootstrap trước.
-              correlationId: a0000000-0000-4000-8000-000000000001
-              retryable: true
+              example:
+                error:
+                  code: ERR_PROFILE_NOT_READY
+                  message: Hồ sơ chưa được khởi tạo. Hãy gọi bootstrap trước.
+                  correlationId: a0000000-0000-4000-8000-000000000001
+                  retryable: true
     patch:
       summary: Cập nhật thông tin hồ sơ cá nhân (Chống sửa Role & Kiểm soát ETag)
       description: 'Chỉ cho phép cập nhật `displayName` (1-100 ký tự) và `phone` (tối
@@ -132,12 +132,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-          example:
-            error:
-              code: ERR_VALIDATION
-              message: Thiếu header If-Match bắt buộc để cập nhật hồ sơ.
-              correlationId: a0000000-0000-4000-8000-000000000001
-              retryable: false
+              example:
+                error:
+                  code: ERR_VALIDATION
+                  message: Thiếu header If-Match bắt buộc để cập nhật hồ sơ.
+                  correlationId: a0000000-0000-4000-8000-000000000001
+                  retryable: false
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -166,13 +166,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-          example:
-            error:
-              code: ERR_PROFILE_VERSION_CONFLICT
-              message: Phiên bản hồ sơ không khớp (xung đột dữ liệu). Hãy tải lại
-                hồ sơ mới nhất.
-              correlationId: a0000000-0000-4000-8000-000000000001
-              retryable: false
+              example:
+                error:
+                  code: ERR_PROFILE_VERSION_CONFLICT
+                  message: Phiên bản hồ sơ không khớp (xung đột dữ liệu). Hãy tải
+                    lại hồ sơ mới nhất.
+                  correlationId: a0000000-0000-4000-8000-000000000001
+                  retryable: false
   /api/v1/clinics:
     get:
       summary: Discover the authenticated account active clinic memberships

@@ -37,7 +37,4 @@ services:
       - aura_network
     restart: on-failure
 
-networks:
-  aura_network:
-    name: aura_network
-    external: true
+# The network is declared by compose.yaml; this file is an overlay, not a standalone stack.

@@ -17,8 +17,7 @@
         "aura-billing": [
           "billing:reserve",
           "billing:read",
-          "billing:release",
-          "billing:refund"
+          "billing:release"
         ]
       }
     },
@@ -40,9 +39,6 @@
         ],
         "aura-analysis": [
           "analysis:reconcile"
-        ],
-        "aura-identity": [
-          "identity:context"
         ]
       }
     },
@@ -52,9 +48,6 @@
       "allowedTargets": {
         "aura-identity": [
           "identity:context"
-        ],
-        "aura-analysis": [
-          "analysis:binding"
         ]
       }
     },

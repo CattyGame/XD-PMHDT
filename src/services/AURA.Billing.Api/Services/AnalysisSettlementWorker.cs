@@ -123,7 +123,7 @@ public sealed class AnalysisSettlementWorker(
             || eventTypeNode.GetString() is not ("analysis.completed" or "analysis.failed"))
             throw new ArgumentException("UNSUPPORTED_EVENT_TYPE");
         if (!root.TryGetProperty("schemaVersion", out var versionNode)
-            || versionNode.ValueKind != JsonValueKind.String || versionNode.GetString() != "0.7")
+            || versionNode.ValueKind != JsonValueKind.String || versionNode.GetString() is not ("0.7" or "0.8"))
             throw new ArgumentException("UNSUPPORTED_SCHEMA_VERSION");
         if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
             throw new ArgumentException("INVALID_EVENT_DATA");
@@ -133,7 +133,7 @@ public sealed class AnalysisSettlementWorker(
             throw new ArgumentException("INVALID_EVENT_TIME");
         var rawHash = Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant();
         return new SettlementInboxEvent(consumerName, RequiredGuid("eventId"), eventTypeNode.GetString()!,
-            "0.7", occurredAt, RequiredGuid("tenantId"), RequiredGuid("analysisId"),
+            versionNode.GetString()!, occurredAt, RequiredGuid("tenantId"), RequiredGuid("analysisId"),
             RequiredString("correlationId"), rawHash);
     }
 

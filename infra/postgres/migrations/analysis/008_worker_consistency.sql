@@ -40,8 +40,8 @@ BEGIN
       ON CONFLICT(batch_id) DO NOTHING RETURNING event_id INTO inserted;
     IF inserted IS NULL THEN RETURN false; END IF;
     INSERT INTO analysis.outbox_events(id,tenant_id,analysis_request_id,image_id,event_type,schema_version,payload,occurred_at)
-    VALUES(target_batch,target_tenant,request_id,image_id_value,'batch.completed','0.7',
-      jsonb_build_object('eventId',target_batch,'eventType','batch.completed','schemaVersion','0.7',
+    VALUES(target_batch,target_tenant,request_id,image_id_value,'batch.completed','0.8',
+      jsonb_build_object('eventId',target_batch,'eventType','batch.completed','schemaVersion','0.8',
         'occurredAt',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
         'tenantId',target_tenant,'correlationId',correlation,'analysisId',target_batch,
         'data',jsonb_build_object('batchId',target_batch,'patientId',patient_id_value,'batchStatus',public_status,

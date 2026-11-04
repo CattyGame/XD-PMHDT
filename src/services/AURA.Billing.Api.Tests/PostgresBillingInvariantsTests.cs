@@ -19,6 +19,18 @@ public sealed class BillingPostgresFactAttribute : FactAttribute
 public sealed class PostgresBillingInvariantsTests
 {
     [BillingPostgresFact]
+    public async Task Inbox_accepts_legacy_and_ADR005_events_without_accepting_unknown_versions()
+    {
+        await using var f=await Fixture.CreateAsync();
+        foreach(var version in new[]{"0.7","0.8"})
+        {
+            var item=new SettlementInboxEvent("adr005-version",Guid.NewGuid(),"analysis.completed",version,DateTimeOffset.UtcNow,Guid.NewGuid(),Guid.NewGuid(),"version-regression",new string('a',64));
+            Assert.Equal(SettlementInboxIngestStatus.Inserted,(await f.Inbox.IngestAsync(item,default)).Status);
+            Assert.Equal(SettlementInboxIngestStatus.Duplicate,(await f.Inbox.IngestAsync(item,default)).Status);
+            await Assert.ThrowsAsync<ArgumentException>(()=>f.Inbox.IngestAsync(item with{EventId=Guid.NewGuid(),SchemaVersion="0.9"},default));
+        }
+    }
+    [BillingPostgresFact]
     public async Task Pending_then_success_replay_and_failed_preserve_one_topup()
     {
         await using var f=await Fixture.CreateAsync();var order=await f.NewOrderAsync();
@@ -94,6 +106,7 @@ public sealed class PostgresBillingInvariantsTests
 
     private sealed class Fixture : IAsyncDisposable
     {
+        public SettlementInboxRepository Inbox=>new(_runtime);
         public Guid Tenant {get;}=Guid.NewGuid();public Guid Owner {get;}=Guid.NewGuid();public Guid Wallet {get;}=Guid.NewGuid();
         private readonly NpgsqlDataSource _admin;private readonly NpgsqlDataSource _runtime;private readonly PackagePriceVersionRecord _price;
         public OrderRepository Orders {get;}public CreditReservationRepository Credits {get;}

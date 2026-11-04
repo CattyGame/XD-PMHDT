@@ -69,9 +69,9 @@ public class UploadServiceTests
         var plan = rig.Repo.Commits[0];
 
         var requested = plan.Outbox.Single(o => o.EventType == "analysis.requested");
-        Assert.Equal("0.7", requested.SchemaVersion);                  // cột schema_version của event
+        Assert.Equal("0.8", requested.SchemaVersion);                  // ADR005 domain event; legacy0.7 remains readable
         using var ev = JsonDocument.Parse(requested.PayloadJson);
-        Assert.Equal("0.7", ev.RootElement.GetProperty("schemaVersion").GetString());
+        Assert.Equal("0.8", ev.RootElement.GetProperty("schemaVersion").GetString());
         Assert.Equal("corr-123", ev.RootElement.GetProperty("correlationId").GetString());
         Assert.Equal(Patient.ToString(), ev.RootElement.GetProperty("data").GetProperty("patientId").GetString());
 

@@ -102,22 +102,21 @@
     "infra/sprint3/rabbitmq.topology.reference.json": "01a3f3186708ca16f4539ad98d40c2510a699d7ac8fb8103b53a9597230ceebd",
     "infra/sprint3/source-validation.json": "7031f18edb5cbdfb2f187a956190d68f18cbe30c3dedc7bf0ecc24af9888a706",
     "scripts/sprint3/validate_handoff.py": "9f241313be59cfb93b5244b790bef8e98f2a23e5969e7a0a28294c3c8a0111a3",
-    "src/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj": "c70436f68a0a4e76ddab83f84bbb50852362135f7783c117249a40fd52b9139b",
-    "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxFakes.cs": "c0360889346cbc44346831f68726affb94f02f3e7b8463a23809d9c2d1b8ba92",
-    "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxPublisherTests.cs": "61a657b1e4a633ccd83b830a8b9dbacf1bfc91e21a16eaf49dec06780e3603d9",
-    "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxRepair84Tests.cs": "2e01214631432f57a40ee89898397e447046ebe2c3f8582edc2f6eece12a77f9",
-    "src/services/AURA.Analysis.Api.Tests/xunit.runner.json": "916b3182871bc38753a61af64a94d656b67e4ba124e1098051149fe396d58afd",
-    "src/services/AURA.Analysis.Api/Outbox/Adapters/NpgsqlOutboxStore.cs": "038fd492889af0daf3c06493a8c8b060ce7fdcf2de87eec11f849054255f025c",
-    "src/services/AURA.Analysis.Api/Outbox/Models.cs": "9ca7e91b16925fd9dfe7fd778049327954c3df631d5518e5bc865c4bd88b2e8c",
-    "src/services/AURA.Analysis.Api/Outbox/OutboxContractValidator.cs": "74e47c499dc96c7f47985f7b5aa8fa0e7cab740d272ed2cfd5876bf5414d3022",
-    "src/services/AURA.Analysis.Api/Outbox/OutboxMessageMapper.cs": "20852b91e4edaaf8e7fdb90caa1c0a5ac1e220dba0a6f49064eb546b03f2121d",
-    "src/services/AURA.Analysis.Api/Outbox/OutboxOptions.cs": "1e04cc95775721eaa4b98848b2bc448e2ecfe06da639328f5d97975d9589f07b",
-    "src/services/AURA.Analysis.Api/Outbox/OutboxPublisher.cs": "15c765f11f243132a934939c54f9e713513b833089f16794c9f3d46e3278f8fc",
-    "src/services/AURA.Analysis.Api/Outbox/OutboxSql.cs": "90e6e125aec15af74f86cb6e790f6bc8448f3da721a5fc0fc2ff1cedbc51ca13",
-    "src/services/AURA.Analysis.Api/Outbox/Ports.cs": "40b34194fc2162feee7d0df6a2c3a20281397fa52a7f7cf6e7a4fd4074190956"
+    "infra/sprint3/legacy-source/OutboxContractValidator.cs": "74e47c499dc96c7f47985f7b5aa8fa0e7cab740d272ed2cfd5876bf5414d3022",
+    "infra/sprint3/legacy-source/OutboxMessageMapper.cs": "20852b91e4edaaf8e7fdb90caa1c0a5ac1e220dba0a6f49064eb546b03f2121d",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj": "c70436f68a0a4e76ddab83f84bbb50852362135f7783c117249a40fd52b9139b",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/Outbox/OutboxFakes.cs": "c0360889346cbc44346831f68726affb94f02f3e7b8463a23809d9c2d1b8ba92",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/Outbox/OutboxPublisherTests.cs": "61a657b1e4a633ccd83b830a8b9dbacf1bfc91e21a16eaf49dec06780e3603d9",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/Outbox/OutboxRepair84Tests.cs": "2e01214631432f57a40ee89898397e447046ebe2c3f8582edc2f6eece12a77f9",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/xunit.runner.json": "916b3182871bc38753a61af64a94d656b67e4ba124e1098051149fe396d58afd",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/Adapters/NpgsqlOutboxStore.cs": "038fd492889af0daf3c06493a8c8b060ce7fdcf2de87eec11f849054255f025c",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/Models.cs": "9ca7e91b16925fd9dfe7fd778049327954c3df631d5518e5bc865c4bd88b2e8c",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/OutboxOptions.cs": "1e04cc95775721eaa4b98848b2bc448e2ecfe06da639328f5d97975d9589f07b",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/OutboxPublisher.cs": "15c765f11f243132a934939c54f9e713513b833089f16794c9f3d46e3278f8fc",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/OutboxSql.cs": "90e6e125aec15af74f86cb6e790f6bc8448f3da721a5fc0fc2ff1cedbc51ca13",
+    "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/Ports.cs": "40b34194fc2162feee7d0df6a2c3a20281397fa52a7f7cf6e7a4fd4074190956"
   },
   "legacyFileSha256": {
-    "contracts/analysis-openapi.yaml": "71393f4052ab5fdd5c96c3333bef9f84fbc4fc1c5b709023c0d6fd13036ffc82",
     "contracts/analysis-events.schema.json": "e780da6c072746ca92a2f921a5594873c2971d416fab26c09333b0ca184412b4",
     "contracts/analysis-job.schema.json": "1892c2f57a18211798cd31d1573d798bc7b8649cc740ee2180fbf810ab2202bd",
     "contracts/BASELINE-W1-v0.1.md": "48609405b906da467a48b1854e1cd71178b64aeff8b2501e4044bad0862f99f2",
@@ -146,6 +145,26 @@
     "contracts/examples/file-access-200.json": "e702d8e6594c051b1ff46a0da66fb1bfa589b5f264399b70e0cf67771a99b86f",
     "contracts/examples/job-run.json": "8f15767ff1a3997b773f7584c2f98efdc99c12528a62ce34a907d299decfd693",
     "contracts/examples/review-approve-request.json": "372abe9bc2e156babc1a0424ab1340481d06c82ba8d3fda752ef0e2b3f78d6d9",
-    "contracts/examples/review-correct-request.json": "bf8a3b5ee63f254804b1ae51b25c892f6551a4cc4e267a87c03b477399f3507a"
+    "contracts/examples/review-correct-request.json": "bf8a3b5ee63f254804b1ae51b25c892f6551a4cc4e267a87c03b477399f3507a",
+    "infra/sprint3/legacy-contracts/contracts/analysis-openapi.yaml": "71393f4052ab5fdd5c96c3333bef9f84fbc4fc1c5b709023c0d6fd13036ffc82"
+  },
+  "historicalRuntimeSourceSnapshots": {
+    "src/services/AURA.Analysis.Api/Outbox/OutboxContractValidator.cs": "infra/sprint3/legacy-source/OutboxContractValidator.cs",
+    "src/services/AURA.Analysis.Api/Outbox/OutboxMessageMapper.cs": "infra/sprint3/legacy-source/OutboxMessageMapper.cs",
+    "src/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj": "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj",
+    "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxFakes.cs": "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/Outbox/OutboxFakes.cs",
+    "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxPublisherTests.cs": "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/Outbox/OutboxPublisherTests.cs",
+    "src/services/AURA.Analysis.Api.Tests/Outbox/OutboxRepair84Tests.cs": "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/Outbox/OutboxRepair84Tests.cs",
+    "src/services/AURA.Analysis.Api.Tests/xunit.runner.json": "infra/sprint3/legacy-source/services/AURA.Analysis.Api.Tests/xunit.runner.json",
+    "src/services/AURA.Analysis.Api/Outbox/Adapters/NpgsqlOutboxStore.cs": "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/Adapters/NpgsqlOutboxStore.cs",
+    "src/services/AURA.Analysis.Api/Outbox/Models.cs": "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/Models.cs",
+    "src/services/AURA.Analysis.Api/Outbox/OutboxOptions.cs": "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/OutboxOptions.cs",
+    "src/services/AURA.Analysis.Api/Outbox/OutboxPublisher.cs": "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/OutboxPublisher.cs",
+    "src/services/AURA.Analysis.Api/Outbox/OutboxSql.cs": "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/OutboxSql.cs",
+    "src/services/AURA.Analysis.Api/Outbox/Ports.cs": "infra/sprint3/legacy-source/services/AURA.Analysis.Api/Outbox/Ports.cs"
+  },
+  "supersededRuntimeContract": "ADR005 uses event0.8; legacy0.7 artifacts and runtime source snapshots remain byte-pinned. Historical handoff gates remain closed.",
+  "historicalLegacyContractSnapshots": {
+    "contracts/analysis-openapi.yaml": "infra/sprint3/legacy-contracts/contracts/analysis-openapi.yaml"
   }
 }

@@ -7,7 +7,7 @@ internal sealed record PreparedUpload(IUploadSession Session, AccessDecision Dec
 
 public sealed partial class UploadPlanningService(UploadOptions options,IPatientAccessResolver access,IUploadRepository repository,TimeProvider clock)
 {
-    private const string EventSchemaVersion = "0.7";
+    private const string EventSchemaVersion = "0.8";
     private const string JobSchemaVersion = "0.6";
     private static readonly string[] EyeSides={"left","right","unknown"};
     private readonly UploadOptions _options=options;
