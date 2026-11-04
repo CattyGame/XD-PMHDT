@@ -68,16 +68,34 @@ try {
     }
 
     Write-Host "[3/4] Thực hiện phục hồi dữ liệu vào PostgreSQL qua pg_restore..." -ForegroundColor Yellow
-    $containerName = "aura-pg87s-c4fdb65507bd41d9"
-    $hasContainer = docker ps --format "{{.Names}}" | Select-String $containerName
+    $pgContainer = docker ps --filter "ancestor=postgres:17-alpine" --format "{{.Names}}" | Select-Object -First 1
+    if (-not $pgContainer) {
+        $pgContainer = docker ps --format "{{.Names}}" | Where-Object { $_ -match "postgres|aura.*pg|aura-s3-reporting-postgres" } | Select-Object -First 1
+    }
 
-    if ($hasContainer) {
-        docker cp $restoredDumpPath "$containerName`:/tmp/restore.dump"
-        Write-Host "  Chạy pg_restore --clean --if-exists trong container $containerName..." -ForegroundColor Green
-        # docker exec -e PGPASSWORD=$Password $containerName pg_restore -U $User -d $Database --clean --if-exists -v "/tmp/restore.dump"
-        docker exec $containerName rm "/tmp/restore.dump"
+    if ($pgContainer) {
+        docker cp $restoredDumpPath "$pgContainer`:/tmp/restore.dump"
+        Write-Host "  Chạy pg_restore --clean --if-exists trong container $pgContainer..." -ForegroundColor Green
+        docker exec -e PGPASSWORD=$Password $pgContainer pg_restore -U $User -d $Database --clean --if-exists -v "/tmp/restore.dump"
+        $restoreExit = $LASTEXITCODE
+        docker exec $pgContainer rm "/tmp/restore.dump"
+
+        # pg_restore returns 0 on success, or 1 on non-fatal warnings (e.g. table didn't exist to drop yet)
+        if ($restoreExit -ne 0 -and $restoreExit -ne 1) {
+            throw "pg_restore thất bại với mã lỗi $restoreExit trong container $pgContainer."
+        }
+        Write-Host "  pg_restore hoàn tất thành công trong container $pgContainer (exit code: $restoreExit)." -ForegroundColor Green
+    } elseif (Get-Command "pg_restore" -ErrorAction SilentlyContinue) {
+        Write-Host "  Chạy pg_restore qua CLI cục bộ..." -ForegroundColor Green
+        $env:PGPASSWORD = $Password
+        & pg_restore -h $PostgresHost -p $PostgresPort -U $User -d $Database --clean --if-exists -v $restoredDumpPath
+        $restoreExit = $LASTEXITCODE
+        if ($restoreExit -ne 0 -and $restoreExit -ne 1) {
+            throw "pg_restore cục bộ thất bại với mã lỗi $restoreExit."
+        }
+        Write-Host "  pg_restore cục bộ hoàn tất thành công (exit code: $restoreExit)." -ForegroundColor Green
     } else {
-        Write-Host "  Mô phỏng phục hồi schema và tables..." -ForegroundColor Green
+        throw "LỖI CRITICAL: Không tìm thấy container PostgreSQL đang chạy hoặc công cụ pg_restore để thực hiện phục hồi. Không được mô phỏng giả lập."
     }
 
     Write-Host "[4/4] Đo lường chỉ số Phục hồi Thảm họa RPO và RTO..." -ForegroundColor Yellow
@@ -89,7 +107,7 @@ try {
     Write-Host "  Mục tiêu RTO: <= 30 phút (ĐẠT)" -ForegroundColor Green
     Write-Host "  Mục tiêu RPO: <= 1 giờ (ĐẠT - sao lưu định kỳ)" -ForegroundColor Green
 
-    # Dọn dẹp tệp dump tạm thời
+    # Dọn dẹp tệp dump tạm thời sau khi phục hồi
     Remove-Item $restoredDumpPath -Force
 
     Write-Host "====================================================================" -ForegroundColor Cyan
@@ -98,5 +116,5 @@ try {
 }
 catch {
     Write-Host "LỖI PHỤC HỒI: $_" -ForegroundColor Red
-    exit 1
+    throw
 }
