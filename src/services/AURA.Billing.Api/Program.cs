@@ -86,6 +86,7 @@ builder.Services.AddSingleton<PackageRepository>();
 builder.Services.AddSingleton<PackageCatalogService>();
 builder.Services.AddSingleton<OrderRepository>();
 builder.Services.AddSingleton<PaymentSignatureService>();
+builder.Services.AddSingleton<IBillingPaymentEventPublisher, BillingPaymentEventPublisher>();
 builder.Services.AddSingleton<OrderService>();
 builder.Services.AddSingleton<BillingOwnerAuthorizer>();
 builder.Services.AddSingleton<CreditReservationRepository>();
@@ -319,6 +320,43 @@ app.MapGet("/api/v1/billing/orders/{orderId:guid}", async Task<IResult> (
 .WithName("GetBillingOrder")
 .WithTags("Billing Orders")
 .Produces<OrderRecord>(StatusCodes.Status200OK)
+.Produces(StatusCodes.Status404NotFound);
+
+app.MapGet("/internal/v1/billing/orders/{orderId:guid}/recipient", async Task<IResult> (
+    Guid orderId,
+    HttpContext context,
+    ServiceTokenValidator tokenValidator,
+    OrderRepository repository,
+    CancellationToken cancellationToken) =>
+{
+    var tokenResult = await tokenValidator.ValidateAsync(
+        context.Request, "billing:read", null, cancellationToken);
+    if (!tokenResult.Succeeded)
+    {
+        return BillingError(context, tokenResult.StatusCode, tokenResult.Code,
+            tokenResult.Message, tokenResult.Retryable);
+    }
+
+    var order = await repository.GetOrderByIdAsync(orderId, cancellationToken);
+    if (order is null)
+    {
+        return BillingError(context, StatusCodes.Status404NotFound, "ERR_NOT_FOUND", "Không tìm thấy đơn hàng.");
+    }
+
+    return Results.Ok(new
+    {
+        eventId = Guid.NewGuid(),
+        orderId = order.Id,
+        tenantId = order.TenantId,
+        recipientAccountId = order.BillingOwnerId,
+        status = order.Status
+    });
+})
+.WithName("GetBillingOrderRecipient")
+.WithTags("Billing Internal")
+.Produces(StatusCodes.Status200OK)
+.Produces(StatusCodes.Status401Unauthorized)
+.Produces(StatusCodes.Status403Forbidden)
 .Produces(StatusCodes.Status404NotFound);
 
 app.MapPost("/api/v1/billing/payments/callback", async Task<IResult> (

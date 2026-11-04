@@ -74,9 +74,12 @@ builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
 builder.Services.AddSingleton<TokenCipher>();
 builder.Services.AddSingleton<DeviceRegistrationRepository>();
 builder.Services.AddSingleton<NotificationInboxRepository>();
+builder.Services.AddSingleton<NotificationDeliveryJobRepository>();
 builder.Services.AddHttpClient("IdentityAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Identity:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
 builder.Services.AddHttpClient("AnalysisAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Analysis:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
+    .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
+builder.Services.AddHttpClient("BillingAuthority", client=>{client.BaseAddress=new Uri(builder.Configuration["Services:Billing:BaseUrl"] ?? "http://localhost:5002");client.Timeout=TimeSpan.FromSeconds(5);})
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
 builder.Services.AddSingleton<NotificationAuthorityClient>();
 builder.Services.AddSingleton<INotificationContextResolver,NotificationContextResolver>();
@@ -84,6 +87,7 @@ builder.Services.AddSingleton<IAccountResolver, AccountResolver>();
 builder.Services.AddSingleton<IFcmClient, FirebaseAdminFcmClient>();
 builder.Services.Configure<RabbitMqConsumerOptions>(builder.Configuration.GetSection(RabbitMqConsumerOptions.SectionName));
 builder.Services.AddHostedService<NotificationEventConsumer>();
+builder.Services.AddHostedService<NotificationDeliveryWorker>();
 builder.Services.AddNotificationTestPush();
 
 var app = builder.Build();

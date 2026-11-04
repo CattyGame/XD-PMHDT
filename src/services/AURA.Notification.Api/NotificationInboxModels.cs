@@ -26,11 +26,12 @@ public sealed record SaveInboxItemCommand(
     Guid AccountId,
     Guid TenantId,
     Guid EventId,
-    Guid AnalysisId,
+    Guid? AnalysisId,
     string Type,
     string Title,
     string TargetPath,
-    string? Metadata = null);
+    string? Metadata = null,
+    Guid? OrderId = null);
 
 public enum SaveInboxOutcome
 {

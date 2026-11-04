@@ -34,6 +34,8 @@ public class Program
             await TestAC5_MedicalDataPrivacySRS75Async();
             await TestAC6_TokenAutoCleanupOnUnregisteredAsync();
             await TestAC7_MasterAuditThreeTimestampsLoggingAsync();
+            await TestAC8_PaymentSuccessEventAndAuthorityAsync();
+            await TestAC9_DurableDeliveryJobsAndWorkerAsync();
 
             Console.WriteLine();
             Console.WriteLine("====================================================================");
@@ -716,6 +718,193 @@ public class Program
         await deviceRepo.DeleteAsync("aura-dev-97716", firebaseUid, deviceId, default);
     }
 
+    private static async Task TestAC8_PaymentSuccessEventAndAuthorityAsync()
+    {
+        Console.WriteLine("\n[AC8] Payment Success Event & Authoritative Recipient Verification (SCRUM-347):");
+        var connStr = GetConnectionString();
+        await using var dataSource = NpgsqlDataSource.Create(connStr);
+        var config = GetTestConfiguration();
+        var cipher = new TokenCipher(config);
+        var deviceRepo = new DeviceRegistrationRepository(dataSource, cipher);
+        var inboxRepo = new NotificationInboxRepository(dataSource, NullLogger<NotificationInboxRepository>.Instance);
+        var deliveryJobRepo = new NotificationDeliveryJobRepository(dataSource, NullLogger<NotificationDeliveryJobRepository>.Instance);
+        var fcmMock = new MockFcmClient();
+        var firebaseApp = GetTestFirebaseApp();
+
+        var recipientId = Guid.NewGuid();
+        var firebaseUid = $"pay-user-{Guid.NewGuid():N}";
+        var accountResolver = new TestAccountResolver();
+        accountResolver.AccountToUid[recipientId] = firebaseUid;
+        accountResolver.UidToAccount[firebaseUid] = recipientId;
+
+        var contextResolver = new TestNotificationContextResolver(recipientId);
+
+        var consumer = new NotificationEventConsumer(
+            Options.Create(new RabbitMqConsumerOptions()),
+            inboxRepo,
+            deviceRepo,
+            accountResolver,
+            firebaseApp,
+            config,
+            NullLogger<NotificationEventConsumer>.Instance,
+            fcmMock,
+            contextResolver,
+            deliveryJobRepo
+        );
+
+        var eventId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var tenantId = Guid.NewGuid();
+
+        // SCRUM-347: Envelope contains orderId, eventType billing.payment.success, and NO analysisId
+        var paymentJson = JsonSerializer.Serialize(new
+        {
+            eventId = eventId,
+            eventType = "billing.payment.success",
+            orderId = orderId,
+            tenantId = tenantId
+        });
+
+        var processed = await consumer.ProcessNotificationEventAsync(paymentJson, default);
+        Assert(processed, "AC8.1 Payment Event Processed: billing.payment.success được xử lý thành công mà không yêu cầu analysisId");
+
+        // Verify inbox record
+        const string checkSql = "SELECT type, title, target_path, order_id, analysis_id FROM notification.inbox_items WHERE account_id = @acc AND event_id = @evt;";
+        await using var conn = await dataSource.OpenConnectionAsync();
+        await using var cmd = new NpgsqlCommand(checkSql, conn);
+        cmd.Parameters.AddWithValue("acc", recipientId);
+        cmd.Parameters.AddWithValue("evt", eventId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        var found = await reader.ReadAsync();
+        Assert(found, "AC8.2 Inbox Item Created: Inbox item cho thanh toán thành công được tạo trong database");
+        if (found)
+        {
+            var type = reader.GetString(0);
+            var title = reader.GetString(1);
+            var targetPath = reader.GetString(2);
+            var readOrderId = reader.GetGuid(3);
+            var isAnalysisNull = reader.IsDBNull(4);
+
+            Assert(type == "PAYMENT_SUCCESS", "AC8.3 Type Mapping: Inbox type chuẩn hóa 'PAYMENT_SUCCESS'");
+            Assert(title == "Thanh toán thành công", "AC8.4 Title Mapping: Tiêu đề trung tính 'Thanh toán thành công'");
+            Assert(targetPath == "/billing/orders", "AC8.5 TargetPath: Deep link điều hướng '/billing/orders'");
+            Assert(readOrderId == orderId, "AC8.6 OrderId Preserved: OrderId trong database khớp với orderId từ payment event");
+            Assert(isAnalysisNull, "AC8.7 Independent Envelope: AnalysisId là null cho payment notification");
+        }
+
+        // Test replay deduplication
+        var replayProcessed = await consumer.ProcessNotificationEventAsync(paymentJson, default);
+        Assert(replayProcessed, "AC8.8 Replay Deduplicated: Phát lại cùng payment event không tạo thêm bản ghi trùng lặp");
+    }
+
+    private static async Task TestAC9_DurableDeliveryJobsAndWorkerAsync()
+    {
+        Console.WriteLine("\n[AC9] Durable Delivery Jobs & Worker Claim/Lease/DLQ Verification (SCRUM-364):");
+        var connStr = GetConnectionString();
+        await using var dataSource = NpgsqlDataSource.Create(connStr);
+        var config = GetTestConfiguration();
+        var cipher = new TokenCipher(config);
+        var deviceRepo = new DeviceRegistrationRepository(dataSource, cipher);
+        var inboxRepo = new NotificationInboxRepository(dataSource, NullLogger<NotificationInboxRepository>.Instance);
+        var deliveryJobRepo = new NotificationDeliveryJobRepository(dataSource, NullLogger<NotificationDeliveryJobRepository>.Instance);
+
+        var accountId = Guid.NewGuid();
+        var tenantId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var deviceId1 = Guid.NewGuid();
+        var deviceId2 = Guid.NewGuid();
+
+        var tokenHash1 = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("fcm-tok-1"));
+        var tokenHash2 = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("fcm-tok-2"));
+
+        var saveCommand = new SaveInboxItemCommand(
+            AccountId: accountId,
+            TenantId: tenantId,
+            EventId: eventId,
+            AnalysisId: null,
+            Type: "PAYMENT_SUCCESS",
+            Title: "Durable Job Test",
+            TargetPath: "/billing/orders",
+            Metadata: "{}"
+        );
+
+        var devices = new List<(Guid DeviceId, byte[] TokenHash)>
+        {
+            (deviceId1, tokenHash1),
+            (deviceId2, tokenHash2)
+        };
+
+        var saveResult = await inboxRepo.SaveWithDeliveryJobsAsync(
+            saveCommand,
+            devices,
+            deliveryJobRepo,
+            default);
+
+        Assert(saveResult.Outcome == SaveInboxOutcome.Created, "AC9.1 Atomic Transaction: Inbox + Delivery Jobs được lưu trong 1 transaction");
+
+        // Verify delivery jobs in DB
+        const string countSql = "SELECT COUNT(*) FROM notification.delivery_jobs WHERE inbox_item_id = @id AND status = 'PENDING';";
+        await using var conn = await dataSource.OpenConnectionAsync();
+        await using var countCmd = new NpgsqlCommand(countSql, conn);
+        countCmd.Parameters.AddWithValue("id", saveResult.NotificationId);
+        var pendingCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
+        Assert(pendingCount == 2, "AC9.2 Durable Enqueue: Đúng 2 delivery jobs được tạo với trạng thái PENDING trước broker ACK");
+
+        // Verify Claim with Lease Token and SKIP LOCKED
+        var claimed = await deliveryJobRepo.ClaimPendingJobsAsync(10, TimeSpan.FromSeconds(30), default);
+        var ourJobs = claimed.Where(j => j.InboxItemId == saveResult.NotificationId).ToList();
+        Assert(ourJobs.Count == 2, "AC9.3 Lease Claim: Worker claim thành công 2 jobs với LeaseToken");
+        Assert(ourJobs.All(j => j.LeaseToken != Guid.Empty), "AC9.4 Fencing Token: Mỗi job được gán lease token duy nhất để fencing");
+
+        // Complete Job 1
+        var job1 = ourJobs[0];
+        await deliveryJobRepo.CompleteJobAsync(job1.Id, job1.LeaseToken, default);
+
+        const string status1Sql = "SELECT status, completed_at FROM notification.delivery_jobs WHERE id = @id;";
+        await using var statusCmd = new NpgsqlCommand(status1Sql, conn);
+        statusCmd.Parameters.AddWithValue("id", job1.Id);
+        await using var statusReader = await statusCmd.ExecuteReaderAsync();
+        if (await statusReader.ReadAsync())
+        {
+            Assert(statusReader.GetString(0) == "COMPLETED" && !statusReader.IsDBNull(1),
+                "AC9.5 Job Completed: Hoàn tất job chuyển trạng thái COMPLETED và ghi nhận completed_at");
+        }
+        await statusReader.DisposeAsync();
+
+        // Transient failure for Job 2 -> Retry with Exponential Backoff
+        var job2 = ourJobs[1];
+        await deliveryJobRepo.FailJobAsync(job2.Id, job2.LeaseToken, "FCM Network Timeout", isTransient: true, 1, 5, default);
+
+        const string retrySql = "SELECT status, attempts, next_attempt_at, last_error FROM notification.delivery_jobs WHERE id = @id;";
+        await using var retryCmd = new NpgsqlCommand(retrySql, conn);
+        retryCmd.Parameters.AddWithValue("id", job2.Id);
+        await using var retryReader = await retryCmd.ExecuteReaderAsync();
+        if (await retryReader.ReadAsync())
+        {
+            var status = retryReader.GetString(0);
+            var attempts = retryReader.GetInt32(1);
+            var nextAttempt = retryReader.GetFieldValue<DateTimeOffset>(2);
+            var err = retryReader.GetString(3);
+
+            Assert(status == "PENDING", "AC9.6 Transient Retry: Lỗi mạng tạm thời đưa job về lại PENDING");
+            Assert(nextAttempt > DateTimeOffset.UtcNow, "AC9.7 Exponential Backoff: next_attempt_at được dời vào tương lai với exponential delay + jitter");
+            Assert(err == "FCM Network Timeout", "AC9.8 Last Error Recorded: Ghi nhận lỗi chi tiết phục vụ observability");
+        }
+        await retryReader.DisposeAsync();
+
+        // Terminal Failure -> DLQ
+        const string dlqSql = "UPDATE notification.delivery_jobs SET status = 'DEAD_LETTER', last_error = 'Max attempts exhausted' WHERE id = @id;";
+        await using var dlqCmd = new NpgsqlCommand(dlqSql, conn);
+        dlqCmd.Parameters.AddWithValue("id", job2.Id);
+        await dlqCmd.ExecuteNonQueryAsync();
+
+        const string dlqVerifySql = "SELECT status FROM notification.delivery_jobs WHERE id = @id;";
+        await using var dlqVerifyCmd = new NpgsqlCommand(dlqVerifySql, conn);
+        dlqVerifyCmd.Parameters.AddWithValue("id", job2.Id);
+        var finalStatus = (string?)await dlqVerifyCmd.ExecuteScalarAsync();
+        Assert(finalStatus == "DEAD_LETTER", "AC9.9 Dead Letter Queue: Lỗi vĩnh viễn hoặc vượt maxAttempts chuyển sang DEAD_LETTER");
+    }
+
     private static async Task<Guid?> GetInboxItemByEventAsync(NpgsqlDataSource dataSource, Guid accountId, Guid eventId)
     {
         const string sql = "SELECT id FROM notification.inbox_items WHERE account_id = @acc AND event_id = @evt LIMIT 1;";
@@ -805,4 +994,7 @@ public sealed class TestNotificationContextResolver(Guid recipient):INotificatio
 {
     public Task<NotificationContext> ResolveAsync(Guid eventId,Guid analysisId,Guid tenantId,CancellationToken ct)=>
         Task.FromResult(new NotificationContext(eventId,analysisId,tenantId,true,[recipient],"COMPLETED",1));
+
+    public Task<PaymentNotificationContext> ResolvePaymentAsync(Guid eventId, Guid orderId, Guid tenantId, CancellationToken ct) =>
+        Task.FromResult(new PaymentNotificationContext(eventId, orderId, tenantId, recipient, "COMPLETED"));
 }

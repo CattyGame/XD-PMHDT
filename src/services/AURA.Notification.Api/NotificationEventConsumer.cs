@@ -49,7 +49,8 @@ public sealed class NotificationEventConsumer(
     IConfiguration configuration,
     ILogger<NotificationEventConsumer> logger,
     IFcmClient? fcmClient = null,
-    INotificationContextResolver? contextResolver = null) : BackgroundService
+    INotificationContextResolver? contextResolver = null,
+    NotificationDeliveryJobRepository? deliveryJobRepository = null) : BackgroundService
 {
     private readonly RabbitMqConsumerOptions _options = options.Value;
     private readonly IFcmClient _fcmClient = fcmClient ?? new FirebaseAdminFcmClient(
@@ -161,7 +162,6 @@ public sealed class NotificationEventConsumer(
         var root = doc.RootElement;
 
         if (!root.TryGetProperty("eventId", out var eventIdProp) || !eventIdProp.TryGetGuid(out var eventId) ||
-            !root.TryGetProperty("analysisId", out var analysisIdProp) || !analysisIdProp.TryGetGuid(out var analysisId) ||
             !root.TryGetProperty("eventType", out var eventTypeProp) || !root.TryGetProperty("tenantId", out var tenantIdProp) ||
             !tenantIdProp.TryGetGuid(out var tenantId))
         {
@@ -170,47 +170,81 @@ public sealed class NotificationEventConsumer(
         }
 
         var eventType = eventTypeProp.GetString();
-        if (eventType is not ("analysis.completed" or "analysis.failed" or "batch.completed" ))
+        if (eventType is not ("analysis.completed" or "analysis.failed" or "batch.completed" or "billing.payment.success"))
         {
             logger.LogInformation("Ignoring non-terminal event type {EventType}", eventType);
             return true;
         }
 
-        if(contextResolver is null)throw new InvalidOperationException("Notification authority is required.");
-        var authority=await contextResolver.ResolveAsync(eventId,analysisId,tenantId,cancellationToken);
-        if(authority.EventId!=eventId || authority.AnalysisId!=analysisId || authority.TenantId!=tenantId || !authority.Applicable ||
-            (eventType=="batch.completed" ? authority.ProcessingStatus is not ("COMPLETED" or "PARTIAL_FAILED" or "FAILED")
-                :eventType=="analysis.failed"?authority.ProcessingStatus is not ("FAILED" or "LOW_QUALITY" or "REJECTED")
-                :authority.ProcessingStatus!="COMPLETED"))
-            throw new HttpRequestException("Terminal notification authority unavailable or state not applicable.");
-        var recipients=authority.RecipientAccountIds.Where(x=>x!=Guid.Empty).Distinct().ToList();
-        if(recipients.Count==0)throw new HttpRequestException("No authoritative recipients; retry required.");
+        Guid? analysisId = null;
+        Guid? orderId = null;
+        List<Guid> recipients;
+        string inboxType;
+        string title;
+        string bodyText;
+        string targetPath;
 
-        var inboxType = eventType switch
+        if (eventType == "billing.payment.success")
         {
-            "analysis.completed" or "batch.completed" => "ANALYSIS_COMPLETED",
-            "billing.payment.success" => "PAYMENT_SUCCESS",
-            _ => "ANALYSIS_FAILED"
-        };
+            if (!root.TryGetProperty("orderId", out var orderIdProp) || !orderIdProp.TryGetGuid(out var parsedOrderId))
+            {
+                logger.LogWarning("Discarding payment success event without valid orderId.");
+                return true;
+            }
+            orderId = parsedOrderId;
 
-        // SRS §7.5: Title and body must be neutral, strictly free from patient personal data and clinical diagnosis
-        var title = eventType switch
+            if (contextResolver is null) throw new InvalidOperationException("Notification authority is required.");
+            var paymentAuth = await contextResolver.ResolvePaymentAsync(eventId, parsedOrderId, tenantId, cancellationToken);
+            if (paymentAuth.OrderId != parsedOrderId || paymentAuth.RecipientAccountId == Guid.Empty)
+                throw new HttpRequestException("Authoritative payment recipient resolution failed.");
+
+            recipients = [paymentAuth.RecipientAccountId];
+            inboxType = "PAYMENT_SUCCESS";
+            title = "Thanh toán thành công";
+            bodyText = "Giao dịch thanh toán đã được xác nhận. Bấm để xem gói cước.";
+            targetPath = "/billing/orders";
+        }
+        else
         {
-            "analysis.completed" => "Phân tích ảnh đáy mắt hoàn tất",
-            "batch.completed" => "Đợt xử lý ảnh đã kết thúc",
-            "billing.payment.success" => "Thanh toán thành công",
-            _ => "Phân tích ảnh đáy mắt không thành công"
-        };
-        var bodyText = eventType switch
-        {
-            "analysis.completed" => "Kết quả phân tích mắt của bạn đã có! Bấm để xem chi tiết.",
-            "batch.completed" => "Trạng thái đợt xử lý đã được cập nhật. Bấm để xem chi tiết.",
-            "billing.payment.success" => "Giao dịch thanh toán đã được xác nhận. Bấm để xem gói cước.",
-            _ => "Không thể phân tích ảnh đáy mắt do chất lượng ảnh không đạt tiêu chuẩn."
-        };
-        var targetPath = eventType == "billing.payment.success"
-            ? "/billing/packages"
-            : eventType=="batch.completed"?$"/batches/{analysisId:D}":$"/analyses/{analysisId:D}";
+            if (!root.TryGetProperty("analysisId", out var analysisIdProp) || !analysisIdProp.TryGetGuid(out var parsedAnalysisId))
+            {
+                logger.LogWarning("Discarding analysis/batch event without valid analysisId.");
+                return true;
+            }
+            analysisId = parsedAnalysisId;
+
+            if (contextResolver is null) throw new InvalidOperationException("Notification authority is required.");
+            var authority = await contextResolver.ResolveAsync(eventId, parsedAnalysisId, tenantId, cancellationToken);
+            if (authority.EventId != eventId || authority.AnalysisId != parsedAnalysisId || authority.TenantId != tenantId || !authority.Applicable ||
+                (eventType == "batch.completed" ? authority.ProcessingStatus is not ("COMPLETED" or "PARTIAL_FAILED" or "FAILED")
+                    : eventType == "analysis.failed" ? authority.ProcessingStatus is not ("FAILED" or "LOW_QUALITY" or "REJECTED")
+                    : authority.ProcessingStatus != "COMPLETED"))
+                throw new HttpRequestException("Terminal notification authority unavailable or state not applicable.");
+
+            recipients = authority.RecipientAccountIds.Where(x => x != Guid.Empty).Distinct().ToList();
+            if (recipients.Count == 0) throw new HttpRequestException("No authoritative recipients; retry required.");
+
+            inboxType = eventType switch
+            {
+                "analysis.completed" or "batch.completed" => "ANALYSIS_COMPLETED",
+                _ => "ANALYSIS_FAILED"
+            };
+
+            // SRS §7.5: Title and body must be neutral, strictly free from patient personal data and clinical diagnosis
+            title = eventType switch
+            {
+                "analysis.completed" => "Phân tích ảnh đáy mắt hoàn tất",
+                "batch.completed" => "Đợt xử lý ảnh đã kết thúc",
+                _ => "Phân tích ảnh đáy mắt không thành công"
+            };
+            bodyText = eventType switch
+            {
+                "analysis.completed" => "Kết quả phân tích mắt của bạn đã có! Bấm để xem chi tiết.",
+                "batch.completed" => "Trạng thái đợt xử lý đã được cập nhật. Bấm để xem chi tiết.",
+                _ => "Không thể phân tích ảnh đáy mắt do chất lượng ảnh không đạt tiêu chuẩn."
+            };
+            targetPath = eventType == "batch.completed" ? $"/batches/{parsedAnalysisId:D}" : $"/analyses/{parsedAnalysisId:D}";
+        }
 
         int totalDevicesTargeted = 0;
         int totalSuccess = 0;
@@ -218,13 +252,19 @@ public sealed class NotificationEventConsumer(
         int totalCleaned = 0;
         long maxFcmLatencyMs = 0;
 
+        var projectId = configuration["Firebase:ProjectId"] ?? "aura-dev-97716";
+
         // Resolve current Identity authority before any writes: dependency failures must requeue.
-        var activeRecipients=new List<Guid>();
-        foreach(var recipient in recipients)
-            if(!string.IsNullOrWhiteSpace(await accountResolver.ResolveFirebaseUidAsync(recipient,cancellationToken)))activeRecipients.Add(recipient);
+        var activeRecipients = new List<Guid>();
+        foreach (var recipient in recipients)
+        {
+            if (!string.IsNullOrWhiteSpace(await accountResolver.ResolveFirebaseUidAsync(recipient, cancellationToken)))
+                activeRecipients.Add(recipient);
+        }
+
         foreach (var recipientId in activeRecipients)
         {
-            // 1. Persist Before ACK: Save to durable PostgreSQL inbox
+            // 1. Persist Before ACK: Save to durable PostgreSQL inbox & delivery jobs (SCRUM-364)
             var command = new SaveInboxItemCommand(
                 AccountId: recipientId,
                 TenantId: tenantId,
@@ -233,10 +273,28 @@ public sealed class NotificationEventConsumer(
                 Type: inboxType,
                 Title: title,
                 TargetPath: targetPath,
-                Metadata: json
+                Metadata: json,
+                OrderId: orderId
             );
 
-            var saveResult = await inboxRepository.SaveAsync(command, cancellationToken);
+            var firebaseUid = await accountResolver.ResolveFirebaseUidAsync(recipientId, cancellationToken);
+            var devices = !string.IsNullOrWhiteSpace(firebaseUid)
+                ? await deviceRepository.GetTokensForUserAsync(projectId, firebaseUid, cancellationToken)
+                : new List<ActiveDeviceToken>();
+
+            SaveInboxResult saveResult;
+            if (deliveryJobRepository is not null && devices.Count > 0)
+            {
+                var deviceHashes = devices
+                    .Select(d => (d.DeviceId, System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(d.Token))))
+                    .ToList();
+                saveResult = await inboxRepository.SaveWithDeliveryJobsAsync(command, deviceHashes, deliveryJobRepository, cancellationToken);
+            }
+            else
+            {
+                saveResult = await inboxRepository.SaveAsync(command, cancellationToken);
+            }
+
             logger.LogInformation(
                 "Notification inbox outcome for Account {AccountId}, Event {EventId}: {Outcome}",
                 recipientId, eventId, saveResult.Outcome);
@@ -251,6 +309,11 @@ public sealed class NotificationEventConsumer(
                 targetPath,
                 cancellationToken);
             fcmStopwatch.Stop();
+
+            if (dispatchResult.SuccessCount > 0 && deliveryJobRepository is not null && saveResult.NotificationId != Guid.Empty)
+            {
+                await deliveryJobRepository.CompleteAllForInboxItemAsync(saveResult.NotificationId, cancellationToken);
+            }
 
             if (fcmStopwatch.ElapsedMilliseconds > maxFcmLatencyMs)
             {
@@ -268,7 +331,7 @@ public sealed class NotificationEventConsumer(
         // 3. Record Master Audit 3 Timestamps & Metrics
         LastDispatchMetrics = new NotificationDispatchMetrics(
             EventId: eventId,
-            AnalysisId: analysisId,
+            AnalysisId: analysisId ?? Guid.Empty,
             ReceivedAt: receiveTimestamp,
             FcmDispatchedAt: DateTimeOffset.UtcNow,
             FcmLatencyMs: maxFcmLatencyMs,
@@ -294,7 +357,7 @@ public sealed class NotificationEventConsumer(
 
     private async Task<FcmDispatchInternalResult> SendWebPushNotificationAsync(
         Guid recipientId,
-        Guid analysisId,
+        Guid? analysisId,
         string title,
         string bodyText,
         string targetPath,
@@ -334,8 +397,8 @@ public sealed class NotificationEventConsumer(
                 },
                 Data = new Dictionary<string, string>
                 {
-                    ["kind"] = "analysis-completed",
-                    ["analysisId"] = analysisId.ToString("D"),
+                    ["kind"] = analysisId.HasValue ? "analysis-completed" : "payment-success",
+                    ["analysisId"] = analysisId?.ToString("D") ?? string.Empty,
                     ["targetPath"] = targetPath,
                     ["url"] = targetPath
                 },
@@ -346,7 +409,7 @@ public sealed class NotificationEventConsumer(
                         Title = title,
                         Body = bodyText,
                         Icon = "/favicon.ico",
-                        Tag = $"analysis-{analysisId:D}"
+                        Tag = analysisId.HasValue ? $"analysis-{analysisId.Value:D}" : $"notif-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
                     },
                     FcmOptions = new WebpushFcmOptions
                     {
