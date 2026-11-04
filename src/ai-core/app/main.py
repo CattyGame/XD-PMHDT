@@ -49,7 +49,7 @@ from .services.mock_service import (
 APP_START_TIME = time.time()
 SERVICE_NAME = "AURA.AiCore"
 VERSION = "0.2.0"
-API_VERSION = "1.2.0"
+API_VERSION = "1.3.0"
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ service_bearer_scheme = HTTPBearer(
 app = FastAPI(
     title="AURA AI Analysis Service API",
     description=(
-        "AI API nội bộ của AURA (Contract 1.2.0). Runtime mặc định Sprint 3 chạy "
+        "AI API nội bộ của AURA (Contract 1.3.0). Runtime mặc định chạy "
         "thuật toán phân vùng mạch máu võng mạc Frangi v0.2 thật theo cấu hình cố định "
         "trong config/ai-frangi.yaml và xác thực RS256 Service JWT fail-closed. "
         "Phân vùng Frangi chưa cung cấp đánh giá rủi ro lâm sàng (risk_available=false, "
@@ -111,33 +111,12 @@ async def correlation_id_middleware(request: Request, call_next):
 
 
 def is_explicit_mock_mode() -> bool:
-    """
-    Return True when engine is explicitly set to mock, or by default when
-    neither AURA_AI_ENGINE=frangi nor service auth public key is configured,
-    preserving backward compatibility with develop branch Docker checks.
-    """
-    engine = os.getenv("AURA_AI_ENGINE", "").strip().lower()
-    if engine == "frangi":
-        return False
-    if engine == "mock":
-        return True
-
-    # If engine is not explicitly set, determine based on public key availability
-    has_key = bool(
-        os.getenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM")
-        or os.getenv("ServiceAuth__PublicKeyPem")
-        or (
-            os.getenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH")
-            and os.path.isfile(os.getenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", ""))
-        )
-        or (
-            os.getenv("ServiceAuth__PublicKeyPath")
-            and os.path.isfile(os.getenv("ServiceAuth__PublicKeyPath", ""))
-        )
-        or os.path.isfile("/run/aura-service-auth/public/signing-public.pem")
+    """Mock is an explicit test/demo capability, never a missing-key fallback."""
+    return (
+        os.getenv("AURA_AI_ENGINE", "frangi").strip().lower() == "mock"
+        and os.getenv("AURA_ALLOW_MOCK", "false").strip().lower() == "true"
+        and os.getenv("AURA_RUNTIME_MODE", "LIVE").strip().upper() in {"TEST", "DEMO"}
     )
-    # When public key is present, default to Frangi; otherwise default to Mock (e.g. CI Docker check)
-    return not has_key
 
 
 def verify_runtime_and_auth(
@@ -292,6 +271,14 @@ def root():
         "ready": "/ready",
         "ping": "/api/v1/platform/ping",
         "analyze": "/api/v1/analyze",
+        "capabilities": {
+            "segmentation_algorithm": "FRANGI_VESSEL_SEGMENTATION",
+            "optional_research_risk_method": "HEURISTIC_VESSEL_DENSITY_TORTUOSITY",
+            "dr_cnn_available": False,
+            "grad_cam_available": False,
+            "avr_available": False,
+            "clinical_validation": "NOT_ESTABLISHED",
+        },
     }
 
 

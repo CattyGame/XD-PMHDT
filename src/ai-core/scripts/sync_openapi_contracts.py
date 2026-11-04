@@ -1,8 +1,8 @@
 """
 Sync OpenAPI Contracts Script for AURA AI Service (Module M4 - SCRUM-61 / SCRUM-331).
 Generates and synchronizes `contracts/ai_service_openapi.json` directly from
-canonical `contracts/ai_service_openapi.yaml` and verifies Sprint 3 AI Contract 1.2.0
-(`ai-openapi-1.2.yaml`, `ai-request-1.2.schema.json`, `ai-response-1.2.schema.json`, `ai-error.schema.json`).
+canonical `contracts/ai_service_openapi.yaml` and verifies the active AI Contract 1.3.0
+(`ai-openapi-1.3.yaml`, `ai-request-1.3.schema.json`, `ai-response-1.3.schema.json`, `ai-error.schema.json`).
 
 Usage:
     python scripts/sync_openapi_contracts.py          # Regenerates JSON from YAML
@@ -34,7 +34,7 @@ def load_yaml_contract(yaml_path: str) -> dict:
 def validate_contract_structure(data: dict, repo_root: str):
     assert data.get("openapi", "").startswith("3.0"), "OpenAPI version must be 3.0.x"
     assert "info" in data, "Contract must contain 'info'"
-    assert data["info"].get("version") == "1.2.0", "Contract info.version must be 1.2.0"
+    assert data["info"].get("version") == "1.3.0", "Contract info.version must be 1.3.0"
     assert "paths" in data, "Contract must contain 'paths'"
     assert "components" in data and "schemas" in data["components"], "Contract must contain component schemas"
 
@@ -65,15 +65,15 @@ def validate_contract_structure(data: dict, repo_root: str):
     for s in required_schemas:
         assert s in data["components"]["schemas"], f"Missing required schema {s} in OpenAPI contract"
 
-    # Also verify canonical Sprint 3 1.2 schema files exist in contracts/
+    # Preserve historical1.2 files separately; the active runtime contract is1.3.
     for fname in (
-        "ai-openapi-1.2.yaml",
-        "ai-request-1.2.schema.json",
-        "ai-response-1.2.schema.json",
+        "ai-openapi-1.3.yaml",
+        "ai-request-1.3.schema.json",
+        "ai-response-1.3.schema.json",
         "ai-error.schema.json",
     ):
         fpath = os.path.join(repo_root, "contracts", fname)
-        assert os.path.exists(fpath), f"Missing Sprint 3 contract file: {fpath}"
+        assert os.path.exists(fpath), f"Missing active AI contract file: {fpath}"
 
 
 def sync_contracts(check_mode: bool = False) -> bool:
@@ -90,13 +90,13 @@ def sync_contracts(check_mode: bool = False) -> bool:
         with open(json_path, "r", encoding="utf-8") as f:
             existing_json_str = f.read()
         if existing_json_str == new_json_str:
-            print("OK: JSON and YAML contracts are 100% in sync (v1.2.0).")
+            print("OK: JSON and YAML contracts are in sync (v1.3.0).")
             return True
         else:
             print("MISMATCH: JSON contract differs from YAML contract source.")
             return False
     else:
-        with open(json_path, "w", encoding="utf-8") as f:
+        with open(json_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(new_json_str)
         print(f"SUCCESS: Successfully synchronized {json_path} from {yaml_path}")
         return True

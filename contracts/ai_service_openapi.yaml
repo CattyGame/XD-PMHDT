@@ -3,13 +3,13 @@ openapi: 3.0.3
 info:
   title: AURA AI Analysis Service API
   description: >
-    AI API nội bộ của AURA (Sprint 3 Contract 1.2.0). Runtime mặc định chạy
+    AI API nội bộ của AURA (Sprint 3 Contract 1.3.0). Runtime mặc định chạy
     thuật toán phân vùng mạch máu võng mạc Frangi v0.2 thật theo cấu hình cố định
     trong config/ai-frangi.yaml và xác thực RS256 Service JWT fail-closed.
-    Phân vùng Frangi chưa cung cấp đánh giá rủi ro lâm sàng (risk_available=false,
+    Mặc định phân vùng không đánh giá rủi ro (risk_available=false,
     risk_assessment=null, status=WARNING kèm RISK_UNAVAILABLE).
-    WARNING có kết quả hợp lệ không tự đồng nghĩa LOW_QUALITY.
-  version: 1.2.0
+    WARNING có kết quả hợp lệ không tự đồng nghĩa LOW_QUALITY. Cấu hình1.3 có thể bật chỉ báo hình thái heuristic density/tortuosity với disclaimer; không phải CNN, Grad-CAM hoặc phép đo AVR. Mock chỉ bật bằng AURA_AI_ENGINE=mock, AURA_ALLOW_MOCK=true, AURA_RUNTIME_MODE=TEST/DEMO; thiếu key không tự bật mock.
+  version: 1.3.0
   contact:
     name: Dao Duy Quan (M4 Lead)
     email: quandd2937@ut.edu.vn
@@ -65,7 +65,7 @@ paths:
                 status: ready
                 service: AURA.AiCore
                 version: 0.2.0
-                api_version: 1.2.0
+                api_version: 1.3.0
                 engine: frangi
                 model_version: frangi-v0.2
                 config_version: s3-frangi-1.0.0
@@ -106,7 +106,7 @@ paths:
       tags: [Analysis]
       summary: Nhận ảnh FUNDUS Base64 và thực thi phân vùng mạch máu Frangi v0.2 thật
       description: |
-        Endpoint nội bộ dành cho Analysis Worker (Sprint 3 Contract 1.2.0).
+        Endpoint nội bộ dành cho Analysis Worker (Sprint 3 Contract 1.3.0).
 
         - Yêu cầu xác thực RS256 Service JWT (`iss=aura-identity-s3-v1`, `aud=aura-ai`, `scope=ai:analyze`, `client_id=analysis-worker`).
         - Nhận ảnh PNG hoặc JPEG dưới dạng Base64 trần (không nhận data URL), giới hạn 10 MiB và 16.000.000 pixel.
@@ -322,7 +322,7 @@ components:
           example: 0.2.0
         api_version:
           type: string
-          example: 1.2.0
+          example: 1.3.0
         engine:
           type: string
           example: frangi

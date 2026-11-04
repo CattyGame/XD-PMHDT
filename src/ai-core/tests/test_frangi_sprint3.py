@@ -29,6 +29,7 @@ from typing import Any, Dict
 import jsonschema
 import numpy as np
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
@@ -717,8 +718,12 @@ def test_runtime_exception_returns_500_conforming_to_error_schema(
 # 5. Smoke Training Pipeline Isolation Verification (SCRUM-330)
 # ==============================================================================
 
-def test_segmentation_smoke_training_pipeline_does_not_touch_test_split():
-    report = run_smoke_training()
+def test_segmentation_smoke_training_pipeline_does_not_touch_test_split(tmp_path):
+    config = yaml.safe_load((REPO_ROOT / "src/ai-core/config/segmentation-training-smoke.yaml").read_text(encoding="utf-8"))
+    config["output"]["reportPath"] = str(tmp_path / "training-report.json")
+    config_path = tmp_path / "training-config.yaml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    report = run_smoke_training(config_path)
     assert report["status"] == "SEGMENTATION_TRAINING_SMOKE_PASSED"
     assert report["replaces_runtime_frangi"] is False
     assert report["risk_available"] is False

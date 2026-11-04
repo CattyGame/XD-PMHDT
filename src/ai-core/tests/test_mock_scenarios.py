@@ -10,6 +10,7 @@ from app.main import app
 
 @pytest.fixture(autouse=True)
 def enable_explicit_mock_mode(monkeypatch):
+    monkeypatch.setenv("AURA_RUNTIME_MODE", "TEST")
     """
     Explicitly flag mock engine for unit/scenario regression tests per SCRUM-329.
     Default Sprint 3 runtime is real Frangi (allowMock=false).
@@ -102,7 +103,7 @@ def test_runtime_openapi_documents_warnings(client):
     response = client.get("/openapi.json")
     assert response.status_code == 200
     schema = response.json()
-    assert schema["info"]["version"] == "1.2.0"
+    assert schema["info"]["version"] == "1.3.0"
     schemas = schema["components"]["schemas"]
     response_properties = schemas["AnalysisResponse"]["properties"]
     assert "warnings" in response_properties

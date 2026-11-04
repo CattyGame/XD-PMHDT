@@ -111,7 +111,7 @@ def test_contract_yaml_and_json_sync():
 
     assert yaml_data == json_data, "contracts/ai_service_openapi.json is not identical to yaml!"
     assert yaml_data["openapi"] == "3.0.3"
-    assert yaml_data["info"]["version"] == "1.2.0"
+    assert yaml_data["info"]["version"] == "1.3.0"
     assert "/health" in yaml_data["paths"]
     assert "/ready" in yaml_data["paths"]
     assert "/api/v1/platform/ping" in yaml_data["paths"]
@@ -122,7 +122,7 @@ def test_runtime_openapi_schema_matches_contract():
     resp = client.get("/openapi.json")
     assert resp.status_code == 200
     runtime = resp.json()
-    assert runtime["info"]["version"] == "1.2.0"
+    assert runtime["info"]["version"] == "1.3.0"
 
     # Paths check
     for path in ["/health", "/ready", "/api/v1/platform/ping", "/api/v1/analyze"]:
@@ -154,6 +154,7 @@ def test_runtime_openapi_schema_matches_contract():
 
 
 def test_api_real_calls_conform_to_error_and_response_schemas(monkeypatch):
+    monkeypatch.setenv("AURA_RUNTIME_MODE", "TEST")
     monkeypatch.setenv("AURA_AI_ENGINE", "mock")
     monkeypatch.setenv("AURA_ALLOW_MOCK", "true")
     valid_b64 = create_tiny_png_base64()

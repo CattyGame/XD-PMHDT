@@ -20,7 +20,7 @@ class ReadyResponse(BaseModel):
     status: str = Field("ready", description="Trạng thái sẵn sàng xử lý")
     service: str = Field("AURA.AiCore", description="Tên dịch vụ")
     version: str = Field("0.2.0", description="Phiên bản dịch vụ")
-    api_version: str = Field("1.2.0", description="Phiên bản AI API contract")
+    api_version: str = Field("1.3.0", description="Phiên bản AI API contract")
     engine: str = Field("frangi", description="Engine phân vùng đang kích hoạt")
     model_version: str = Field("frangi-v0.2", description="Phiên bản thuật toán/mô hình")
     config_version: str = Field("s3-frangi-1.0.0", description="Phiên bản cấu hình")

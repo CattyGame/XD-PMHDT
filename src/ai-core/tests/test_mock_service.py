@@ -18,6 +18,7 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def enable_explicit_mock_mode(monkeypatch):
+    monkeypatch.setenv("AURA_RUNTIME_MODE", "TEST")
     monkeypatch.setenv("AURA_AI_ENGINE", "mock")
     monkeypatch.setenv("AURA_ALLOW_MOCK", "true")
 
