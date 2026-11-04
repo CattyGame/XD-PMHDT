@@ -1,0 +1,67 @@
+.workspace { min-height: 100vh; background: #f2f7f9; padding: 28px max(18px, calc((100% - 1380px) / 2)); color: #193a4a; box-sizing: border-box; }
+.workspace * { box-sizing: border-box; }
+.workspace button, .workspace input, .workspace select, .workspace textarea { font: inherit; }
+.workspace button { cursor: pointer; }
+.workspace button:disabled { cursor: not-allowed; opacity: .52; }
+.header { display: flex; flex-direction: column; gap: 20px; margin-bottom: 24px; }
+.header h1 { margin: 5px 0 7px; font-size: clamp(1.7rem, 3vw, 2.25rem); color: #103b4d; }
+.header p { margin: 0; color: #55707d; }
+.eyebrow { color: #138595; font-size: .75rem; font-weight: 800; letter-spacing: .12em; }
+.back { align-self: flex-start; color: #1b6475; font-weight: 700; text-decoration: none; }
+.panel, .viewer, .formPanel, .detail { background: #fff; border: 1px solid #dce9ee; border-radius: 14px; padding: 22px; margin-bottom: 20px; box-shadow: 0 5px 22px rgba(25, 64, 76, .035); }
+.detail { padding: 20px; }
+.sectionTitle, .detailHeading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
+.sectionTitle h2, .detailHeading h2 { font-size: 1.16rem; margin: 0 0 4px; color: #153b4c; }
+.sectionTitle small, .sectionTitle span { color: #637d88; }
+.detailHeading p { overflow-wrap: anywhere; margin: 6px 0; }
+.clinicRow { display: flex; align-items: end; gap: 14px; flex-wrap: wrap; }
+.clinicRow label { flex: 1; min-width: 240px; font-weight: 700; }
+.workspace input:not([type='checkbox']):not([type='radio']):not([type='range']), .workspace select, .workspace textarea { display: block; width: 100%; margin-top: 7px; padding: 10px 12px; border: 1px solid #bfd3dc; border-radius: 8px; background: #fff; color: #1c4051; min-height: 42px; }
+.workspace textarea { resize: vertical; }
+.primary { color: #fff; background: #146e80; border: 1px solid #146e80; border-radius: 8px; padding: 10px 17px; font-weight: 700; min-height: 42px; }
+.primary:hover:not(:disabled) { background: #0d5665; }
+.hint { color: #5a7280; font-size: .85rem; line-height: 1.55; margin: 11px 0 0; }
+.error { background: #fff1f1; border: 1px solid #f5c9c9; color: #962f35; border-radius: 7px; padding: 10px 12px; overflow-wrap: anywhere; }
+.success { border-radius: 8px; background: #eefaf5; color: #0b6b43; padding: 14px; font-weight: 700; }
+.filters { display: flex; flex-wrap: wrap; gap: 16px; }
+.filters label { flex: 1; min-width: 180px; font-size: .87rem; font-weight: 650; }
+.tableWrap { margin-top: 16px; width: 100%; overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; text-align: left; font-size: .9rem; }
+.table th { background: #eaf4f6; color: #365969; white-space: nowrap; }
+.table th, .table td { padding: 13px 10px; border-bottom: 1px solid #e4eef2; }
+.table td { color: #345666; }
+.table code { color: #33576d; }
+.textButton { border: none; background: transparent; color: #0f7489; font-weight: 700; text-decoration: underline; white-space: nowrap; }
+.done, .pending { display: inline-block; padding: 5px 9px; border-radius: 999px; font-size: .8rem; font-weight: 700; white-space: nowrap; }
+.done { background: #dff6e8; color: #16754e; }
+.pending { background: #fff2d8; color: #976217; }
+.viewer { box-shadow: none; padding: 16px; border-color: #e3ecf0; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin: 14px 0; }
+.toolbar > button, .detailHeading button, .modalActions button:not(.primary), .workspace button:not(.primary):not(.textButton) { background: #fff; border: 1px solid #adcbd3; border-radius: 7px; padding: 8px 12px; color: #215768; }
+.inlineControl { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; border: 1px solid #d7e6ea; border-radius: 7px; padding: 7px 9px; color: #315a68; font-size: .84rem; }
+.inlineControl input[type='range'] { width: 90px; accent-color: #14869b; }
+.inlineControl input[type='checkbox'] { accent-color: #14869b; }
+.singleGrid { display: grid; grid-template-columns: 1fr; }
+.compareGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.imageLabel { margin: 3px 0 8px; font-size: .86rem; font-weight: 750; }
+.viewport { height: clamp(280px, 34vw, 470px); position: relative; overflow: hidden; background: #0e2230; border-radius: 10px; cursor: grab; touch-action: none; user-select: none; }
+.viewport:active { cursor: grabbing; }
+.imageLayers { width: 100%; height: 100%; position: relative; transform-origin: center center; pointer-events: none; }
+.retinaImage { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; user-select: none; }
+.overlayLayer { position: absolute; inset: 0; pointer-events: none; }
+.placeholder { padding: 32px; border: 1px dashed #bfd5dd; border-radius: 10px; text-align: center; color: #566d7a; }
+.formPanel { padding: 18px; border-color: #e1edf0; box-shadow: none; }
+.formPanel fieldset { padding: 0; border: none; }
+.formPanel legend { font-weight: 750; margin-bottom: 10px; }
+.option { display: flex; align-items: center; gap: 8px; margin: 9px 0; }
+.option input { accent-color: #168094; }
+.formFields { display: grid; grid-template-columns: 1fr; gap: 14px; margin: 16px 0; }
+.formFields label, .notesLabel { display: block; font-size: .89rem; font-weight: 650; }
+.notesLabel { margin: 18px 0; }
+.modalBackdrop { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; background: rgba(9, 30, 43, .66); padding: 22px; }
+.modal { width: min(100%, 500px); background: #fff; border-radius: 14px; padding: 26px; box-shadow: 0 24px 72px rgba(0, 0, 0, .28); }
+.modal h2 { margin-top: 0; color: #962d31; }
+.modal p { line-height: 1.6; }
+.modalActions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
+.workspace :is(button, input, select, textarea, a):focus-visible { outline: 3px solid #28a0b2; outline-offset: 2px; }
+@media (max-width: 720px) { .workspace { padding: 18px 12px; } .panel, .detail { padding: 14px; } .compareGrid { grid-template-columns: 1fr; } .viewport { height: 300px; } .detailHeading { flex-direction: column; } .toolbar { gap: 6px; } }
