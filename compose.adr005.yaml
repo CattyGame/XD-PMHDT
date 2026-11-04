@@ -4,7 +4,7 @@ services:
   analysis-api:
     environment:
       Analysis__EnableHttpEndpoints: "true"
-      ConnectionStrings__Redis: "redis:6379"
+      ConnectionStrings__Redis: "redis:6379,password=${REDIS_PASSWORD:-aura_redis_secret_pass}"
       ServiceAuth__Issuer: "aura-identity-local"
       ServiceAuth__Audience: "aura-analysis"
       ServiceAuth__PublicKeyPath: /run/aura-service-auth/public/signing-public.pem

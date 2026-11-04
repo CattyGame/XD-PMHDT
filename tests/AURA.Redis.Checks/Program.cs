@@ -81,6 +81,17 @@ Check("AC1.3: Độ trễ thao tác Cache đáp ứng tiêu chuẩn khắt khe <
         throw new Exception($"Độ trễ cache trung bình {avgLatencyMs:F4}ms vượt quá 2ms.");
 });
 
+Check("AC1.4: Compose mount redis.conf, requirepass, maxmemory 512mb, synchronized healthcheck và client connection string có auth", () =>
+{
+    var composePath = Path.Combine(repoRoot, "compose.yaml");
+    var composeText = File.ReadAllText(composePath);
+
+    if (!composeText.Contains("redis.conf")) throw new Exception("compose.yaml phải mount redis.conf.");
+    if (!composeText.Contains("requirepass")) throw new Exception("compose.yaml phải bật requirepass qua biến môi trường.");
+    if (!composeText.Contains("redis-cli -a")) throw new Exception("healthcheck phải sử dụng redis-cli -a có password.");
+    if (!composeText.Contains("password=${REDIS_PASSWORD")) throw new Exception("ConnectionStrings__Redis phải cấu hình password=${REDIS_PASSWORD}.");
+});
+
 // -----------------------------------------------------------------------------
 // NHÓM 2: KIỂM THỬ AC2 (RabbitMQ Worker Scaling & Fair Dispatch)
 // -----------------------------------------------------------------------------
@@ -169,7 +180,7 @@ Check("AC3.3: Khóa phân tán (Idempotency Lock) hoạt động an toàn và gi
 });
 
 Console.WriteLine("====================================================================");
-Console.WriteLine($"KẾT QUẢ: {passed}/8 CHECKS PASS HOÀN TOÀN! (100% AC1, AC2, AC3)");
+Console.WriteLine($"KẾT QUẢ: {passed}/9 CHECKS PASS HOÀN TOÀN! (100% AC1, AC2, AC3)");
 Console.WriteLine("====================================================================");
 return 0;
 
