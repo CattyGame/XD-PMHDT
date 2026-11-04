@@ -29,6 +29,7 @@ public sealed record NotificationContextResponse(
 public interface IInternalResolversRepository
 {
     Task<InternalAnalysisState?> GetStateAsync(Guid analysisId, Guid tenantId, CancellationToken ct);
+    Task<NotificationContextResponse?> GetBatchNotificationAsync(InternalResolveRequest request,CancellationToken ct)=>Task.FromResult<NotificationContextResponse?>(null);
 }
 
 public sealed record InternalAnalysisState(
@@ -44,22 +45,37 @@ public sealed record InternalAnalysisState(
 
 public sealed class PostgresInternalResolversRepository(NpgsqlDataSource dataSource) : IInternalResolversRepository
 {
+    public async Task<NotificationContextResponse?> GetBatchNotificationAsync(InternalResolveRequest request,CancellationToken ct)
+    {
+        await using var command=dataSource.CreateCommand("""
+            SELECT b.requester_id,b.status FROM analysis.batches b
+            JOIN analysis.batch_completion_events e ON e.batch_id=b.id
+            WHERE b.tenant_id=$1 AND b.id=$2 AND e.event_id=$3
+            """);
+        command.Parameters.AddWithValue(request.TenantId);command.Parameters.AddWithValue(request.AnalysisId);command.Parameters.AddWithValue(request.EventId);
+        await using var reader=await command.ExecuteReaderAsync(ct);if(!await reader.ReadAsync(ct))return null;
+        return new(request.EventId,request.AnalysisId,request.TenantId,true,[reader.GetGuid(0)],reader.GetString(1)=="PARTIAL_COMPLETED"?"PARTIAL_FAILED":reader.GetString(1),null);
+    }
     public async Task<InternalAnalysisState?> GetStateAsync(Guid analysisId, Guid tenantId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         if (analysisId == Guid.Empty || tenantId == Guid.Empty) return null;
 
         await using var command = dataSource.CreateCommand("""
-            SELECT i.id, i.tenant_id, i.analysis_request_id, r.owner_id, i.processing_status,
+            SELECT i.id, i.tenant_id, i.analysis_request_id, r.requester_id, i.processing_status,
                    cr.reservation_id, cr.generation,
                    ar.version, ar.is_mock
             FROM analysis.images i
             JOIN analysis.analysis_requests r ON r.tenant_id = i.tenant_id AND r.id = i.analysis_request_id
             LEFT JOIN LATERAL (
-                SELECT x.reservation_id, x.generation
-                FROM analysis.credit_reservations x
-                WHERE x.tenant_id = i.tenant_id AND x.image_id = i.id
-                ORDER BY x.generation DESC LIMIT 1
+                SELECT (effect->>'reservationId')::uuid AS reservation_id,(effect->>'generation')::integer AS generation
+                FROM analysis.upload_recovery_operations operation
+                JOIN analysis.upload_recovery_attempts attempt ON attempt.operation_id=operation.id
+                CROSS JOIN LATERAL jsonb_array_elements(attempt.effects) effect
+                WHERE operation.tenant_id=i.tenant_id AND operation.id=i.analysis_request_id
+                  AND attempt.phase='ACCEPTED' AND effect->>'analysisId'=i.id::text
+                  AND effect->>'reservationId' IS NOT NULL AND coalesce((effect->>'releaseConfirmed')::boolean,false)=false
+                ORDER BY attempt.attempt_no DESC LIMIT 1
             ) cr ON true
             LEFT JOIN LATERAL (
                 SELECT x.version, x.is_mock
@@ -105,12 +121,21 @@ public sealed class InternalResolversService(IInternalResolversRepository reposi
             return new SettlementResolutionResponse(
                 request.EventId, request.AnalysisId, request.TenantId,
                 false, "NONE", "NO_RESERVATION",
-                null, null, state.ProcessingStatus, null, null);
+                null, null, state.ProcessingStatus, null, state.IsMock ?? false);
         }
 
         // State Machine for settlement
         if (state.ProcessingStatus == "COMPLETED")
         {
+            // N08: If no valid result or version exists, do NOT synthesize version 1 and do NOT capture
+            if (state.ResultVersion is null or <= 0)
+            {
+                return new SettlementResolutionResponse(
+                    request.EventId, request.AnalysisId, request.TenantId,
+                    false, "NONE", "RECONCILE_REQUIRED",
+                    state.ReservationId, state.Generation, state.ProcessingStatus, null, state.IsMock ?? false);
+            }
+
             // If mock in real namespace, hold for reconciliation
             if (state.IsMock == true)
             {
@@ -123,7 +148,7 @@ public sealed class InternalResolversService(IInternalResolversRepository reposi
             return new SettlementResolutionResponse(
                 request.EventId, request.AnalysisId, request.TenantId,
                 true, "CAPTURE", "VALID_RESULT",
-                state.ReservationId, state.Generation, state.ProcessingStatus, state.ResultVersion ?? 1, false);
+                state.ReservationId, state.Generation, state.ProcessingStatus, state.ResultVersion.Value, false);
         }
 
         if (state.ProcessingStatus is "FAILED" or "LOW_QUALITY" or "REJECTED")
@@ -132,14 +157,14 @@ public sealed class InternalResolversService(IInternalResolversRepository reposi
             return new SettlementResolutionResponse(
                 request.EventId, request.AnalysisId, request.TenantId,
                 true, "RELEASE", reason,
-                state.ReservationId, state.Generation, state.ProcessingStatus, null, null);
+                state.ReservationId, state.Generation, state.ProcessingStatus, null, state.IsMock ?? false);
         }
 
         // Active / in-progress statuses
         return new SettlementResolutionResponse(
             request.EventId, request.AnalysisId, request.TenantId,
             false, "NONE", "NOT_TERMINAL",
-            state.ReservationId, state.Generation, state.ProcessingStatus, null, null);
+            state.ReservationId, state.Generation, state.ProcessingStatus, null, state.IsMock ?? false);
     }
 
     public async Task<NotificationContextResponse> ResolveNotificationContextAsync(InternalResolveRequest request, CancellationToken ct)
@@ -149,7 +174,7 @@ public sealed class InternalResolversService(IInternalResolversRepository reposi
             throw UploadFailure.Validation(new ErrorDetail("body", "invalid_identifiers"));
 
         var state = await repository.GetStateAsync(request.AnalysisId, request.TenantId, ct);
-        if (state is null) throw NotFound();
+        if (state is null)return await repository.GetBatchNotificationAsync(request,ct)??throw NotFound();
 
         // In Sprint 3 PERSONAL tenant demo, recipient is the owner account ID verified by Profile
         var recipients = new[] { state.OwnerId };

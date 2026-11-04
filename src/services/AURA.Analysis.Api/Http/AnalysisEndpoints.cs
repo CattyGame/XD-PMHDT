@@ -20,6 +20,58 @@ public static class AnalysisEndpoints
 {
     public static void MapAnalysisEndpoints(this WebApplication app)
     {
+        app.MapGet("/internal/v1/analysis/bindings/{analysisId}",(HttpContext c,string analysisId)=>Handle(c,async()=>
+        {
+            ServiceAuthValidator.RequireServiceScope(c.Request,"analysis:binding");
+            var identity=await c.RequestServices.GetRequiredService<IAnalysisQueryRepository>().FindIdentityAsync(ResourceId(analysisId),c.RequestAborted)
+                ??throw new UploadFailure(404,"ERR_NOT_FOUND","Không tìm thấy tài nguyên.");
+            return Results.Json(new{identity.AnalysisId,identity.TenantId,identity.PatientId},UploadJson.Options);
+        }));
+        app.MapGet("/api/v1/reports/{reportId}/content",(HttpContext c,string reportId)=>Handle(c,async()=>
+        {
+            var user=await User(c);var content=await c.RequestServices.GetRequiredService<AnalysisReportService>().ReadDownloadContentAsync(user.AccountId,Clinic(c),ResourceId(reportId),Correlation(c),c.RequestAborted);
+            c.Response.Headers["X-Content-Type-Options"]="nosniff";return Results.Stream(content.Stream,content.ContentType);
+        }));
+        app.MapGet("/api/v1/analyses/{analysisId}/files/{fileId}/content",(HttpContext c,string analysisId,string fileId)=>Handle(c,async()=>
+        {
+            var user=await User(c);var content=await c.RequestServices.GetRequiredService<FileAccessService>().ReadContentAsync(user.AccountId,Clinic(c),ResourceId(analysisId),ResourceId(fileId),c.RequestAborted);
+            c.Response.Headers["X-Content-Type-Options"]="nosniff";return Results.Stream(content.Stream,content.ContentType);
+        }));
+        app.MapPost("/api/v1/analysis-upload-batches",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
+        {
+            var user=await User(c);Limit(c,262144);
+            var manifest=await c.Request.ReadFromJsonAsync<UploadManifest>(c.RequestAborted)
+                ??throw UploadFailure.Validation(new ErrorDetail("body","required"));
+            var result=await c.RequestServices.GetRequiredService<ItemUploadService>().CreateAsync(user.AccountId,Clinic(c),Key(c),manifest,c.RequestAborted);
+            return Results.Json(result,UploadJson.Options,statusCode:201);
+        })));
+        app.MapGet("/api/v1/analysis-upload-batches/{batchId}",(HttpContext c,string batchId)=>Handle(c,async()=>
+        {
+            var user=await User(c);var result=await c.RequestServices.GetRequiredService<ItemUploadService>().GetAsync(user.AccountId,Clinic(c),ResourceId(batchId),c.RequestAborted);
+            return Results.Json(result,UploadJson.Options);
+        }));
+        app.MapPut("/api/v1/analysis-upload-batches/{batchId}/items/{itemId}",(HttpContext c,string batchId,string itemId)=>Handle(c,async()=>
+        {
+            var user=await User(c);var item=ResourceId(itemId);if(Key(c)!=item)throw UploadFailure.Validation(new ErrorDetail("Idempotency-Key","item_key_required"));
+            Limit(c,12*1024*1024);
+            if(!c.Request.HasFormContentType)throw new UploadFailure(415,"ERR_UNSUPPORTED_MEDIA_TYPE","Cần multipart/form-data.");
+            var gate=c.RequestServices.GetRequiredService<AnalysisUploadGate>();
+            if(!await gate.Slots.WaitAsync(0,c.RequestAborted))throw UploadRecovery.InProgress();
+            try
+            {
+                var form=await c.Request.ReadFormAsync(new FormOptions{MultipartBodyLengthLimit=12*1024*1024,ValueCountLimit=0,MultipartHeadersCountLimit=16,MultipartHeadersLengthLimit=8192},c.RequestAborted);
+                if(form.Files.Count!=1 || form.Files[0].Name!="image")throw UploadFailure.Validation(new ErrorDetail("image","one_image_required"));
+                var result=await c.RequestServices.GetRequiredService<ItemUploadService>().PutAsync(user.AccountId,Clinic(c),ResourceId(batchId),item,new BufferedImage(form.Files[0]),c.RequestAborted);
+                return Results.Json(result,UploadJson.Options);
+            }
+            finally{gate.Slots.Release();}
+        }));
+        app.MapPost("/api/v1/analysis-upload-batches/{batchId}/finalize",(HttpContext c,string batchId)=>Handle(c,async()=>
+        {
+            var user=await User(c);Key(c);Limit(c,4096);
+            var result=await c.RequestServices.GetRequiredService<ItemUploadService>().FinalizeAsync(user.AccountId,Clinic(c),ResourceId(batchId),Correlation(c),c.RequestAborted);
+            return Results.Json(result,UploadJson.Options,statusCode:202);
+        }));
         app.MapPost("/api/v1/analyses",(Func<HttpContext,Task<IResult>>)(c=>Handle(c,()=>Upload(c))));
         app.MapPost("/api/v1/analyses/batches",(Func<HttpContext,Task<IResult>>)(c=>Handle(c,()=>Upload(c))));
         app.MapPost("/api/v1/batches",(Func<HttpContext,Task<IResult>>)(c=>Handle(c,()=>Upload(c))));
@@ -57,14 +109,14 @@ public static class AnalysisEndpoints
             return Results.Json(await c.RequestServices.GetRequiredService<AnalysisQueryService>().GetAsync(user.AccountId,clinic,
                 ResourceId(analysisId),c.RequestAborted,Correlation(c)),UploadJson.Options);
         }));
-        app.MapGet("/api/v1/doctor/worklist",(HttpContext c)=>Handle(c,async()=>
+        app.MapGet("/api/v1/doctor/worklist",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
         {
             var user=await User(c);AnalysisUserPolicy.RequireDoctor(user);
             var clinic=Clinic(c) ?? throw UploadFailure.Validation(new ErrorDetail("clinicContextId","required"));
             var response=await c.RequestServices.GetRequiredService<DoctorWorklistService>().GetAsync(
                 c.Request,user.AccountId,clinic,c.RequestAborted,Correlation(c));
             return Results.Json(response,UploadJson.Options);
-        }));
+        })));
         app.MapGet("/api/v1/doctor/analyses/{analysisId}",(HttpContext c,string analysisId)=>Handle(c,async()=>
         {
             var user=await User(c);AnalysisUserPolicy.RequireDoctor(user);
@@ -116,6 +168,7 @@ public static class AnalysisEndpoints
         catch(BadHttpRequestException e) when(e.StatusCode==413){return Error(c,TooLarge());}
         catch(BadHttpRequestException){return Error(c,UploadFailure.Validation(new ErrorDetail("body","invalid_request")));}
         catch(InvalidDataException){return Error(c,UploadFailure.Validation(new ErrorDetail("body","invalid_multipart")));}
+        catch(System.Text.Json.JsonException){return Error(c,UploadFailure.Validation(new ErrorDetail("body","invalid_json")));}
         catch(Exception){return Error(c,UploadFailure.Dependency("Analysis dependencies"));}
     }
     private static IResult Error(HttpContext c,UploadFailure e)=>Results.Json(new{error=new{
@@ -137,6 +190,17 @@ public static class AnalysisEndpoints
         return id; // Untrusted selector only; Profile must authorize the resource/tenant.
     }
     private static UploadFailure TooLarge()=>new(413,"ERR_PAYLOAD_TOO_LARGE","Request vượt giới hạn kích thước.");
+    private static Guid Key(HttpContext c)
+    {
+        var keys=c.Request.Headers["Idempotency-Key"];
+        return keys.Count==1 && Guid.TryParse(keys[0],out var id) && id!=Guid.Empty?id:throw UploadFailure.Validation(new ErrorDetail("Idempotency-Key","invalid_uuid"));
+    }
+    private static void Limit(HttpContext c,long bytes)
+    {
+        if(c.Request.ContentLength>bytes)throw TooLarge();
+        var feature=c.Features.Get<IHttpMaxRequestBodySizeFeature>();if(feature is {IsReadOnly:false})feature.MaxRequestBodySize=bytes;
+        c.Request.Body=new LimitedReadStream(c.Request.Body,bytes);
+    }
 
     private static async Task<IResult> Upload(HttpContext c)
     {
@@ -145,7 +209,8 @@ public static class AnalysisEndpoints
         if(keys.Count!=1||!Guid.TryParse(keys[0],out var key)||key==Guid.Empty)
             throw UploadFailure.Validation(new ErrorDetail("Idempotency-Key","invalid_uuid"));
         var options=c.RequestServices.GetRequiredService<UploadOptions>();
-        if(c.Request.ContentLength>options.MaxRequestBytes)throw TooLarge();
+        var requestLimit=Math.Min(options.MaxRequestBytes,12*1024*1024);
+        if(c.Request.ContentLength>requestLimit)throw TooLarge();
         if(!MediaTypeHeaderValue.TryParse(c.Request.ContentType,out var media)||!media.MediaType.Equals("multipart/form-data",StringComparison.OrdinalIgnoreCase))
             throw new UploadFailure(415,"ERR_UNSUPPORTED_MEDIA_TYPE","Cần multipart/form-data.");
         var boundary=HeaderUtilities.RemoveQuotes(media.Boundary).Value;
@@ -156,8 +221,8 @@ public static class AnalysisEndpoints
         try
         {
             var limit=c.Features.Get<IHttpMaxRequestBodySizeFeature>();
-            if(limit is {IsReadOnly:false})limit.MaxRequestBodySize=options.MaxRequestBytes;
-            var reader=new MultipartReader(boundary,new LimitedReadStream(c.Request.Body,options.MaxRequestBytes))
+            if(limit is {IsReadOnly:false})limit.MaxRequestBodySize=requestLimit;
+            var reader=new MultipartReader(boundary,new LimitedReadStream(c.Request.Body,requestLimit))
                 {HeadersCountLimit=16,HeadersLengthLimit=8192};
             var fields=new Dictionary<string,string>(StringComparer.Ordinal);
             var files=new List<IUploadedFile>();
@@ -173,7 +238,7 @@ public static class AnalysisEndpoints
                 var name=HeaderUtilities.RemoveQuotes(disposition.Name).Value??"";
                 if(disposition.FileName.HasValue||disposition.FileNameStar.HasValue)
                 {
-                    if(name!="images"||files.Count>=options.MaxImagesPerRequest)throw UploadFailure.Validation(new ErrorDetail("images","invalid_count_or_field"));
+                    if(name!="images"||files.Count>=Math.Min(1,options.MaxImagesPerRequest))throw UploadFailure.Validation(new ErrorDetail("images","use_item_upload_protocol"));
                     var buffer=new FileBufferingReadStream(new LimitedReadStream(section.Body,options.MaxImageBytes),65536,null,Path.GetTempPath());
                     buffers.Add(buffer);
                     await buffer.CopyToAsync(Stream.Null,c.RequestAborted);buffer.Position=0;

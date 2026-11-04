@@ -283,7 +283,7 @@
             "properties": {
               "batchId": { "type": "string", "format": "uuid" },
               "patientId": { "type": "string", "format": "uuid" },
-              "batchStatus": { "enum": ["COMPLETED", "PARTIAL_COMPLETED", "FAILED"] },
+              "batchStatus": { "enum": ["COMPLETED", "PARTIAL_FAILED", "FAILED"] },
               "totalImages": { "type": "integer", "minimum": 1, "maximum": 100 },
               "completedImages": { "type": "integer", "minimum": 0 },
               "failedImages": { "type": "integer", "minimum": 0 }

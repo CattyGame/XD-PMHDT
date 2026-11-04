@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using Aura.Worker.Analysis.Data.Entities;
 using Aura.Worker.Analysis.Domain;
 
@@ -7,102 +8,81 @@ namespace Aura.Worker.Analysis.Data.Repositories;
 
 public interface IJobRepository
 {
-    Task<JobRecord?> GetJobAsync(Guid jobId, CancellationToken cancellationToken);
-    Task<bool> TryAcquireLeaseAsync(Guid jobId, string workerId, TimeSpan leaseDuration, CancellationToken cancellationToken);
-    Task<bool> RenewLeaseAsync(Guid jobId, string workerId, TimeSpan extension, CancellationToken cancellationToken);
-    Task RecordCallIntentAsync(Guid jobId, CancellationToken cancellationToken);
-    Task UpdateJobStatusAsync(Guid jobId, string status, CancellationToken cancellationToken);
-    Task<JobRecord> CreateNextAttemptJobAsync(JobRecord previousJob, int nextAttempt, CancellationToken cancellationToken);
+    Task<JobRecord?> GetJobAsync(Guid jobId, CancellationToken ct);
+    Task<JobLease?> TryAcquireLeaseAsync(Guid jobId, string workerId, TimeSpan duration, CancellationToken ct);
+    Task<JobLease?> RenewLeaseAsync(JobLease lease, TimeSpan extension, CancellationToken ct);
+    Task RecordCallIntentAsync(JobLease lease, CancellationToken ct);
+    Task<JobRecord> CreateNextAttemptJobAsync(JobRecord previousJob, int nextAttempt, CancellationToken ct);
 }
 
-public class JobRepository : IJobRepository
+public sealed class JobRepository(WorkerDbContext db, ILogger<JobRepository> logger) : IJobRepository
 {
-    private readonly WorkerDbContext _db;
-    private readonly ILogger<JobRepository> _logger;
+    public Task<JobRecord?> GetJobAsync(Guid jobId, CancellationToken ct) =>
+        db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.JobId == jobId, ct);
 
-    public JobRepository(WorkerDbContext db, ILogger<JobRepository> logger)
+    private NpgsqlConnection Connection() => new(db.Database.GetConnectionString()
+        ?? throw new InvalidOperationException("Worker requires its configured PostgreSQL database."));
+
+    public async Task<JobLease?> TryAcquireLeaseAsync(Guid jobId, string workerId, TimeSpan duration, CancellationToken ct)
     {
-        _db = db;
-        _logger = logger;
+        if (string.IsNullOrWhiteSpace(workerId) || duration <= TimeSpan.Zero) throw new ArgumentException("Invalid lease.");
+        await using var connection = Connection();
+        await connection.OpenAsync(ct);
+        await using var command = new NpgsqlCommand("""
+            UPDATE analysis.jobs SET lease_owner=$2,
+                lease_expires_at=clock_timestamp()+make_interval(secs=>$3),
+                fencing_token=fencing_token+1, status='RUNNING',
+                started_at=COALESCE(started_at,clock_timestamp()),updated_at=clock_timestamp()
+            WHERE id=$1 AND (lease_expires_at IS NULL OR lease_expires_at<clock_timestamp())
+              AND status IN ('QUEUED','RUNNING','RETRY_READY')
+            RETURNING fencing_token,lease_expires_at;
+            """, connection);
+        command.Parameters.AddWithValue(jobId);
+        command.Parameters.AddWithValue(workerId);
+        command.Parameters.AddWithValue(duration.TotalSeconds);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        logger.LogInformation("Acquired job {JobId} with fence {Fence}", jobId,reader.GetInt64(0));
+        return new(jobId,workerId,reader.GetInt64(0),reader.GetDateTime(1));
     }
 
-    public async Task<JobRecord?> GetJobAsync(Guid jobId, CancellationToken cancellationToken)
+    public async Task<JobLease?> RenewLeaseAsync(JobLease lease, TimeSpan extension, CancellationToken ct)
     {
-        return await _db.Jobs.FirstOrDefaultAsync(j => j.JobId == jobId, cancellationToken);
+        if (extension <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(extension));
+        await using var connection = Connection();
+        await connection.OpenAsync(ct);
+        await using var command = new NpgsqlCommand("""
+            UPDATE analysis.jobs SET lease_expires_at=clock_timestamp()+make_interval(secs=>$4),updated_at=clock_timestamp()
+            WHERE id=$1 AND lease_owner=$2 AND fencing_token=$3
+              AND lease_expires_at>clock_timestamp() AND status='RUNNING'
+            RETURNING lease_expires_at;
+            """,connection);
+        command.Parameters.AddWithValue(lease.JobId); command.Parameters.AddWithValue(lease.Owner);
+        command.Parameters.AddWithValue(lease.FencingToken); command.Parameters.AddWithValue(extension.TotalSeconds);
+        var value = await command.ExecuteScalarAsync(ct);
+        return value is DateTime expiry ? lease with { ExpiresAt=expiry } : null;
     }
 
-    public async Task<bool> TryAcquireLeaseAsync(Guid jobId, string workerId, TimeSpan leaseDuration, CancellationToken cancellationToken)
+    public async Task RecordCallIntentAsync(JobLease lease, CancellationToken ct)
     {
-        var now = DateTime.UtcNow;
-        var job = await _db.Jobs.FirstOrDefaultAsync(j => j.JobId == jobId, cancellationToken);
-        if (job == null) return false;
-
-        // Can acquire if lease expired or already owned
-        if (job.LeaseExpiresAt == null || job.LeaseExpiresAt < now || job.LeaseOwner == workerId)
-        {
-            job.LeaseOwner = workerId;
-            job.LeaseExpiresAt = now.Add(leaseDuration);
-            job.Status = JobStatus.Running;
-            job.UpdatedAt = now;
-            await _db.SaveChangesAsync(cancellationToken);
-            return true;
-        }
-
-        _logger.LogWarning("Job {JobId} is leased by {Owner} until {Expiry}", jobId, job.LeaseOwner, job.LeaseExpiresAt);
-        return false;
+        await using var connection=Connection(); await connection.OpenAsync(ct);
+        await using var command=new NpgsqlCommand("""
+            UPDATE analysis.jobs SET call_intent_recorded=true,updated_at=clock_timestamp()
+            WHERE id=$1 AND lease_owner=$2 AND fencing_token=$3 AND lease_expires_at>clock_timestamp() AND status='RUNNING';
+            """,connection);
+        command.Parameters.AddWithValue(lease.JobId);command.Parameters.AddWithValue(lease.Owner);command.Parameters.AddWithValue(lease.FencingToken);
+        if(await command.ExecuteNonQueryAsync(ct)!=1) throw new JobLeaseLostException(lease.JobId);
     }
 
-    public async Task<bool> RenewLeaseAsync(Guid jobId, string workerId, TimeSpan extension, CancellationToken cancellationToken)
+    // Construct only: the next job and command are inserted atomically by ScheduleRetryAsync.
+    public Task<JobRecord> CreateNextAttemptJobAsync(JobRecord previousJob,int nextAttempt,CancellationToken ct)
     {
-        var now = DateTime.UtcNow;
-        var job = await _db.Jobs.FirstOrDefaultAsync(j => j.JobId == jobId && j.LeaseOwner == workerId, cancellationToken);
-        if (job == null) return false;
-
-        job.LeaseExpiresAt = now.Add(extension);
-        job.UpdatedAt = now;
-        await _db.SaveChangesAsync(cancellationToken);
-        return true;
-    }
-
-    public async Task RecordCallIntentAsync(Guid jobId, CancellationToken cancellationToken)
-    {
-        var job = await _db.Jobs.FirstOrDefaultAsync(j => j.JobId == jobId, cancellationToken);
-        if (job != null)
-        {
-            job.IntentRecorded = true;
-            job.UpdatedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync(cancellationToken);
-        }
-    }
-
-    public async Task UpdateJobStatusAsync(Guid jobId, string status, CancellationToken cancellationToken)
-    {
-        var job = await _db.Jobs.FirstOrDefaultAsync(j => j.JobId == jobId, cancellationToken);
-        if (job != null)
-        {
-            job.Status = status;
-            job.UpdatedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync(cancellationToken);
-        }
-    }
-
-    public async Task<JobRecord> CreateNextAttemptJobAsync(JobRecord previousJob, int nextAttempt, CancellationToken cancellationToken)
-    {
-        var nextJob = new JobRecord
-        {
-            JobId = Guid.NewGuid(),
-            AnalysisId = previousJob.AnalysisId,
-            BatchId = previousJob.BatchId,
-            TenantId = previousJob.TenantId,
-            ImageFileId = previousJob.ImageFileId,
-            AttemptNo = nextAttempt,
-            Status = JobStatus.Queued,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
-
-        _db.Jobs.Add(nextJob);
-        await _db.SaveChangesAsync(cancellationToken);
-        return nextJob;
+        ct.ThrowIfCancellationRequested();
+        if(nextAttempt!=previousJob.AttemptNo+1) throw new ArgumentException("Retry attempt must increase by one.");
+        return Task.FromResult(new JobRecord {
+            JobId=Guid.NewGuid(),MessageId=Guid.NewGuid(),AnalysisId=previousJob.AnalysisId,
+            TenantId=previousJob.TenantId,AttemptNo=nextAttempt,Status=JobStatus.Queued,
+            CorrelationId=previousJob.CorrelationId
+        });
     }
 }

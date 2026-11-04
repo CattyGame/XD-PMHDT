@@ -8,7 +8,7 @@ public sealed class PostgresAnalysisQueryRepository(NpgsqlDataSource dataSource)
     {
         if (tenantId == Guid.Empty || patientId == Guid.Empty) return Array.Empty<AnalysisIdentity>();
         await using var command = dataSource.CreateCommand("""
-            SELECT i.id, i.analysis_request_id, i.tenant_id, r.patient_id, r.owner_id
+            SELECT i.id, COALESCE(i.batch_id,i.analysis_request_id), i.tenant_id, r.patient_id, r.owner_id
             FROM analysis.images i
             JOIN analysis.analysis_requests r ON r.tenant_id = i.tenant_id AND r.id = i.analysis_request_id
             WHERE i.tenant_id = $1 AND r.patient_id = $2
@@ -31,7 +31,7 @@ public sealed class PostgresAnalysisQueryRepository(NpgsqlDataSource dataSource)
         if (analysisId == Guid.Empty) return null;
 
         await using var command = dataSource.CreateCommand("""
-            SELECT i.id, i.analysis_request_id, i.tenant_id, r.patient_id, r.owner_id
+            SELECT i.id, COALESCE(i.batch_id,i.analysis_request_id), i.tenant_id, r.patient_id, r.owner_id
             FROM analysis.images i
             JOIN analysis.analysis_requests r ON r.tenant_id = i.tenant_id AND r.id = i.analysis_request_id
             WHERE i.id = $1;
@@ -50,7 +50,7 @@ public sealed class PostgresAnalysisQueryRepository(NpgsqlDataSource dataSource)
         if (identity.AnalysisId == Guid.Empty) return null;
 
         await using var command = dataSource.CreateCommand("""
-            SELECT i.id, i.analysis_request_id, r.patient_id, i.processing_status, i.review_status,
+            SELECT i.id, COALESCE(i.batch_id,i.analysis_request_id), r.patient_id, i.processing_status, i.review_status,
                    i.created_at, i.updated_at, r.owner_id, r.requester_id, i.file_id,
                    i.existing_analysis_id,
                    j.id AS job_id, j.status AS job_status, j.attempt_no, j.retryable, j.error_code,
@@ -137,7 +137,7 @@ public sealed class PostgresAnalysisQueryRepository(NpgsqlDataSource dataSource)
             while (await ar.ReadAsync(ct)) rows.Add(new(ar.GetGuid(0), ar.GetString(1)));
 
             result = AnalysisResultMapper.Map(version, risk, metrics, warnings, isMock, modelVersion,
-                configVersion, thresholdVersion, processingMs, limitations, rows);
+                configVersion, thresholdVersion, processingMs, limitations, rows) with {ResultId=resultId.Value};
         }
 
         AnalysisErrorDetail? error = null;

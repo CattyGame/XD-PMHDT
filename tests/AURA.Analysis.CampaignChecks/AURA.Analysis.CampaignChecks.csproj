@@ -14,6 +14,7 @@
              Link="CampaignModels.cs" />
     <Compile Include="../../src/services/AURA.Analysis.Api/Campaign/CampaignRepository.cs"
              Link="CampaignRepository.cs" />
+    <Compile Include="../../src/services/AURA.Analysis.Api/Campaign/CampaignCsvWriter.cs" Link="CampaignCsvWriter.cs" />
     <Compile Include="../../src/services/AURA.Analysis.Api/Upload/UploadFailure.cs"
              Link="UploadFailure.cs" />
   </ItemGroup>

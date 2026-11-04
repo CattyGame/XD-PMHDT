@@ -46,7 +46,7 @@ public class AiHttpClient : IAiHttpClient
     {
         try
         {
-            var token = _tokenProvider.GenerateToken(_options.Audience, _options.Scope);
+            var token = await _tokenProvider.GetTokenAsync(_options.Audience, _options.Scope, cancellationToken);
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl.TrimEnd('/')}/api/v1/analyze");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
@@ -112,8 +112,8 @@ public class AiHttpClient : IAiHttpClient
             {
                 IsSuccess = false,
                 IsTransientError = false,
-                ErrorCode = response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden 
-                    ? "ERR_UNAUTHORIZED" 
+                ErrorCode = response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden
+                    ? "ERR_UNAUTHORIZED"
                     : "ERR_VALIDATION",
                 ErrorMessage = $"AI rejected request with HTTP {(int)response.StatusCode}: {responseBody}"
             };

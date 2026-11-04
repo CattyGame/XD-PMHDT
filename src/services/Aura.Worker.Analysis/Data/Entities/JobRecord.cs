@@ -3,24 +3,27 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Aura.Worker.Analysis.Data.Entities;
 
-[Table("jobs")]
+[Table("jobs", Schema = "analysis")]
 public class JobRecord
 {
     [Key]
-    [Column("job_id")]
+    [Column("id")]
     public Guid JobId { get; set; }
 
-    [Column("analysis_id")]
+    [Column("image_id")]
     public Guid AnalysisId { get; set; }
 
-    [Column("batch_id")]
+    [NotMapped]
     public Guid BatchId { get; set; }
 
     [Column("tenant_id")]
     public Guid TenantId { get; set; }
 
-    [Column("image_file_id")]
+    [NotMapped]
     public Guid ImageFileId { get; set; }
+
+    [Column("message_id")]
+    public Guid MessageId { get; set; } = Guid.NewGuid();
 
     [Column("attempt_no")]
     public int AttemptNo { get; set; }
@@ -34,8 +37,20 @@ public class JobRecord
     [Column("lease_expires_at")]
     public DateTime? LeaseExpiresAt { get; set; }
 
-    [Column("intent_recorded")]
+    [Column("fencing_token")]
+    public long FencingToken { get; set; } = 0;
+
+    [Column("call_intent_recorded")]
     public bool IntentRecorded { get; set; } = false;
+
+    [Column("correlation_id")]
+    public string CorrelationId { get; set; } = string.Empty;
+
+    [Column("started_at")]
+    public DateTime? StartedAt { get; set; }
+
+    [Column("finished_at")]
+    public DateTime? FinishedAt { get; set; }
 
     [Column("created_at")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -44,21 +59,33 @@ public class JobRecord
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
 
-[Table("analyses")]
+[Table("images", Schema = "analysis")]
 public class AnalysisRecord
 {
     [Key]
-    [Column("analysis_id")]
+    [Column("id")]
     public Guid AnalysisId { get; set; }
 
-    [Column("batch_id")]
+    [Column("analysis_request_id")]
     public Guid BatchId { get; set; }
+
+    [Column("batch_id")]
+    public Guid? PublicBatchId { get; set; }
 
     [Column("tenant_id")]
     public Guid TenantId { get; set; }
 
-    [Column("patient_id")]
+    [Column("file_id")]
+    public Guid FileId { get; set; }
+
+    [NotMapped]
     public Guid PatientId { get; set; }
+
+    [NotMapped]
+    public Guid RequesterId { get; set; }
+
+    [NotMapped]
+    public Guid? ClinicContextId { get; set; }
 
     [Column("eye_side")]
     public string EyeSide { get; set; } = "unknown";
@@ -69,13 +96,19 @@ public class AnalysisRecord
     [Column("review_status")]
     public string ReviewStatus { get; set; } = "NOT_REQUIRED";
 
-    [Column("original_blob_key")]
+    [Column("object_key")]
     public string OriginalBlobKey { get; set; } = string.Empty;
 
-    [Column("result_json")]
+    [Column("width")]
+    public int Width { get; set; } = 512;
+
+    [Column("height")]
+    public int Height { get; set; } = 512;
+
+    [NotMapped]
     public string? ResultJson { get; set; }
 
-    [Column("error_json")]
+    [NotMapped]
     public string? ErrorJson { get; set; }
 
     [Column("created_at")]
@@ -85,34 +118,72 @@ public class AnalysisRecord
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
 
-[Table("outbox_messages")]
+[Table("analysis_requests", Schema = "analysis")]
+public class AnalysisRequestRecord
+{
+    [Key]
+    [Column("id")]
+    public Guid Id { get; set; }
+
+    [Column("tenant_id")]
+    public Guid TenantId { get; set; }
+
+    [Column("patient_id")]
+    public Guid PatientId { get; set; }
+
+    [Column("requester_id")]
+    public Guid RequesterId { get; set; }
+
+    [Column("clinic_context_id")]
+    public Guid? ClinicContextId { get; set; }
+}
+
+[Table("outbox_events", Schema = "analysis")]
 public class OutboxRecord
 {
     [Key]
-    [Column("outbox_id")]
+    [Column("id")]
     public Guid OutboxId { get; set; } = Guid.NewGuid();
 
-    [Column("event_id")]
+    [Column("tenant_id")]
+    public Guid TenantId { get; set; }
+
+    [Column("analysis_request_id")]
+    public Guid BatchId { get; set; }
+
+    [Column("image_id")]
+    public Guid AnalysisId { get; set; }
+
+    [NotMapped]
     public Guid EventId { get; set; }
 
     [Column("event_type")]
     public string EventType { get; set; } = string.Empty;
 
-    [Column("payload_json")]
+    [Column("schema_version")]
+    public string SchemaVersion { get; set; } = "0.6.0";
+
+    [Column("payload", TypeName = "jsonb")]
     public string PayloadJson { get; set; } = string.Empty;
 
-    [Column("available_at")]
-    public DateTime AvailableAt { get; set; } = DateTime.UtcNow;
+    [Column("occurred_at")]
+    public DateTime OccurredAt { get; set; } = DateTime.UtcNow;
 
     [Column("published_at")]
     public DateTime? PublishedAt { get; set; }
 
-    [Column("attempt_count")]
+    [Column("delivery_attempts")]
     public int AttemptCount { get; set; } = 0;
 
-    [Column("status")]
-    public string Status { get; set; } = "PENDING"; // PENDING, PUBLISHED, NEEDS_ATTENTION
+    [NotMapped]
+    public DateTime AvailableAt { get; set; } = DateTime.UtcNow;
 
-    [Column("created_at")]
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    [Column("next_publish_at")]
+    public DateTime? NextPublishAt { get; set; }
+
+    [NotMapped]
+    public string Status { get; set; } = "PENDING";
+
+    [Column("claim_generation")]
+    public long ClaimGeneration { get; set; } = 0;
 }

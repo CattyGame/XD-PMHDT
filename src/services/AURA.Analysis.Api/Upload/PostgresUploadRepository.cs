@@ -133,6 +133,7 @@ public sealed class PostgresUploadRepository(NpgsqlDataSource dataSource) : IUpl
                 await PostgresUploadRecoveryRepository.FenceAcceptanceAsync(connection, transaction, plan, ct);
             else
                 await PostgresUploadRecoveryRepository.RejectUnjournaledCommitAsync(connection, transaction, plan, ct);
+            if(plan.ParentBatchId is null)
             await using (var command = new NpgsqlCommand("""
                 INSERT INTO analysis.batches
                     (id,tenant_id,owner_id,requester_id,patient_id,clinic_id,total_images,completed_images,
@@ -161,8 +162,8 @@ public sealed class PostgresUploadRepository(NpgsqlDataSource dataSource) : IUpl
             await using (var command = new NpgsqlCommand("""
                 INSERT INTO analysis.analysis_requests
                     (id,tenant_id,owner_id,requester_id,patient_id,idempotency_key,request_fingerprint,
-                     request_schema_version,accepted_response,correlation_id,created_at,updated_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11);
+                     request_schema_version,accepted_response,correlation_id,created_at,updated_at,clinic_context_id)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12);
                 """, connection, transaction))
             {
                 command.Parameters.AddWithValue(plan.BatchId);
@@ -176,6 +177,7 @@ public sealed class PostgresUploadRepository(NpgsqlDataSource dataSource) : IUpl
                 command.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(plan.Response, UploadJson.Options));
                 command.Parameters.AddWithValue(plan.CorrelationId);
                 command.Parameters.AddWithValue(plan.CreatedAt.UtcDateTime);
+                command.Parameters.AddWithValue(NpgsqlDbType.Uuid, (object?)plan.ClinicId ?? DBNull.Value);
                 await command.ExecuteNonQueryAsync(ct);
             }
             foreach (var image in plan.Images)
@@ -184,7 +186,7 @@ public sealed class PostgresUploadRepository(NpgsqlDataSource dataSource) : IUpl
                     INSERT INTO analysis.images
                       (id,tenant_id,analysis_request_id,batch_id,file_id,modality,eye_side,object_key,mime_type,
                        size_bytes,width,height,sha256,processing_status,existing_analysis_id,created_at,updated_at)
-                    VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15);
+                    VALUES ($1,$2,$3,$16,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15);
                     """, connection, transaction))
                 {
                     command.Parameters.AddWithValue(image.AnalysisId);
@@ -202,6 +204,7 @@ public sealed class PostgresUploadRepository(NpgsqlDataSource dataSource) : IUpl
                     command.Parameters.AddWithValue(image.ProcessingStatus);
                     command.Parameters.AddWithValue(NpgsqlDbType.Uuid, (object?)image.ExistingAnalysisId ?? DBNull.Value);
                     command.Parameters.AddWithValue(plan.CreatedAt.UtcDateTime);
+                    command.Parameters.AddWithValue(plan.ParentBatchId ?? plan.BatchId);
                     await command.ExecuteNonQueryAsync(ct);
                 }
                 if (image.Job is { } job)

@@ -28,7 +28,10 @@ public sealed record AnalysisResultDetail(
     IReadOnlyList<AnalysisAnnotationRef> Annotations,
     IReadOnlyList<AnalysisWarningDetail> Warnings,
     double ProcessingTimeMs,
-    string Limitations);
+    string Limitations)
+{
+    public Guid ResultId { get; init; }
+}
 
 public sealed record AnalysisErrorDetail(string Code, string Message, string? CorrelationId, bool Retryable);
 

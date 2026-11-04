@@ -27,7 +27,17 @@ public sealed record MedicalReportPdfData(
     string Disclaimer,
     string SecureAnalysisUrl,
     byte[] OriginalImage,
-    byte[] VesselMaskImage);
+    byte[] VesselMaskImage)
+{
+    public string SnapshotDigest { get; init; } = "";
+    public Guid ResultId { get; init; }
+    public int ResultVersion { get; init; }
+    public Guid? ReviewId { get; init; }
+    public int? ReviewVersion { get; init; }
+    public string ConfigVersion { get; init; } = "";
+    public string ThresholdVersion { get; init; } = "";
+    public string? CorrectedRiskLevel { get; init; }
+}
 
 /// <summary>Renders one case as a compressed A4 clinical report. ICDR is only shown when stored on an approved review.</summary>
 public static class MedicalReportPdfRenderer
@@ -113,6 +123,9 @@ public static class MedicalReportPdfRenderer
                     AddInfo(table, "Examination date (UTC)", data.ExamDateUtc.ToString("yyyy-MM-dd HH:mm 'UTC'"));
                     AddInfo(table, "Batch ID", data.BatchId.ToString("D"));
                     AddInfo(table, "Review status", data.ReviewStatus);
+                    AddInfo(table, "Result ID / version", $"{data.ResultId:D} / {data.ResultVersion}");
+                    AddInfo(table, "Review ID / version", data.ReviewId is {} r?$"{r:D} / {data.ReviewVersion}":"Not reviewed");
+                    AddInfo(table, "Config / thresholds", $"{data.ConfigVersion} / {data.ThresholdVersion}");
                 });
 
                 content.Item().PaddingTop(2).Text("FUNDUS IMAGES").Bold().FontSize(10);
@@ -144,6 +157,8 @@ public static class MedicalReportPdfRenderer
                 });
 
                 content.Item().PaddingTop(2).Text("CLINICAL REVIEW").Bold().FontSize(10);
+                content.Item().Text($"Doctor conclusion: {data.CorrectedRiskLevel ?? (data.DoctorApproved?data.AiRiskLevel:null) ?? "Not reviewed"}");
+                content.Item().Text($"Snapshot SHA-256: {data.SnapshotDigest}").FontSize(6);
                 content.Item().Text(text =>
                 {
                     text.Span("AI model version: ").SemiBold();

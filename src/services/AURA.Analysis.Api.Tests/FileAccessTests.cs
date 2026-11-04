@@ -32,14 +32,12 @@ public class FileAccessTests
     private static async Task<UploadFailure> Fails(Func<Task> act) => await Assert.ThrowsAsync<UploadFailure>(act);
 
     [Fact]
-    public async Task Co_quyen_nhan_URL_ky_120_giay_dung_container_anh_goc()
+    public async Task Authorized_access_returns_authenticated_proxy_without_SAS()
     {
         var rig = new Rig();
         var r = await rig.Get();
-        Assert.True(r.Url.StartsWith("http://127.0.0.1:10000/"));
-        Assert.Equal("aura-originals", rig.Storage.LastReadAccess!.Value.Container);
-        Assert.Equal("t/b/a", rig.Storage.LastReadAccess!.Value.Key);
-        Assert.Equal(TimeSpan.FromSeconds(120), rig.Storage.LastReadAccess!.Value.Ttl);
+        Assert.Equal($"/api/v1/analyses/{AnalysisId:D}/files/{FileId:D}/content",r.Url);
+        Assert.Null(rig.Storage.LastReadAccess);
         Assert.Equal("FILE_READ", rig.Access.LastAction);
         Assert.Equal(AnalysisId, rig.Access.LastRequest!.AnalysisId);
         var secondsLeft = (r.ExpiresAt - DateTime.UtcNow).TotalSeconds;
@@ -50,9 +48,9 @@ public class FileAccessTests
     public async Task File_annotation_dung_container_annotation()
     {
         var rig = new Rig();
-        await rig.Get(file: AnnoId);
-        Assert.Equal("aura-annotations", rig.Storage.LastReadAccess!.Value.Container);
-        Assert.Equal("t/r/mask", rig.Storage.LastReadAccess!.Value.Key);
+        rig.Storage.Files["aura-annotations/t/r/mask"]=[7,8,9];
+        await using var stream=await rig.Service.ReadAsync(Requester,null,AnalysisId,AnnoId,default);
+        Assert.Equal(7,stream.ReadByte());
     }
 
     [Fact]
@@ -60,8 +58,8 @@ public class FileAccessTests
     {
         var rig = new Rig();
         rig.Options.ReadUrlTtlSeconds = 60;
-        await rig.Get();
-        Assert.Equal(TimeSpan.FromSeconds(60), rig.Storage.LastReadAccess!.Value.Ttl);
+        var result=await rig.Get();
+        Assert.InRange((result.ExpiresAt-DateTime.UtcNow).TotalSeconds,58,61);
     }
 
     [Fact]
@@ -104,10 +102,18 @@ public class FileAccessTests
         Assert.Equal(503, (await Fails(() => a.Get())).Status);
         var b = new Rig { Files = { Down = true } };
         Assert.Equal(503, (await Fails(() => b.Get())).Status);
-        var c = new Rig { Storage = { ReadAccessDown = true } };
-        var f = await Fails(() => c.Get());
+        var c = new Rig(); // Missing private object is a dependency failure at authenticated read time.
+        var f = await Fails(() => c.Service.ReadAsync(Requester,null,AnalysisId,FileId,default));
         Assert.Equal("ERR_NETWORK", f.Code);
         Assert.True(f.Retryable);
+    }
+    [Fact]
+    public async Task Access_link_cannot_bypass_revocation_before_bytes_are_read()
+    {
+        var rig=new Rig();rig.Storage.Files["aura-originals/t/b/a"]=[1,2,3];
+        await rig.Get();rig.Access.Allowed=false;
+        Assert.Equal(404,(await Fails(()=>rig.Service.ReadAsync(Requester,null,AnalysisId,FileId,default))).Status);
+        Assert.Null(rig.Storage.LastReadAccess);
     }
 
     [Fact]

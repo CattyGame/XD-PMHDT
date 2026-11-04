@@ -8,9 +8,11 @@ using Aura.Worker.Analysis.Configuration;
 
 namespace Aura.Worker.Analysis.Services;
 
+public sealed record WorkerAccessContext(Guid TenantId, Guid ActorAccountId, Guid PatientId, Guid? ClinicContextId, Guid AnalysisId);
+
 public interface IProfileResolveClient
 {
-    Task<ProfileResolveResult> RecheckAccessAsync(Guid tenantId, Guid patientId, string action, CancellationToken cancellationToken);
+    Task<ProfileResolveResult> RecheckAccessAsync(WorkerAccessContext context, string action, CancellationToken cancellationToken);
 }
 
 public class ProfileResolveResult
@@ -39,19 +41,20 @@ public class ProfileResolveClient : IProfileResolveClient
         _logger = logger;
     }
 
-    public async Task<ProfileResolveResult> RecheckAccessAsync(Guid tenantId, Guid patientId, string action, CancellationToken cancellationToken)
+    public async Task<ProfileResolveResult> RecheckAccessAsync(WorkerAccessContext context, string action, CancellationToken cancellationToken)
     {
         try
         {
-            var token = _tokenProvider.GenerateToken(_options.Audience, _options.Scope);
+            var token = await _tokenProvider.GetTokenAsync(_options.Audience, _options.Scope, cancellationToken);
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl.TrimEnd('/')}/internal/v1/profile/access/resolve");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
             var body = new
             {
-                actorAccountId = patientId,
-                patientId = patientId,
-                clinicContextId = (Guid?)null,
+                actorAccountId = context.ActorAccountId,
+                patientId = context.PatientId,
+                clinicContextId = context.ClinicContextId,
+                analysisId = context.AnalysisId,
                 action = action
             };
             request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
@@ -61,7 +64,9 @@ public class ProfileResolveClient : IProfileResolveClient
             {
                 var content = await response.Content.ReadAsStringAsync(cancellationToken);
                 using var doc = JsonDocument.Parse(content);
-                var isAllowed = doc.RootElement.TryGetProperty("allowed", out var allowedProp) && allowedProp.GetBoolean();
+                var isAllowed = doc.RootElement.TryGetProperty("allowed", out var allowedProp) && allowedProp.GetBoolean()
+                    && doc.RootElement.TryGetProperty("tenantId", out var tenantProp)
+                    && tenantProp.TryGetGuid(out var resolvedTenant) && resolvedTenant == context.TenantId;
                 var reason = doc.RootElement.TryGetProperty("reason", out var reasonProp) ? reasonProp.GetString() : null;
                 return new ProfileResolveResult
                 {

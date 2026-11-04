@@ -19,7 +19,11 @@ public sealed record UploadCommand(
     string? PatientId,
     string? Modality,
     string? EyeSide,
-    IReadOnlyList<IUploadedFile> Files);
+    IReadOnlyList<IUploadedFile> Files)
+{
+    // Set only by the authenticated, persisted item-admission service.
+    public Guid? ParentBatchId { get; init; }
+}
 
 // ---- Profile (M6): POST /internal/v1/profile/access/resolve ----
 public sealed record PatientAccessRequest(
@@ -101,6 +105,7 @@ public sealed record BatchPlan(
     /// <summary>Internal durable-upload fence; absent only for legacy/domain-only callers.</summary>
     public Guid? RecoveryAttemptId { get; init; }
     public Guid? ClinicId { get; init; }
+    public Guid? ParentBatchId { get; init; }
 }
 
 /// <summary>Một phiên giữ khóa idempotency (vd. pg advisory lock) cho tới khi Dispose.</summary>

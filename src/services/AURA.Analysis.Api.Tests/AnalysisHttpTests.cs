@@ -75,7 +75,7 @@ public sealed class AnalysisHttpTests
     }
     [Fact] public async Task Multipart_binds_authenticated_actor_and_returns_202()
     {await using var r=await Rig.Start();using var request=r.Post();request.Headers.Add("X-Account-Id",Guid.NewGuid().ToString());request.Headers.Add("X-User-Id",Guid.NewGuid().ToString());using var result=await r.Client.SendAsync(request);Assert.Equal(HttpStatusCode.Accepted,result.StatusCode);Assert.Equal(r.Identity.Account,r.Upload.Last!.RequesterId);Assert.Equal(10,r.Upload.Length);Assert.NotNull(result.Headers.Location);}
-    [Fact] public async Task Analysis_batch_endpoint_accepts_100_images_and_returns_its_progress_url_under_1_5_seconds()
+    [Fact] public async Task Legacy_batch_endpoint_rejects_multiple_images_before_admission()
     {
         await using var r=await Rig.Start(images:100);
         using var request=r.Post(path:"/api/v1/analyses/batches");
@@ -85,16 +85,9 @@ public sealed class AnalysisHttpTests
             var image=new ByteArrayContent(new byte[10]);image.Headers.ContentType=new("image/png");
             form.Add(image,"images",$"synthetic-{i:D3}.png");
         }
-        var timer=Stopwatch.StartNew();
         using var response=await r.Client.SendAsync(request);
-        timer.Stop();
-        Assert.Equal(HttpStatusCode.Accepted,response.StatusCode);
-        Assert.Equal(100,r.Upload.Last!.Files.Count);
-        Assert.True(timer.Elapsed<TimeSpan.FromMilliseconds(1500),$"100-image request took {timer.Elapsed.TotalMilliseconds:F0} ms.");
-        var body=await response.Content.ReadFromJsonAsync<JsonElement>();
-        var expected=$"/api/v1/analyses/batches/{body.GetProperty("batchId").GetGuid():D}";
-        Assert.Equal(expected,body.GetProperty("statusUrl").GetString());
-        Assert.Equal(expected,response.Headers.Location!.ToString());
+        await Code(response,400,"ERR_VALIDATION");
+        Assert.Null(r.Upload.Last);
     }
     [Fact] public async Task Replay_sets_header()
     {await using var r=await Rig.Start();r.Upload.Replay=true;using var request=r.Post();using var result=await r.Client.SendAsync(request);Assert.Equal("true",Assert.Single(result.Headers.GetValues("Idempotent-Replayed")));}
@@ -161,7 +154,18 @@ public sealed class AnalysisHttpTests
     [Fact] public async Task File_owner_mismatch_never_signs_url()
     {await using var r=await Rig.Start();var image=Guid.NewGuid();var file=Guid.NewGuid();r.Files.Records.Add(new(image,file,FakeAccess.Tenant,Guid.NewGuid(),Guid.NewGuid(),StoredFileKind.Original,"private/key"));using var result=await r.Client.GetAsync($"/api/v1/analyses/{image}/files/{file}/access");await Code(result,404,"ERR_NOT_FOUND");Assert.Null(r.Storage.LastReadAccess);}
     [Fact] public async Task Authorized_file_access_is_no_store()
-    {await using var r=await Rig.Start();var image=Guid.NewGuid();var file=Guid.NewGuid();r.Files.Records.Add(new(image,file,FakeAccess.Tenant,Guid.NewGuid(),r.Identity.Account,StoredFileKind.Original,"private/key"));using var result=await r.Client.GetAsync($"/api/v1/analyses/{image}/files/{file}/access");Assert.Equal(HttpStatusCode.OK,result.StatusCode);Assert.Equal("no-store",result.Headers.CacheControl!.ToString());Assert.Equal(TimeSpan.FromSeconds(120),r.Storage.LastReadAccess!.Value.Ttl);}
+    {await using var r=await Rig.Start();var image=Guid.NewGuid();var file=Guid.NewGuid();r.Files.Records.Add(new(image,file,FakeAccess.Tenant,Guid.NewGuid(),r.Identity.Account,StoredFileKind.Original,"private/key"));using var result=await r.Client.GetAsync($"/api/v1/analyses/{image}/files/{file}/access");Assert.Equal(HttpStatusCode.OK,result.StatusCode);Assert.Equal("no-store",result.Headers.CacheControl!.ToString());Assert.Null(r.Storage.LastReadAccess);Assert.Contains("/content",await result.Content.ReadAsStringAsync());}
+    [Fact] public async Task Image_bytes_have_verified_MIME_and_revoked_assignment_denies_the_same_URL()
+    {
+        await using var r=await Rig.Start();var image=Guid.NewGuid();var file=Guid.NewGuid();
+        r.Files.Records.Add(new(image,file,FakeAccess.Tenant,Guid.NewGuid(),r.Identity.Account,StoredFileKind.Original,"private/key"));
+        r.Storage.Files["aura-originals/private/key"]=TestImages.Png(10,10);
+        var url=$"/api/v1/analyses/{image}/files/{file}/content";
+        using var allowed=await r.Client.GetAsync(url);Assert.Equal(HttpStatusCode.OK,allowed.StatusCode);
+        Assert.Equal("image/png",allowed.Content.Headers.ContentType!.MediaType);Assert.Equal("no-store",allowed.Headers.CacheControl!.ToString());
+        Assert.Equal("nosniff",Assert.Single(allowed.Headers.GetValues("X-Content-Type-Options")));
+        r.Access.Allowed=false;using var denied=await r.Client.GetAsync(url);await Code(denied,404,"ERR_NOT_FOUND");
+    }
     [Fact] public async Task Request_over_capacity_is_rejected_without_running_handler()
     {await using var r=await Rig.Start();var entered=new TaskCompletionSource();var release=new TaskCompletionSource();r.Upload.Before=async()=>{entered.SetResult();await release.Task;};using var first=r.Post();var running=r.Client.SendAsync(first);await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));try{using var second=r.Post();using var response=await r.Client.SendAsync(second);await Code(response,409,"ERR_REQUEST_IN_PROGRESS");}finally{release.SetResult();}using var done=await running;Assert.Equal(HttpStatusCode.Accepted,done.StatusCode);}
     [Fact] public async Task Rejected_body_releases_slot_for_next_request()

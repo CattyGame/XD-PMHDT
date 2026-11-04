@@ -27,6 +27,8 @@ public class JobProcessorTests
 
     public JobProcessorTests()
     {
+        _jobRepoMock.Setup(r => r.RenewLeaseAsync(It.IsAny<JobLease>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .Returns((JobLease lease, TimeSpan duration, CancellationToken ct) => Task.FromResult<JobLease?>(lease));
         _options = Options.Create(new WorkerOptions
         {
             MaxAttempts = 3,
@@ -70,7 +72,6 @@ public class JobProcessorTests
             _aiMock.Object,
             _profileMock.Object,
             _batchProgressMock.Object,
-            _batchEventsMock.Object,
             _options,
             _loggerMock.Object);
     }
@@ -116,9 +117,9 @@ public class JobProcessorTests
 
         _jobRepoMock.Setup(r => r.GetJobAsync(jobId, It.IsAny<CancellationToken>())).ReturnsAsync(job);
         _analysisRepoMock.Setup(r => r.GetAnalysisAsync(analysisId, It.IsAny<CancellationToken>())).ReturnsAsync(analysis);
-        _jobRepoMock.Setup(r => r.TryAcquireLeaseAsync(jobId, It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _jobRepoMock.Setup(r => r.TryAcquireLeaseAsync(jobId, It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>())).Returns((Guid id, string owner, TimeSpan duration, CancellationToken ct) => Task.FromResult<JobLease?>(new(id,owner,1,DateTime.UtcNow.Add(duration))));
 
-        _profileMock.Setup(p => p.RecheckAccessAsync(tenantId, patientId, "ANALYSIS_READ", It.IsAny<CancellationToken>()))
+        _profileMock.Setup(p => p.RecheckAccessAsync(It.Is<WorkerAccessContext>(x => x.TenantId == tenantId && x.PatientId == patientId), "ANALYSIS_READ", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProfileResolveResult { Allowed = true });
 
         _blobMock.Setup(b => b.DownloadOriginalImageAsync("original.png", It.IsAny<CancellationToken>()))
@@ -132,7 +133,7 @@ public class JobProcessorTests
             ModelVersion = "frangi-v0.2",
             ConfigVersion = "s3-frangi-1.0.0",
             ThresholdVersion = "frangi-threshold-0.02-v1",
-            ImageInfo = new AiImageInfo { Width = 100, Height = 100, Channels = 3, EyeSide = "left", Modality = "FUNDUS" },
+            ImageInfo = new AiImageInfo { Width = 1, Height = 1, Channels = 3, EyeSide = "left", Modality = "FUNDUS" },
             Metrics = new AiMetrics { VesselDensity = 0.05 },
             RiskAvailable = false,
             RiskAssessment = null,
@@ -140,8 +141,8 @@ public class JobProcessorTests
             Segmentation = new AiSegmentation
             {
                 MaskFormat = "png_base64",
-                MaskBase64 = Convert.ToBase64String(new byte[] { 0, 255 }),
-                OverlayBase64 = Convert.ToBase64String(new byte[] { 10, 20 })
+                MaskBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jkioAAAAASUVORK5CYII=",
+                OverlayBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jkioAAAAASUVORK5CYII="
             }
         };
 
@@ -157,7 +158,7 @@ public class JobProcessorTests
         Assert.Equal(JobProcessResult.AckSuccess, result);
         _blobMock.Verify(b => b.UploadAnnotationAsync(It.Is<string>(s => s.Contains("mask")), It.IsAny<byte[]>(), "image/png", It.IsAny<CancellationToken>()), Times.Once);
         _blobMock.Verify(b => b.UploadAnnotationAsync(It.Is<string>(s => s.Contains("overlay")), It.IsAny<byte[]>(), "image/png", It.IsAny<CancellationToken>()), Times.Once);
-        _analysisRepoMock.Verify(r => r.CommitSuccessAsync(analysisId, jobId, It.IsAny<string>(), It.Is<OutboxRecord>(o => o.EventType == "analysis.completed"), It.IsAny<CancellationToken>()), Times.Once);
+        _analysisRepoMock.Verify(r => r.CommitSuccessAsync(analysisId, It.Is<JobLease>(l => l.JobId == jobId), It.IsAny<string>(), It.Is<IReadOnlyList<AnnotationDescriptor>>(a => a.Count == 2 && a.All(x => x.SizeBytes != 2048 && x.Width == 1)), It.Is<OutboxRecord>(o => o.EventType == "analysis.completed"), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -211,8 +212,8 @@ public class JobProcessorTests
 
         _jobRepoMock.Setup(r => r.GetJobAsync(jobId, It.IsAny<CancellationToken>())).ReturnsAsync(job);
         _analysisRepoMock.Setup(r => r.GetAnalysisAsync(analysisId, It.IsAny<CancellationToken>())).ReturnsAsync(analysis);
-        _jobRepoMock.Setup(r => r.TryAcquireLeaseAsync(jobId, It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
-        _profileMock.Setup(p => p.RecheckAccessAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        _jobRepoMock.Setup(r => r.TryAcquireLeaseAsync(jobId, It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>())).Returns((Guid id, string owner, TimeSpan duration, CancellationToken ct) => Task.FromResult<JobLease?>(new(id,owner,1,DateTime.UtcNow.Add(duration))));
+        _profileMock.Setup(p => p.RecheckAccessAsync(It.IsAny<WorkerAccessContext>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProfileResolveResult { Allowed = true });
         _blobMock.Setup(b => b.DownloadOriginalImageAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new byte[] { 1 });
 
@@ -229,7 +230,7 @@ public class JobProcessorTests
         Assert.Equal(JobProcessResult.AckFailure, result);
         _analysisRepoMock.Verify(r => r.CommitFailureAsync(
             analysisId,
-            jobId,
+            It.Is<JobLease>(l => l.JobId == jobId),
             AnalysisStatus.LowQuality,
             It.IsAny<string>(),
             It.Is<OutboxRecord>(o => o.EventType == "analysis.failed"),

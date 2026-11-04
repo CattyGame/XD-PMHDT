@@ -77,6 +77,7 @@ public sealed class DurableUploadService(UploadPlanningService planning, IUpload
         // rebuilt from the committed image states, so an outage must not block durable acceptance.
         try
         {
+            if(r.Plan.ParentBatchId is not null)return new(r.Plan.Response,false);
             await batchProgress.InitializeBatchAsync(r.Plan.BatchId, r.Plan.Images.Count);
             foreach (var image in r.Plan.Images.Where(i => i.Job is null))
                 await batchProgress.RecordImageOutcomeAsync(r.Plan.BatchId, image.AnalysisId, isSuccess: true);

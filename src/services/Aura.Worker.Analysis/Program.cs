@@ -20,19 +20,23 @@ builder.Services.Configure<ServiceAuthOptions>(builder.Configuration.GetSection(
 
 // 2. Database
 var connectionString = builder.Configuration.GetConnectionString("Postgres")
-    ?? "Host=postgres;Port=5432;Database=aura_dev;Username=aura_analysis_app;Password=secret";
+    ?? throw new InvalidOperationException("Worker PostgreSQL credentials are required.");
 var redisConnection = builder.Configuration.GetConnectionString("Redis") ?? "redis:6379";
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnection));
 builder.Services.AddSingleton<IBatchRedisProgressService, BatchRedisProgressService>();
 builder.Services.AddSingleton<RabbitMqConnectionProvider>();
-builder.Services.AddSingleton<IBatchCompletedEventPublisher, BatchCompletedEventPublisher>();
 builder.Services.AddDbContext<WorkerDbContext>(options =>
 {
     options.UseNpgsql(connectionString);
 });
 
 // 3. Infrastructure & HTTP Clients
-builder.Services.AddSingleton<IServiceTokenProvider, ServiceTokenProvider>();
+builder.Services.AddHttpClient<IServiceTokenProvider, ServiceTokenProvider>(client =>
+{
+    var auth=builder.Configuration.GetSection(ServiceAuthOptions.SectionName).Get<ServiceAuthOptions>() ?? new();
+    client.BaseAddress=new Uri(auth.IdentityBaseUrl);
+    client.Timeout=TimeSpan.FromSeconds(10);
+});
 builder.Services.AddSingleton<IBlobStorageService, BlobStorageService>();
 
 builder.Services.AddHttpClient<IAiHttpClient, AiHttpClient>(client =>

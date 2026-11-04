@@ -1,78 +1,32 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Security.Cryptography;
-using Microsoft.Extensions.Logging;
+using System.Net.Http.Json;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
 using Aura.Worker.Analysis.Configuration;
 
 namespace Aura.Worker.Analysis.Services;
 
 public interface IServiceTokenProvider
 {
-    string GenerateToken(string audience, string scope);
+    Task<string> GetTokenAsync(string audience,string scope,CancellationToken ct);
 }
 
-public class ServiceTokenProvider : IServiceTokenProvider
+/// <summary>Only Identity issues trusted service tokens; missing credentials never generate a local signing key.</summary>
+public sealed class ServiceTokenProvider(HttpClient client,IOptions<ServiceAuthOptions> options) : IServiceTokenProvider
 {
-    private readonly ServiceAuthOptions _options;
-    private readonly ILogger<ServiceTokenProvider> _logger;
-    private RSA? _rsaKey;
-
-    public ServiceTokenProvider(IOptions<ServiceAuthOptions> options, ILogger<ServiceTokenProvider> logger)
+    public async Task<string> GetTokenAsync(string audience,string scope,CancellationToken ct)
     {
-        _options = options.Value;
-        _logger = logger;
-        InitializeKey();
+        var o=options.Value;
+        if(o.ClientId!="analysis-worker" || string.IsNullOrWhiteSpace(o.ClientSecret)
+            || (audience,scope) is not (("aura-ai","ai:analyze") or ("aura-profile","profile:resolve")))
+            throw new InvalidOperationException("Worker service identity credentials or requested scope are not configured.");
+        using var response=await client.PostAsJsonAsync("/internal/v1/identity/service-tokens",
+            new {clientId=o.ClientId,clientSecret=o.ClientSecret,audience,scope},ct);
+        response.EnsureSuccessStatusCode();
+        var token=await response.Content.ReadFromJsonAsync<Reply>(cancellationToken:ct);
+        if(token is null || token.TokenType!="Bearer" || token.ExpiresIn is <=0 or >300
+            || string.IsNullOrWhiteSpace(token.AccessToken) || token.AccessToken.Length>16384
+            || token.AccessToken.Any(c=>!char.IsAsciiLetterOrDigit(c)&&c is not('.' or '_' or '-')))
+            throw new InvalidDataException("Identity returned an invalid token response.");
+        return token.AccessToken;
     }
-
-    private void InitializeKey()
-    {
-        if (!string.IsNullOrEmpty(_options.PrivateKeyPemPath) && File.Exists(_options.PrivateKeyPemPath))
-        {
-            try
-            {
-                var pemContent = File.ReadAllText(_options.PrivateKeyPemPath);
-                _rsaKey = RSA.Create();
-                _rsaKey.ImportFromPem(pemContent);
-                _logger.LogInformation("Loaded RSA key from {Path}", _options.PrivateKeyPemPath);
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to load PEM from {Path}, using ephemeral test key", _options.PrivateKeyPemPath);
-            }
-        }
-
-        // Ephemeral RSA key for test/fallback environments
-        _rsaKey = RSA.Create(2048);
-        _logger.LogInformation("Initialized ephemeral RSA key for service tokens");
-    }
-
-    public string GenerateToken(string audience, string scope)
-    {
-        var now = DateTime.UtcNow;
-        var signingCredentials = new SigningCredentials(new RsaSecurityKey(_rsaKey), SecurityAlgorithms.RsaSha256);
-
-        var claims = new List<Claim>
-        {
-            new(JwtRegisteredClaimNames.Sub, _options.PrincipalId.ToString()),
-            new("client_id", _options.ClientId),
-            new("scope", scope)
-        };
-
-        var tokenDescriptor = new SecurityTokenDescriptor
-        {
-            Issuer = _options.Issuer,
-            Audience = audience,
-            Subject = new ClaimsIdentity(claims),
-            NotBefore = now.AddSeconds(-30), // 30s clock skew tolerance
-            Expires = now.AddSeconds(300),    // 300s TTL
-            SigningCredentials = signingCredentials
-        };
-
-        var tokenHandler = new JwtSecurityTokenHandler();
-        var token = tokenHandler.CreateToken(tokenDescriptor);
-        return tokenHandler.WriteToken(token);
-    }
+    private sealed record Reply(string AccessToken,string TokenType,int ExpiresIn);
 }

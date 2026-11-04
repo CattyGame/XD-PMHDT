@@ -56,6 +56,8 @@ public static class AnalysisRuntime
         services.AddTransient<IDoctorAssignmentClient,ProfileDoctorAssignmentClient>();
         services.AddTransient<IInternalResolversRepository,PostgresInternalResolversRepository>();
         services.AddTransient<UploadPlanningService>();services.AddTransient<IAnalysisUploadHandler,DurableUploadService>();
+        services.AddTransient<ItemUploadService>();services.AddTransient<IGroupedBatchStatusReader>(sp=>sp.GetRequiredService<ItemUploadService>());
+        services.AddHostedService<ItemUploadCleanupWorker>();
         services.AddTransient<IAnalysisReadinessChecks,AnalysisReadinessChecks>();
         services.AddTransient<BatchStatusService>();services.AddTransient<FileAccessService>();
         services.AddTransient<AnalysisReportService>();

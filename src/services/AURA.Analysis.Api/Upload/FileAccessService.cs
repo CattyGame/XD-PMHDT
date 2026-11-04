@@ -14,10 +14,15 @@ public sealed class StorageOptions
 }
 
 public enum StoredFileKind { Original, Annotation }
+public sealed record PrivateContent(Stream Stream,string ContentType);
 
 /// <param name="PatientId">Bệnh nhân của batch chứa ảnh; dùng để hỏi quyền với Profile.</param>
 public sealed record StoredFileRecord(Guid AnalysisId, Guid FileId, Guid TenantId, Guid PatientId, Guid OwnerId,
-    StoredFileKind Kind, string ObjectKey);
+    StoredFileKind Kind, string ObjectKey)
+{
+    public string? Sha256 { get; init; }
+    public string MimeType { get; init; } = "image/png";
+}
 
 public interface IFileAccessRepository
 {
@@ -63,8 +68,20 @@ public sealed class FileAccessService
             : _storageOptions.AnnotationContainer;
         var ttl = TimeSpan.FromSeconds(_storageOptions.ReadUrlTtlSeconds);
 
-        var access = await Guard("private storage", () => _storage.CreateReadAccessAsync(container, record.ObjectKey, ttl, ct));
-        return new FileAccessResult(access.Url.ToString(), access.ExpiresAt.UtcDateTime);
+        var selector=clinicId is {} clinic?$"?clinicContextId={clinic:D}":"";
+        return new FileAccessResult($"/api/v1/analyses/{analysisId:D}/files/{fileId:D}/content{selector}",DateTime.UtcNow.Add(ttl));
+    }
+
+    public async Task<Stream> ReadAsync(Guid requesterId,Guid? clinicId,Guid analysisId,Guid fileId,CancellationToken ct)
+        =>(await ReadContentAsync(requesterId,clinicId,analysisId,fileId,ct)).Stream;
+    public async Task<PrivateContent> ReadContentAsync(Guid requesterId,Guid? clinicId,Guid analysisId,Guid fileId,CancellationToken ct)
+    {
+        await GetAsync(requesterId,clinicId,analysisId,fileId,ct);
+        var record=await _files.FindAsync(analysisId,fileId,ct)??throw NotFound();
+        if(record.MimeType is not ("image/png" or "image/jpeg"))throw UploadFailure.Dependency("File metadata");
+        var stream=await Guard("private storage",()=>_storage.OpenReadAsync(record.Kind==StoredFileKind.Original
+            ?_storageOptions.OriginalContainer:_storageOptions.AnnotationContainer,record.ObjectKey,ct));
+        return new(stream,record.MimeType);
     }
 
     private static async Task<T> Guard<T>(string what, Func<Task<T>> action)

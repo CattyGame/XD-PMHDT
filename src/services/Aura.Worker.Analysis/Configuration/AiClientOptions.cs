@@ -23,7 +23,9 @@ public class ServiceAuthOptions
 {
     public const string SectionName = "ServiceAuth";
 
-    public string Issuer { get; set; } = "aura-identity-s3-v1";
+    public string IdentityBaseUrl { get; set; } = "http://identity-api:8080";
+    public string ClientSecret { get; set; } = string.Empty;
+    public string Issuer { get; set; } = "aura-identity-local";
     public string ClientId { get; set; } = "analysis-worker";
     public Guid PrincipalId { get; set; } = Guid.Parse("7ab5c4dc-147d-555f-ab6a-18d354c42439");
     public string PrivateKeyPemPath { get; set; } = string.Empty;

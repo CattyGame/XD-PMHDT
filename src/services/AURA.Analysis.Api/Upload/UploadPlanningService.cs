@@ -158,7 +158,7 @@ public sealed partial class UploadPlanningService(UploadOptions options,IPatient
                     tenantId = d.TenantId,
                     correlationId,
                     analysisId,
-                    data = new { patientId, batchId }
+                    data = new { patientId, batchId = cmd.ParentBatchId ?? batchId }
                 }, UploadJson.Options), now));
             outbox.Add(new OutboxPlan(messageId, analysisId, "analysis.job.run", JobSchemaVersion,
                 JsonSerializer.Serialize(new
@@ -171,7 +171,7 @@ public sealed partial class UploadPlanningService(UploadOptions options,IPatient
                     correlationId,
                     jobId,
                     analysisId,
-                    batchId,
+                    batchId = cmd.ParentBatchId ?? batchId,
                     imageFileId = fileId,
                     attempt = 1
                 }, UploadJson.Options), now));
@@ -180,7 +180,7 @@ public sealed partial class UploadPlanningService(UploadOptions options,IPatient
         var response = new AcceptedResponse(batchId, items, now.UtcDateTime, $"/api/v1/batches/{batchId:D}");
         return new BatchPlan(batchId, d.TenantId, d.OwnerPrincipalId, cmd.RequesterId, patientId, cmd.IdempotencyKey,
             fingerprint, RequestFingerprint.Version, correlationId, now, response, images, outbox)
-        { ClinicId = cmd.ClinicId };
+        { ClinicId = cmd.ClinicId, ParentBatchId = cmd.ParentBatchId };
     }
 
     private static string SafeFileName(string name)

@@ -39,7 +39,11 @@ public static class OutboxEventFactory
 
         return new OutboxRecord
         {
+            OutboxId = evt.EventId,
             EventId = evt.EventId,
+            TenantId = tenantId,
+            SchemaVersion = evt.SchemaVersion,
+            OccurredAt = DateTime.Parse(evt.OccurredAt, null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal),
             EventType = evt.EventType,
             PayloadJson = JsonSerializer.Serialize(evt),
             AvailableAt = DateTime.UtcNow,
@@ -75,7 +79,11 @@ public static class OutboxEventFactory
 
         return new OutboxRecord
         {
+            OutboxId = evt.EventId,
             EventId = evt.EventId,
+            TenantId = tenantId,
+            SchemaVersion = evt.SchemaVersion,
+            OccurredAt = DateTime.Parse(evt.OccurredAt, null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal),
             EventType = evt.EventType,
             PayloadJson = JsonSerializer.Serialize(evt),
             AvailableAt = DateTime.UtcNow,
@@ -115,7 +123,11 @@ public static class OutboxEventFactory
 
         return new OutboxRecord
         {
+            OutboxId = evt.EventId,
             EventId = evt.EventId,
+            TenantId = tenantId,
+            SchemaVersion = evt.SchemaVersion,
+            OccurredAt = DateTime.Parse(evt.OccurredAt, null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal),
             EventType = evt.EventType,
             PayloadJson = JsonSerializer.Serialize(evt),
             AvailableAt = DateTime.UtcNow,
@@ -130,11 +142,12 @@ public static class OutboxEventFactory
         Guid newJobId,
         Guid imageFileId,
         int attempt,
-        string correlationId)
+        string correlationId,
+        Guid? messageId = null)
     {
         var msg = new JobRunMessage
         {
-            MessageId = Guid.NewGuid(),
+            MessageId = messageId ?? Guid.NewGuid(),
             MessageType = "analysis.job.run",
             SchemaVersion = "0.6",
             OccurredAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
@@ -149,7 +162,10 @@ public static class OutboxEventFactory
 
         return new OutboxRecord
         {
+            OutboxId = msg.MessageId,
             EventId = msg.MessageId,
+            TenantId = tenantId,
+            SchemaVersion = msg.SchemaVersion,
             EventType = msg.MessageType,
             PayloadJson = JsonSerializer.Serialize(msg),
             Status = "PENDING"

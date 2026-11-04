@@ -1,0 +1,2116 @@
+openapi: 3.0.3
+info:
+  title: AURA Analysis API
+  version: 0.9.0
+  description: 'ADR-005 implementation contract: persisted multi-patient clinic batch;
+    one image per HTTP upload; partial admission; authenticated private content; immutable
+    report snapshots. Supersedes 0.8 for these operations. Clinical validation and
+    release acceptance are separate evidence.'
+  x-change-notes:
+  - 0.6.0 thay đổi ràng buộc và trường response bắt buộc; cập nhật fixtures/examples
+    và thông báo các bên trước khi khóa baseline.
+servers:
+- url: http://127.0.0.1:5000
+  description: Gateway trên máy chạy Compose; route Analysis cần triển khai.
+- url: http://api-gateway:8080
+  description: Gateway nội bộ Docker, dùng cho NiFi; không phải URL trình duyệt Windows.
+tags:
+- name: Analyses
+- name: Reviews
+- name: Reports
+security:
+- bearerAuth: []
+paths:
+  /api/v1/analyses:
+    post:
+      tags:
+      - Analyses
+      operationId: createAnalysis
+      summary: 'Compatibility upload: one image only; batches use item admission protocol'
+      description: Maximum one image and 12 MiB body. For multiple images use create
+        manifest, PUT each image, finalize. Patient authorization and credit saga
+        remain mandatory.
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CreateAnalysisRequest'
+            encoding:
+              images:
+                contentType: image/jpeg, image/png
+      responses:
+        '202':
+          description: Đã nhận, đang xếp hàng
+          headers:
+            Idempotent-Replayed:
+              description: true nếu đây là phản hồi phát lại
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+              examples:
+                accepted:
+                  value:
+                    batchId: b0000000-0000-4000-8000-000000000001
+                    items:
+                    - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
+                      fileName: fundus-01.jpg
+                      processingStatus: QUEUED
+                    - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0002
+                      fileName: fundus-02.jpg
+                      processingStatus: QUEUED
+                    createdAt: '2026-10-08T03:15:00Z'
+                    statusUrl: /api/v1/batches/b0000000-0000-4000-8000-000000000001
+                duplicate:
+                  value:
+                    batchId: b0000000-0000-4000-8000-000000000002
+                    items:
+                    - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0003
+                      fileName: duplicate.png
+                      processingStatus: DUPLICATE
+                      existingAnalysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
+                      error:
+                        code: ERR_DUPLICATE_REQUEST
+                        message: Ảnh đã được gửi trước đó.
+                        retryable: false
+                    createdAt: '2026-10-24T03:15:00Z'
+                    statusUrl: /api/v1/batches/b0000000-0000-4000-8000-000000000002
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/InsufficientCredit'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMedia'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-roles:
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
+      x-service-scopes:
+      - analysis:ingest
+      deprecated: true
+  /api/v1/analyses/{analysisId}:
+    get:
+      tags:
+      - Analyses
+      operationId: getAnalysis
+      summary: Lấy trạng thái và kết quả
+      description: Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang
+        hoạt động và OWN/ASSIGNED/TENANT trên từng resource. Role bị cấm trả 403;
+        tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này.
+        Client poll. `result` chỉ có khi processingStatus là COMPLETED. `error` có
+        khi FAILED, LOW_QUALITY, REJECTED, DUPLICATE. Không có quyền hoặc không tồn
+        tại đều trả 404 (BR-02); 403 cho vai trò không được dùng chức năng.
+      parameters:
+      - $ref: '#/components/parameters/AnalysisId'
+      - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Analysis'
+              examples:
+                processing:
+                  summary: Đang xử lý
+                  value:
+                    analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
+                    batchId: b0000000-0000-4000-8000-000000000001
+                    patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    processingStatus: PROCESSING
+                    reviewStatus: NOT_REQUIRED
+                    createdAt: '2026-10-08T03:15:00Z'
+                    updatedAt: '2026-10-08T03:15:04Z'
+                    ownerId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    image:
+                      fileId: f0000000-0000-4000-8000-000000000001
+                      kind: original
+                    job:
+                      jobId: a0000000-0000-4000-8000-000000000001
+                      status: RUNNING
+                      retryCount: 0
+                      attemptNo: 1
+                completed:
+                  summary: AI hoàn tất, chờ bác sĩ
+                  value:
+                    analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
+                    batchId: b0000000-0000-4000-8000-000000000001
+                    patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    processingStatus: COMPLETED
+                    reviewStatus: PENDING
+                    createdAt: '2026-10-08T03:15:00Z'
+                    updatedAt: '2026-10-08T03:15:14Z'
+                    result:
+                      riskLevel: MODERATE
+                      riskScore: 0.57
+                      confidenceScore: 0.88
+                      metrics:
+                        vesselDensity: 0.1428
+                        tortuosityIndex: 1.185
+                        avRatio: 0.672
+                        fractalDimension: 1.482
+                        branchingPoints: 64
+                      indicators:
+                      - Chỉ số xoắn mạch tăng nhẹ
+                      isMock: true
+                      modelVersion: aura-retina-0.1.0
+                      thresholdVersion: thr-0.1
+                      disclaimer: Kết quả sàng lọc hỗ trợ quyết định lâm sàng, không
+                        phải chẩn đoán.
+                      annotations:
+                      - fileId: f0000000-0000-4000-8000-000000000002
+                        kind: overlay
+                      - fileId: f0000000-0000-4000-8000-000000000003
+                        kind: heatmap
+                      configVersion: cfg-0.1
+                      version: 1
+                    ownerId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    image:
+                      fileId: f0000000-0000-4000-8000-000000000001
+                      kind: original
+                    job:
+                      jobId: a0000000-0000-4000-8000-000000000001
+                      status: SUCCEEDED
+                      retryCount: 0
+                      attemptNo: 1
+                reviewed:
+                  summary: Bác sĩ đã điều chỉnh
+                  value:
+                    analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
+                    batchId: b0000000-0000-4000-8000-000000000001
+                    patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    processingStatus: COMPLETED
+                    reviewStatus: REVIEWED
+                    createdAt: '2026-10-08T03:15:00Z'
+                    updatedAt: '2026-10-08T04:00:00Z'
+                    result:
+                      riskLevel: MODERATE
+                      riskScore: 0.57
+                      confidenceScore: 0.88
+                      metrics:
+                        vesselDensity: 0.1428
+                        tortuosityIndex: 1.185
+                        avRatio: 0.672
+                        fractalDimension: 1.482
+                        branchingPoints: 64
+                      indicators:
+                      - Chỉ số xoắn mạch tăng nhẹ
+                      isMock: true
+                      modelVersion: aura-retina-0.1.0
+                      thresholdVersion: thr-0.1
+                      disclaimer: Kết quả sàng lọc hỗ trợ quyết định lâm sàng, không
+                        phải chẩn đoán.
+                      annotations:
+                      - fileId: f0000000-0000-4000-8000-000000000002
+                        kind: overlay
+                      - fileId: f0000000-0000-4000-8000-000000000003
+                        kind: heatmap
+                      configVersion: cfg-0.1
+                      version: 1
+                    latestReview:
+                      reviewId: 7e000000-0000-4000-8000-000000000001
+                      analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
+                      version: 1
+                      isApproved: false
+                      correctedRiskLevel: HIGH
+                      doctorNotes: Có xuất huyết nhỏ ở thái dương.
+                      reason: Đối chiếu ảnh gốc
+                      doctorId: d0000000-0000-4000-8000-000000000001
+                      createdAt: '2026-10-08T04:00:00Z'
+                      aiResultVersion: 1
+                    ownerId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    image:
+                      fileId: f0000000-0000-4000-8000-000000000001
+                      kind: original
+                    job:
+                      jobId: a0000000-0000-4000-8000-000000000001
+                      status: SUCCEEDED
+                      retryCount: 0
+                      attemptNo: 1
+                lowQuality:
+                  summary: Ảnh chất lượng kém (không có kết quả)
+                  value:
+                    analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0003
+                    batchId: b0000000-0000-4000-8000-000000000001
+                    patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    processingStatus: LOW_QUALITY
+                    reviewStatus: NOT_REQUIRED
+                    createdAt: '2026-10-08T03:15:00Z'
+                    updatedAt: '2026-10-08T03:15:09Z'
+                    error:
+                      code: ERR_IMAGE_LOW_QUALITY
+                      message: Ảnh không đủ chất lượng để đánh giá, vui lòng chụp
+                        lại.
+                      retryable: false
+                    ownerId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    image:
+                      fileId: f0000000-0000-4000-8000-000000000001
+                      kind: original
+                    job:
+                      jobId: a0000000-0000-4000-8000-000000000001
+                      status: SUCCEEDED
+                      retryCount: 0
+                      attemptNo: 1
+                failed:
+                  summary: Thất bại (ảnh được giữ lại)
+                  value:
+                    analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0004
+                    batchId: b0000000-0000-4000-8000-000000000001
+                    patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    processingStatus: FAILED
+                    reviewStatus: NOT_REQUIRED
+                    createdAt: '2026-10-08T03:15:00Z'
+                    updatedAt: '2026-10-08T03:21:10Z'
+                    error:
+                      code: ERR_AI_FAILED
+                      message: Dịch vụ AI tạm thời không khả dụng.
+                      retryable: true
+                      retryCount: 3
+                    ownerId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    image:
+                      fileId: f0000000-0000-4000-8000-000000000001
+                      kind: original
+                    job:
+                      jobId: a0000000-0000-4000-8000-000000000001
+                      status: FAILED
+                      retryCount: 3
+                      attemptNo: 4
+                completedWithWarning:
+                  summary: AI hoàn tất, chờ bác sĩ
+                  value:
+                    analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
+                    batchId: b0000000-0000-4000-8000-000000000001
+                    patientId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    processingStatus: COMPLETED
+                    reviewStatus: PENDING
+                    createdAt: '2026-10-08T03:15:00Z'
+                    updatedAt: '2026-10-08T03:15:14Z'
+                    result:
+                      riskLevel: MODERATE
+                      riskScore: 0.57
+                      confidenceScore: 0.88
+                      metrics:
+                        vesselDensity: 0.1428
+                        tortuosityIndex: 1.185
+                        avRatio: 0.672
+                        fractalDimension: 1.482
+                        branchingPoints: 64
+                      indicators:
+                      - Chỉ số xoắn mạch tăng nhẹ
+                      isMock: true
+                      modelVersion: aura-retina-0.1.0
+                      thresholdVersion: thr-0.1
+                      disclaimer: Kết quả sàng lọc hỗ trợ quyết định lâm sàng, không
+                        phải chẩn đoán.
+                      annotations:
+                      - fileId: f0000000-0000-4000-8000-000000000002
+                        kind: overlay
+                      - fileId: f0000000-0000-4000-8000-000000000003
+                        kind: heatmap
+                      configVersion: cfg-0.1
+                      version: 1
+                      warnings:
+                      - code: AI_WARNING
+                        message: Kết quả có cảnh báo kỹ thuật; cần bác sĩ đối chiếu.
+                    ownerId: 9b2e5c10-1111-4a2b-8c3d-000000000001
+                    image:
+                      fileId: f0000000-0000-4000-8000-000000000001
+                      kind: original
+                    job:
+                      jobId: a0000000-0000-4000-8000-000000000001
+                      status: SUCCEEDED
+                      retryCount: 0
+                      attemptNo: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-roles:
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
+  /api/v1/batches/{batchId}:
+    get:
+      tags:
+      - Analyses
+      operationId: getBatch
+      summary: Trạng thái từng ảnh trong batch
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Batch'
+              example:
+                batchId: b0000000-0000-4000-8000-000000000001
+                batchStatus: IN_PROGRESS
+                createdAt: '2026-10-08T03:15:00Z'
+                items:
+                - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0001
+                  fileName: fundus-01.jpg
+                  processingStatus: COMPLETED
+                  reviewStatus: PENDING
+                  riskLevel: MODERATE
+                  job:
+                    jobId: a0000000-0000-4000-8000-000000000001
+                    status: SUCCEEDED
+                    retryCount: 0
+                    attemptNo: 1
+                - analysisId: 3f6c1d52-8a41-4c5e-9b0a-6d2f7a1e0002
+                  fileName: fundus-02.jpg
+                  processingStatus: FAILED
+                  reviewStatus: NOT_REQUIRED
+                  error:
+                    code: ERR_TIMEOUT
+                    message: Quá thời gian xử lý.
+                    retryable: true
+                    retryCount: 3
+                  job:
+                    jobId: a0000000-0000-4000-8000-000000000002
+                    status: FAILED
+                    retryCount: 3
+                    attemptNo: 4
+                summary:
+                  total: 2
+                  active: 1
+                  succeeded: 1
+                  failed: 0
+                  duplicate: 0
+                  byStatus:
+                    PENDING: 0
+                    QUEUED: 0
+                    PROCESSING: 0
+                    COMPLETED: 1
+                    FAILED: 1
+                    RETRY_READY: 0
+                    LOW_QUALITY: 0
+                    REJECTED: 0
+                    DUPLICATE: 0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-roles:
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      description: Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang
+        hoạt động và OWN/ASSIGNED/TENANT trên từng resource. Role bị cấm trả 403;
+        tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này.
+        Mỗi item có trạng thái, job và kết quả/lỗi riêng. Ảnh lỗi không làm hỏng các
+        ảnh khác (PARTIAL_FAILED). batchStatus và summary được tính theo quy tắc Batch/BatchSummary;
+        một batch hiện thuộc cùng bệnh nhân. Không công bố số đếm ngoài quyền actor.
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
+  /api/v1/analyses/{analysisId}/files/{fileId}/access:
+    get:
+      tags:
+      - Analyses
+      operationId: getFileAccess
+      summary: Xin quyền đọc ảnh hoặc annotation riêng tư
+      description: 'Role chỉ là kiểm tra chức năng. Backend còn kiểm tra tenant đang
+        hoạt động và OWN/ASSIGNED/TENANT trên từng resource. Role bị cấm trả 403;
+        tài nguyên không tồn tại/ngoài phạm vi trả cùng 404. tenantId/ownerId/requesterId
+        do client gửi không cấp quyền. SYSTEM_ADMIN không được dùng endpoint này.
+        Backend kiểm tra tenant, ownership và phân công bác sĩ trên analysis rồi mới
+        cấp URL ký có thời hạn. Không có quyền hoặc không tồn tại: 404.'
+      x-roles:
+      - PATIENT
+      - DOCTOR
+      - CLINIC_ADMIN
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/AnalysisId'
+      - name: fileId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileAccess'
+              example:
+                url: https://storage.example/signed/abc?sig=demo
+                expiresAt: '2026-10-08T03:25:00Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-resource-scopes:
+        PATIENT: OWN
+        DOCTOR: ASSIGNED
+        CLINIC_ADMIN: TENANT
+  /api/v1/batches:
+    post:
+      tags:
+      - Analyses
+      operationId: createBatch
+      summary: 'Compatibility upload: one image only; batches use item admission protocol'
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CreateAnalysisRequest'
+            encoding:
+              images:
+                contentType: image/jpeg, image/png
+      responses:
+        '202':
+          description: Batch đã được tiếp nhận
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri-reference
+            Idempotent-Replayed:
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: Xung đột idempotency hoặc upload đang xử lý
+        '503':
+          description: Dependency tạm thời không khả dụng
+      deprecated: true
+      description: Maximum one image and 12 MiB body. For multiple images use create
+        manifest, PUT each image, finalize. Patient authorization and credit saga
+        remain mandatory.
+  /api/v1/analyses/{analysisId}/reports:
+    post:
+      tags:
+      - Reports
+      operationId: createAnalysisReport
+      summary: Tạo PDF cho analysis đã hoàn tất
+      description: PDF A4 nén dưới 1.2 MB, gồm ảnh gốc/mask cạnh nhau, ba chỉ số định
+        lượng, phiên bản model AI và review đã lưu. ICDR chỉ hiện khi bác sĩ đã duyệt
+        và ghi nhận; QR mở API case yêu cầu xác thực, không chứa token hoặc PHI.
+      parameters:
+      - name: analysisId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalysisReportFormatRequest'
+      responses:
+        '201':
+          description: Báo cáo riêng tư trong Blob; URL đọc SAS hết hạn sau 15 phút,
+            blob không truy cập công khai.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportDownload'
+        '409':
+          description: Analysis chưa có kết quả hoặc thiếu nguồn báo cáo
+  /api/v1/batches/{batchId}/reports:
+    post:
+      tags:
+      - Reports
+      operationId: createBatchReport
+      summary: Tạo báo cáo batch PDF hoặc CSV
+      parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MedicalReportExportRequest'
+      responses:
+        '201':
+          description: Báo cáo đã tạo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportDownload'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+  /api/v1/campaigns/{campaignId}/export:
+    get:
+      tags:
+      - Reports
+      operationId: exportCampaignReportCsv
+      summary: Tải CSV tổng kết campaign
+      description: CSV chỉ xuất mã ca ẩn danh, không xuất patient ID hoặc tên file.
+        Mọi ô động đều được quote và escape formula injection.
+      parameters:
+      - name: campaignId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/ClinicContext'
+      responses:
+        '200':
+          description: CSV tổng hợp và các ca đã ẩn danh
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Campaign không tồn tại trong tenant hiện hành
+  /api/v1/doctor/worklist:
+    get:
+      tags:
+      - Reviews
+      operationId: getDoctorWorklist
+      summary: Danh sách ca bệnh theo assignment hiện hành của bác sĩ
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Worklist đã lọc theo phạm vi clinic và assignment
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Analysis'
+        '403':
+          description: Người dùng không phải bác sĩ
+  /api/v1/doctor/analyses/{analysisId}:
+    get:
+      tags:
+      - Reviews
+      operationId: getDoctorAnalysis
+      summary: Đọc analysis trong ngữ cảnh doctor review
+      parameters:
+      - name: analysisId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Analysis và revision review
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Analysis'
+        '404':
+          description: Không tìm thấy hoặc ngoài phạm vi được phép
+  /api/v1/doctor/analyses/{analysisId}/reviews:
+    post:
+      tags:
+      - Reviews
+      operationId: submitDoctorReview
+      summary: Ghi revision review với optimistic concurrency
+      parameters:
+      - name: analysisId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DoctorReviewRequest'
+      responses:
+        '201':
+          description: Review revision đã commit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DoctorReview'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          description: Bác sĩ không được phân công
+        '409':
+          description: ERR_CONCURRENT_REVIEW hoặc ERR_INVALID_STATE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /internal/v1/analysis/settlements/resolve:
+    post:
+      tags:
+      - Analyses
+      operationId: resolveAnalysisSettlement
+      summary: Internal settlement resolver (scope analysis:reconcile)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InternalResolveRequest'
+      responses:
+        '200':
+          description: Kết quả đối soát
+        '401':
+          description: Service token không hợp lệ
+        '403':
+          description: Thiếu scope analysis:reconcile
+  /internal/v1/analysis/notification-context/resolve:
+    post:
+      tags:
+      - Analyses
+      operationId: resolveAnalysisNotificationContext
+      summary: Internal notification resolver (scope analysis:notify)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InternalResolveRequest'
+      responses:
+        '200':
+          description: Notification context đã kiểm tra quyền
+        '401':
+          description: Service token không hợp lệ
+        '403':
+          description: Thiếu scope analysis:notify
+  /api/v1/analyses/batches:
+    post:
+      tags:
+      - Analyses
+      operationId: createAnalysisBatch
+      summary: 'Compatibility upload: one image only; batches use item admission protocol'
+      description: Maximum one image and 12 MiB body. For multiple images use create
+        manifest, PUT each image, finalize. Patient authorization and credit saga
+        remain mandatory.
+      parameters:
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CreateAnalysisRequest'
+            encoding:
+              images:
+                contentType: image/jpeg, image/png
+      responses:
+        '202':
+          description: Batch được nhận trong transaction trước khi phát các job
+          headers:
+            Location:
+              schema:
+                type: string
+              description: URL theo dõi tiến độ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          description: Dependency tạm thời không khả dụng; gửi lại cùng Idempotency-Key
+      deprecated: true
+  /api/v1/analyses/batches/{batchId}:
+    get:
+      tags:
+      - Analyses
+      operationId: getAnalysisBatchProgress
+      summary: Đọc tiến độ batch từ PostgreSQL; Redis được dựng lại khi thiếu hoặc
+        sai lệch
+      parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/ClinicContext'
+      - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Trạng thái và số item đang xử lý, thành công, lỗi và trùng
+            lặp
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Batch'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: PostgreSQL không khả dụng
+  /api/v1/analysis-upload-batches:
+    post:
+      operationId: createUploadManifest
+      parameters:
+      - &id001
+        $ref: '#/components/parameters/ClinicContext'
+      - &id003
+        name: Idempotency-Key
+        in: header
+        required: true
+        schema: &id002
+          type: string
+          format: uuid
+      description: Create up to 100 immutable items, authorize patients per item in
+        one tenant. At most three unfinalized active manifests per actor. Staging
+        expires after 24 hours. No credit reservation yet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadManifest'
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadInventory'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Authentication required
+        '404':
+          description: Resource not found or outside current authorization
+        '409':
+          description: In progress or fingerprint conflict; reuse original item/batch
+            identity
+        '503':
+          description: Dependency/unknown outcome; reconcile inventory and retry same
+            keys
+  /api/v1/analysis-upload-batches/{batchId}:
+    get:
+      operationId: getUploadInventory
+      parameters:
+      - *id001
+      - name: batchId
+        in: path
+        required: true
+        schema: *id002
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadInventory'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Authentication required
+        '404':
+          description: Resource not found or outside current authorization
+        '409':
+          description: In progress or fingerprint conflict; reuse original item/batch
+            identity
+        '503':
+          description: Dependency/unknown outcome; reconcile inventory and retry same
+            keys
+  /api/v1/analysis-upload-batches/{batchId}/items/{itemId}:
+    put:
+      operationId: uploadDeclaredItem
+      parameters:
+      - *id001
+      - name: batchId
+        in: path
+        required: true
+        schema: *id002
+      - name: itemId
+        in: path
+        required: true
+        schema: *id002
+      - *id003
+      description: Exactly one image <=10 MiB; full request <=12 MiB. Idempotency-Key
+        must equal itemId. Default client pool 4, max 6. Same item with changed bytes
+        returns 409. No credit reservation before finalize.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - image
+              properties:
+                image:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadInventoryItem'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Authentication required
+        '404':
+          description: Resource not found or outside current authorization
+        '409':
+          description: In progress or fingerprint conflict; reuse original item/batch
+            identity
+        '503':
+          description: Dependency/unknown outcome; reconcile inventory and retry same
+            keys
+  /api/v1/analysis-upload-batches/{batchId}/finalize:
+    post:
+      operationId: finalizeUploadBatch
+      parameters:
+      - *id001
+      - name: batchId
+        in: path
+        required: true
+        schema: *id002
+      - *id003
+      description: Reauthorize and reserve/admit each staged item through durable
+        saga. UNKNOWN remains reserved/reconcilable and never silently released. Returns
+        legacy receipt with real parent batchId; rejected entries are explicit.
+      responses:
+        '202':
+          description: Durably finalized manifest receipt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+        '409':
+          description: Missing bytes or active admission
+        '503':
+          description: UNKNOWN admission; GET inventory and retry finalize with same
+            identities
+  /api/v1/reports/{reportId}/content:
+    get:
+      operationId: readReportBytes
+      parameters:
+      - *id001
+      - name: reportId
+        in: path
+        required: true
+        schema: *id002
+      description: Authenticated private byte proxy; current resource authorization
+        on every GET, no-store.
+      responses:
+        '200':
+          description: Authorized bytes
+          content:
+            application/pdf: &id004
+              schema:
+                type: string
+                format: binary
+            text/csv: *id004
+            application/zip: *id004
+        '401':
+          description: Bearer required
+        '404':
+          description: Missing, expired or unauthorized
+  /api/v1/analyses/{analysisId}/files/{fileId}/content:
+    get:
+      operationId: readAnalysisFileBytes
+      parameters:
+      - *id001
+      - name: analysisId
+        in: path
+        required: true
+        schema: *id002
+      - name: fileId
+        in: path
+        required: true
+        schema: *id002
+      description: Authenticated private byte proxy; current resource authorization
+        on every GET, no-store.
+      responses:
+        '200':
+          description: Authorized bytes
+          content:
+            image/png: &id005
+              schema:
+                type: string
+                format: binary
+            image/jpeg: *id005
+        '401':
+          description: Bearer required
+        '404':
+          description: Missing, expired or unauthorized
+  /internal/v1/analysis/bindings/{analysisId}:
+    get:
+      operationId: resolveAnalysisBinding
+      description: Service JWT analysis:binding; Profile validates assignment tenant
+        and patient. No PHI payload.
+      parameters:
+      - name: analysisId
+        in: path
+        required: true
+        schema: *id002
+      responses:
+        '200':
+          description: Authoritative binding
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - analysisId
+                - tenantId
+                - patientId
+                properties:
+                  analysisId: *id002
+                  tenantId: *id002
+                  patientId: *id002
+        '401':
+          description: Invalid service identity
+        '403':
+          description: Missing scope
+        '404':
+          description: Missing analysis
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'JWT đã xác minh từ Identity: sub, tenantId và role đối với người
+        dùng hoặc scope đối với service. Không tin tenant client gửi. analysis:ingest
+        chỉ cấp cho service tạo analysis trong tenant được phép.'
+  parameters:
+    ClinicContext:
+      name: clinicContextId
+      in: query
+      required: false
+      description: Optional clinic selector; Profile must authorize patient/assignment/tenant.
+        This value grants no permission.
+      schema:
+        type: string
+        format: uuid
+    AnalysisId:
+      name: analysisId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: UUID ổn định cho cùng request. Phạm vi (tenantId, requesterId,
+        key); cùng payload replay sau kiểm tra quyền, khác payload 409.
+      schema:
+        type: string
+        format: uuid
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Mã theo dõi xuyên dịch vụ. Nếu thiếu, Gateway/API tự sinh. Được
+        trả lại trong error.correlationId và ghi vào event/job.correlationId.
+      schema:
+        type: string
+        maxLength: 64
+  schemas:
+    MedicalReportExportRequest:
+      type: object
+      required:
+      - format
+      properties:
+        format:
+          type: string
+          enum:
+          - pdf
+          - csv
+    AnalysisReportFormatRequest:
+      type: object
+      required:
+      - format
+      properties:
+        format:
+          type: string
+          enum:
+          - pdf
+    ReportDownload:
+      type: object
+      required:
+      - reportId
+      - format
+      - downloadUrl
+      - expiresAt
+      properties:
+        reportId:
+          type: string
+          format: uuid
+        format:
+          type: string
+          enum:
+          - pdf
+          - csv
+          - zip
+        downloadUrl:
+          type: string
+          description: Relative authenticated /api/v1/reports/{reportId}/content endpoint;
+            send Firebase bearer. Expires after 15 minutes; permission checked on
+            every GET.
+        expiresAt:
+          type: string
+          format: date-time
+    DoctorReviewRequest:
+      type: object
+      required:
+      - isApproved
+      - baseVersion
+      properties:
+        isApproved:
+          type: boolean
+        baseVersion:
+          type: integer
+          minimum: 0
+        correctedRiskLevel:
+          $ref: '#/components/schemas/RiskLevel'
+        reason:
+          type: string
+          maxLength: 1000
+        doctorNotes:
+          type: string
+          maxLength: 2000
+        icdrLevel:
+          type: string
+          enum:
+          - NO_DR
+          - MILD_NPDR
+          - MODERATE_NPDR
+          - SEVERE_NPDR
+          - PROLIFERATIVE_DR
+          description: Bác sĩ ghi nhận trực tiếp; chỉ chấp nhận khi isApproved=true,
+            không suy diễn từ kết quả AI.
+    DoctorReview:
+      type: object
+      required:
+      - reviewId
+      - analysisId
+      - version
+      - isApproved
+      - doctorId
+      - createdAt
+      - aiResultVersion
+      properties:
+        reviewId:
+          type: string
+          format: uuid
+        analysisId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        isApproved:
+          type: boolean
+        correctedRiskLevel:
+          $ref: '#/components/schemas/RiskLevel'
+        doctorNotes:
+          type: string
+        doctorId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        aiResultVersion:
+          type: integer
+          minimum: 1
+        icdrLevel:
+          type: string
+          enum:
+          - NO_DR
+          - MILD_NPDR
+          - MODERATE_NPDR
+          - SEVERE_NPDR
+          - PROLIFERATIVE_DR
+    InternalResolveRequest:
+      type: object
+      additionalProperties: true
+    ProcessingStatus:
+      type: string
+      enum: &id006
+      - PENDING
+      - QUEUED
+      - PROCESSING
+      - COMPLETED
+      - FAILED
+      - RETRY_READY
+      - LOW_QUALITY
+      - REJECTED
+      - DUPLICATE
+      description: Theo State Machine SCRUM-52 (nhóm Analysis, Analysis error, Validation).
+    RiskLevel:
+      type: string
+      enum:
+      - LOW
+      - MODERATE
+      - HIGH
+      description: Khớp output AI của M4.
+    CreateAnalysisRequest:
+      type: object
+      required:
+      - patientId
+      - images
+      properties:
+        patientId:
+          type: string
+          format: uuid
+        images:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            type: string
+            format: binary
+          description: 1..N ảnh đáy mắt (JPEG/PNG). Mỗi ảnh tạo một analysis riêng,
+            cùng một batchId. Ảnh lưu object storage, DB chỉ giữ tham chiếu.
+        modality:
+          type: string
+          enum:
+          - FUNDUS
+          default: FUNDUS
+          description: Chỉ FUNDUS; OCT hoặc giá trị khác trả 400 ERR_VALIDATION trước
+            job và hold credit.
+        eyeSide:
+          type: string
+          enum:
+          - left
+          - right
+          - unknown
+          default: unknown
+      description: Một batch của cùng patientId. Backend xác minh quan hệ bệnh nhân/principal
+        hoặc assignment/tenant; không mặc định patientId = token.sub.
+    AnalysisAccepted:
+      type: object
+      required:
+      - batchId
+      - items
+      - createdAt
+      - statusUrl
+      properties:
+        batchId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/BatchItem'
+        createdAt:
+          type: string
+          format: date-time
+        statusUrl:
+          type: string
+          description: URL batch status; hỗ trợ /api/v1/analyses/batches/{batchId}
+            và alias /api/v1/batches/{batchId}.
+    BatchResponse:
+      type: object
+      required:
+      - batchId
+      - items
+      - createdAt
+      - statusUrl
+      properties:
+        batchId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/AcceptedBatchItem'
+        createdAt:
+          type: string
+          format: date-time
+        statusUrl:
+          type: string
+          format: uri-reference
+    AcceptedBatchItem:
+      type: object
+      required:
+      - analysisId
+      - fileName
+      - processingStatus
+      properties:
+        analysisId:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+        processingStatus:
+          $ref: '#/components/schemas/ProcessingStatus'
+        error:
+          $ref: '#/components/schemas/ItemError'
+        existingAnalysisId:
+          type: string
+          format: uuid
+    ItemError:
+      type: object
+      required:
+      - code
+      - message
+      - retryable
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+    AnalysisResult:
+      type: object
+      required:
+      - riskLevel
+      - riskScore
+      - confidenceScore
+      - isMock
+      - modelVersion
+      - configVersion
+      - thresholdVersion
+      - disclaimer
+      - version
+      properties:
+        riskLevel:
+          $ref: '#/components/schemas/RiskLevel'
+        riskScore:
+          type: number
+          minimum: 0
+          maximum: 1
+        confidenceScore:
+          type: number
+          minimum: 0
+          maximum: 1
+        metrics:
+          $ref: '#/components/schemas/Metrics'
+        indicators:
+          type: array
+          items:
+            type: string
+        modelVersion:
+          type: string
+        disclaimer:
+          type: string
+        isMock:
+          type: boolean
+          description: true khi là dữ liệu giả lập (ADR-008)
+        thresholdVersion:
+          type: string
+          description: Phiên bản ngưỡng (NFR-23)
+        annotations:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileRef'
+          description: FileRef với fileId và kind. Runtime hiện chỉ tạo kind mask/overlay;
+            kind khác dự phòng, không tự sinh. Annotation khớp kích thước ảnh gốc.
+        configVersion:
+          type: string
+          description: Phiên bản cấu hình/ngưỡng áp dụng (NFR-23, ADR-008)
+        version:
+          type: integer
+          minimum: 1
+          description: Version kết quả AI theo ảnh; dùng để xác định kết quả được
+            review.
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Warning'
+          description: Cảnh báo của kết quả hợp lệ. WARNING không tự đồng nghĩa LOW_QUALITY.
+        processingTimeMs:
+          type: number
+          minimum: 0
+          description: Ánh xạ AI processing_time_ms; chỉ thời gian component, không
+            phải NFR toàn luồng.
+        limitations:
+          type: string
+          description: Giới hạn nguồn AI; không biến mock thành kết quả thật.
+        resultId: *id002
+    Analysis:
+      type: object
+      required:
+      - analysisId
+      - batchId
+      - patientId
+      - processingStatus
+      - reviewStatus
+      - createdAt
+      - updatedAt
+      properties:
+        analysisId:
+          type: string
+          format: uuid
+        patientId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        result:
+          $ref: '#/components/schemas/AnalysisResult'
+        latestReview:
+          $ref: '#/components/schemas/Review'
+        batchId:
+          type: string
+          format: uuid
+        processingStatus:
+          $ref: '#/components/schemas/ProcessingStatus'
+        reviewStatus:
+          $ref: '#/components/schemas/ReviewStatus'
+        error:
+          $ref: '#/components/schemas/ErrorInfo'
+        existingAnalysisId:
+          type: string
+          format: uuid
+          description: Có khi DUPLICATE
+        ownerId:
+          type: string
+          format: uuid
+          description: Principal sở hữu resource theo policy; không mặc định là requester.
+        image:
+          $ref: '#/components/schemas/FileRef'
+        job:
+          $ref: '#/components/schemas/Job'
+        requesterId:
+          type: string
+          format: uuid
+          description: Principal tạo request, được backend xác định.
+    AnalysisList:
+      type: object
+      required:
+      - items
+      - page
+      - pageSize
+      - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Analysis'
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+    ReviewRequest:
+      description: 'Hai nhánh loại trừ: xác nhận chỉ isApproved/baseVersion/doctorNotes;
+        hiệu chỉnh bắt buộc correctedRiskLevel và reason có ký tự không phải khoảng
+        trắng. Backend trim và kiểm tra quyền/version trong transaction.'
+      oneOf:
+      - type: object
+        title: Confirm AI result
+        required:
+        - isApproved
+        - baseVersion
+        properties:
+          isApproved:
+            type: boolean
+            enum:
+            - true
+            description: Xác nhận kết quả AI hiện tại.
+          baseVersion:
+            type: integer
+            minimum: 0
+            description: Phiên bản review hiện tại; lệch => 409 ERR_CONCURRENT_REVIEW.
+          doctorNotes:
+            type: string
+            maxLength: 2000
+        additionalProperties: false
+      - type: object
+        title: Correct AI result
+        required:
+        - isApproved
+        - baseVersion
+        - correctedRiskLevel
+        - reason
+        properties:
+          isApproved:
+            type: boolean
+            enum:
+            - false
+            description: Bác sĩ không chấp nhận kết quả AI và thực hiện hiệu chỉnh.
+          baseVersion:
+            type: integer
+            minimum: 0
+            description: Phiên bản review hiện tại; lệch => 409 ERR_CONCURRENT_REVIEW.
+          correctedRiskLevel:
+            $ref: '#/components/schemas/RiskLevel'
+          doctorNotes:
+            type: string
+            maxLength: 2000
+          reason:
+            type: string
+            minLength: 1
+            maxLength: 1000
+            description: Bắt buộc khi hiệu chỉnh (ADR-008).
+            pattern: \S
+        additionalProperties: false
+    Review:
+      type: object
+      required:
+      - reviewId
+      - analysisId
+      - version
+      - isApproved
+      - doctorId
+      - createdAt
+      - aiResultVersion
+      properties:
+        reviewId:
+          type: string
+          format: uuid
+        analysisId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        isApproved:
+          type: boolean
+        correctedRiskLevel:
+          $ref: '#/components/schemas/RiskLevel'
+        doctorNotes:
+          type: string
+        doctorId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          pattern: \S
+        aiResultVersion:
+          type: integer
+          description: Phiên bản kết quả AI gốc được review; bản gốc không bị ghi
+            đè
+          minimum: 1
+      description: Append-only, version tăng theo analysisId; tham chiếu AnalysisResult
+        đúng ảnh. Không ghi đè AI. aiResultVersion không phải review version.
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: object
+          required:
+          - code
+          - message
+          - correlationId
+          - retryable
+          properties:
+            code:
+              type: string
+              description: 'Mã lỗi ERR_*. Ánh xạ tên trong State Machine (SCRUM-52):
+                VALIDATION_ERROR=ERR_VALIDATION, UNAUTHORIZED=ERR_UNAUTHORIZED, FORBIDDEN=ERR_FORBIDDEN,
+                NOT_FOUND=ERR_NOT_FOUND, IDEMPOTENCY_KEY_REUSED=ERR_IDEMPOTENCY_KEY_REUSED,
+                REVIEW_VERSION_CONFLICT=ERR_CONCURRENT_REVIEW, INVALID_STATE=ERR_INVALID_STATE,
+                TOO_MANY_REQUESTS=ERR_TOO_MANY_REQUESTS. Lỗi ở lớp xử lý AI: ERR_AI_FAILED,
+                ERR_TIMEOUT, ERR_NETWORK, ERR_IMAGE_LOW_QUALITY, ERR_IMAGE_MISSING,
+                ERR_INSUFFICIENT_CREDIT, ERR_DUPLICATE_REQUEST. Doctor review/report:
+                ERR_INVALID_STATE, ERR_CONCURRENT_REVIEW, ERR_REPORT_SOURCE_MISSING.'
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  issue:
+                    type: string
+            correlationId:
+              type: string
+            retryable:
+              type: boolean
+    Metrics:
+      type: object
+      properties:
+        vesselDensity:
+          type: number
+        tortuosityIndex:
+          type: number
+        avRatio:
+          type: number
+        fractalDimension:
+          type: number
+        branchingPoints:
+          type: integer
+    ReviewStatus:
+      type: string
+      enum:
+      - NOT_REQUIRED
+      - PENDING
+      - IN_REVIEW
+      - REVIEWED
+      - CORRECTION_REQUIRED
+      description: Runtime v0.6 dùng NOT_REQUIRED → PENDING → REVIEWED. IN_REVIEW/CORRECTION_REQUIRED
+        là dự phòng, chưa có operation; backend/fixtures không tự sinh. COMPLETED
+        đưa về PENDING, review thành công đưa REVIEWED.
+    BatchItem:
+      type: object
+      required:
+      - analysisId
+      - processingStatus
+      properties:
+        analysisId:
+          type: string
+          format: uuid
+        existingAnalysisId:
+          type: string
+          format: uuid
+          description: Có khi processingStatus là DUPLICATE; ID phân tích gốc trong
+            phạm vi dedupe đã được kiểm quyền. Không tự cấp quyền đọc resource được
+            tham chiếu.
+        fileName:
+          type: string
+        processingStatus:
+          $ref: '#/components/schemas/ProcessingStatus'
+        reviewStatus:
+          $ref: '#/components/schemas/ReviewStatus'
+        riskLevel:
+          $ref: '#/components/schemas/RiskLevel'
+        error:
+          $ref: '#/components/schemas/ErrorInfo'
+        job:
+          $ref: '#/components/schemas/Job'
+    Batch:
+      type: object
+      required:
+      - batchId
+      - items
+      - createdAt
+      - batchStatus
+      - summary
+      properties:
+        batchId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchItem'
+        createdAt:
+          type: string
+          format: date-time
+        batchStatus:
+          type: string
+          enum:
+          - IN_PROGRESS
+          - COMPLETED
+          - PARTIAL_FAILED
+          - FAILED
+          description: 'IN_PROGRESS nếu còn PENDING/QUEUED/PROCESSING/RETRY_READY
+            hoặc FAILED còn retry. Khi tất cả terminal: COMPLETED nếu không có FAILED/LOW_QUALITY/REJECTED;
+            PARTIAL_FAILED nếu có lỗi và có COMPLETED hoặc DUPLICATE; FAILED nếu mọi
+            item đều lỗi. DUPLICATE là item đã được bỏ qua hợp lệ, không có nghĩa
+            tạo kết quả AI mới. Summary/items chỉ gồm tài nguyên được phép thấy.'
+        summary:
+          $ref: '#/components/schemas/BatchSummary'
+        totalDeclared:
+          type: integer
+          minimum: 0
+          description: Manifest items; processing summary.total counts accepted only.
+        admissionRejected:
+          type: integer
+          minimum: 0
+          description: Rejected before processing; no reservation.
+        uploadPending:
+          type: integer
+          minimum: 0
+          description: Not accepted or rejected yet, including UNKNOWN.
+    ErrorInfo:
+      type: object
+      required:
+      - code
+      - message
+      - retryable
+      properties:
+        code:
+          type: string
+          enum:
+          - ERR_AI_FAILED
+          - ERR_TIMEOUT
+          - ERR_NETWORK
+          - ERR_IMAGE_LOW_QUALITY
+          - ERR_IMAGE_MISSING
+          - ERR_INSUFFICIENT_CREDIT
+          - ERR_UNAUTHORIZED
+          - ERR_DUPLICATE_REQUEST
+          - ERR_VALIDATION
+          - ERR_UNSUPPORTED_MODALITY
+          - ERR_CONCURRENT_REVIEW
+          - ERR_IDEMPOTENCY_KEY_REUSED
+          - ERR_INVALID_STATE
+          - ERR_REPORT_SOURCE_MISSING
+        message:
+          type: string
+        retryable:
+          type: boolean
+        retryCount:
+          type: integer
+          description: Số retry đã thực hiện, suy ra attemptNo - 1; không phải cột
+            Job.retry_count.
+          minimum: 0
+      description: Lý do khi processingStatus là FAILED, LOW_QUALITY, REJECTED hoặc
+        DUPLICATE.
+    FileRef:
+      type: object
+      required:
+      - fileId
+      - kind
+      properties:
+        fileId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+          - original
+          - mask
+          - overlay
+          - heatmap
+          - annotated
+      description: Tham chiếu tệp riêng tư; không chứa URL hay object key.
+    FileAccess:
+      type: object
+      required:
+      - url
+      - expiresAt
+      properties:
+        url:
+          type: string
+          description: Relative authenticated content proxy; send Firebase bearer
+            on every byte download. No public SAS URL.
+        expiresAt:
+          type: string
+          format: date-time
+    Job:
+      type: object
+      required:
+      - jobId
+      - status
+      - retryCount
+      - attemptNo
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - QUEUED
+          - RUNNING
+          - SUCCEEDED
+          - FAILED
+          - RETRY_READY
+          - DEAD_LETTER
+        retryCount:
+          type: integer
+          minimum: 0
+        attemptNo:
+          type: integer
+          minimum: 1
+      description: Job hiện hành/gần nhất của ảnh. Một Job = một attempt; retry tạo
+        jobId mới. retryCount = attemptNo - 1.
+    Warning:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          minLength: 1
+        message:
+          type: string
+          minLength: 1
+    BatchSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - total
+      - active
+      - succeeded
+      - failed
+      - duplicate
+      - byStatus
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        active:
+          type: integer
+          minimum: 0
+        succeeded:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        duplicate:
+          type: integer
+          minimum: 0
+        byStatus:
+          type: object
+          additionalProperties: false
+          required: *id006
+          properties:
+            PENDING:
+              type: integer
+              minimum: 0
+            QUEUED:
+              type: integer
+              minimum: 0
+            PROCESSING:
+              type: integer
+              minimum: 0
+            COMPLETED:
+              type: integer
+              minimum: 0
+            FAILED:
+              type: integer
+              minimum: 0
+            RETRY_READY:
+              type: integer
+              minimum: 0
+            LOW_QUALITY:
+              type: integer
+              minimum: 0
+            REJECTED:
+              type: integer
+              minimum: 0
+            DUPLICATE:
+              type: integer
+              minimum: 0
+      description: total=active+succeeded+failed+duplicate=sum(byStatus). succeeded=COMPLETED;
+        duplicate=DUPLICATE; active gồm trạng thái đang chạy/chờ và FAILED retryable
+        còn được retry; failed chỉ lỗi kết thúc FAILED/LOW_QUALITY/REJECTED. byStatus
+        đếm trạng thái thô. Backend kiểm tra các invariant, JSON Schema không biểu
+        diễn phép cộng.
+    UploadManifestItem:
+      type: object
+      required:
+      - itemId
+      - patientId
+      - fileName
+      - sha256
+      - modality
+      - eyeSide
+      properties:
+        itemId: *id002
+        patientId: *id002
+        fileName:
+          type: string
+          maxLength: 255
+        sha256:
+          type: string
+          pattern: ^[a-fA-F0-9]{64}$
+        modality:
+          type: string
+          enum:
+          - FUNDUS
+        eyeSide:
+          type: string
+          enum:
+          - left
+          - right
+          - unknown
+    UploadManifest:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/UploadManifestItem'
+    UploadInventoryItem:
+      allOf:
+      - $ref: '#/components/schemas/UploadManifestItem'
+      - type: object
+        required:
+        - uploadStatus
+        properties:
+          uploadStatus:
+            type: string
+            enum:
+            - DECLARED
+            - STAGED
+            - REJECTED
+            - UNKNOWN
+            - ACCEPTED
+          analysisId: *id002
+          error:
+            type: object
+            properties:
+              code:
+                type: string
+              message:
+                type: string
+              retryable:
+                type: boolean
+    UploadInventory:
+      type: object
+      required:
+      - batchId
+      - createdAt
+      - expiresAt
+      - status
+      - statusUrl
+      - items
+      properties:
+        batchId: *id002
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+          - UPLOADING
+          - FINALIZING
+          - FINALIZED
+          - EXPIRED
+        statusUrl:
+          type: string
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/UploadInventoryItem'
+        finalizedResponse:
+          $ref: '#/components/schemas/BatchResponse'
+  responses:
+    ValidationError:
+      description: Dữ liệu không hợp lệ
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_VALIDATION
+              message: Dữ liệu không hợp lệ.
+              details:
+              - field: image
+                issue: required
+              correlationId: c0ffee00-0000-4000-8000-000000000001
+              retryable: false
+    Unauthorized:
+      description: Thiếu hoặc sai token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_UNAUTHORIZED
+              message: Cần đăng nhập.
+              correlationId: c0ffee00-0000-4000-8000-000000000002
+              retryable: false
+    Forbidden:
+      description: Vai trò không được phép dùng chức năng này
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_FORBIDDEN
+              message: Bạn không có quyền thực hiện thao tác này.
+              correlationId: c0ffee00-0000-4000-8000-000000000003
+              retryable: false
+    NotFound:
+      description: 'Không tồn tại, khác tenant, không phải của mình hoặc không được
+        phân công (cùng một phản hồi, không phân biệt). Với tạo yêu cầu: patientId
+        ngoài phạm vi.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_NOT_FOUND
+              message: Không tìm thấy tài nguyên.
+              correlationId: c0ffee00-0000-4000-8000-000000000004
+              retryable: false
+    Conflict:
+      description: Xung đột trạng thái / idempotency / phiên bản review
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            keyReused:
+              value:
+                error:
+                  code: ERR_IDEMPOTENCY_KEY_REUSED
+                  message: Idempotency-Key đã dùng với nội dung khác.
+                  correlationId: c0ffee00-0000-4000-8000-000000000005
+                  retryable: false
+            requestInProgress:
+              value:
+                error:
+                  code: ERR_REQUEST_IN_PROGRESS
+                  message: Yêu cầu cùng khóa đang được hoàn tất. Gửi lại cùng key
+                    và payload.
+                  correlationId: c0ffee00-0000-4000-8000-000000000010
+                  retryable: true
+    InsufficientCredit:
+      description: Không đủ credit (tính từ DB, không từ cache - BR-09)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_INSUFFICIENT_CREDIT
+              message: Không đủ credit.
+              correlationId: c0ffee00-0000-4000-8000-000000000006
+              retryable: false
+    PayloadTooLarge:
+      description: Ảnh quá lớn
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_PAYLOAD_TOO_LARGE
+              message: File vượt giới hạn kích thước theo policy.
+              correlationId: c0ffee00-0000-4000-8000-000000000007
+              retryable: false
+    UnsupportedMedia:
+      description: Định dạng ảnh không hỗ trợ
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_UNSUPPORTED_MEDIA_TYPE
+              message: Chỉ nhận ảnh JPEG hoặc PNG.
+              correlationId: c0ffee00-0000-4000-8000-000000000008
+              retryable: false
+    TooManyRequests:
+      description: Vượt giới hạn tần suất
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 0
+            example: 30
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: ERR_TOO_MANY_REQUESTS
+              message: Vượt giới hạn tần suất. Thử lại sau thời gian Retry-After.
+              correlationId: c0ffee00-0000-4000-8000-000000000009
+              retryable: true

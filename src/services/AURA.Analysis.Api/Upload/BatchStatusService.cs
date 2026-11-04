@@ -22,7 +22,12 @@ public sealed record BatchPublicItem(Guid AnalysisId, string? FileName, string P
 public sealed record BatchPublicSummary(int Total, int Active, int Succeeded, int Failed, int Duplicate,
     IReadOnlyDictionary<string, int> ByStatus);
 public sealed record BatchStatusResponse(Guid BatchId, IReadOnlyList<BatchPublicItem> Items, DateTime CreatedAt,
-    string BatchStatus, BatchPublicSummary Summary);
+    string BatchStatus, BatchPublicSummary Summary)
+{
+    public int? TotalDeclared { get; init; }
+    public int? AdmissionRejected { get; init; }
+    public int? UploadPending { get; init; }
+}
 
 /// <summary>Current Batch/BatchSummary rules in Analysis REST 0.6. A FAILED retry waiting for another attempt is active.</summary>
 public static class BatchStatusProjection
@@ -102,7 +107,7 @@ public static class BatchStatusProjection
 }
 
 public sealed class BatchStatusService(IBatchStatusRepository repository, IPatientAccessResolver access,
-    IBatchRedisProgressService? batchProgress = null)
+    IBatchRedisProgressService? batchProgress = null, IGroupedBatchStatusReader? groups = null)
 {
     private static UploadFailure Missing() => new(404, "ERR_NOT_FOUND", "Không tìm thấy tài nguyên.");
 
@@ -115,6 +120,7 @@ public sealed class BatchStatusService(IBatchStatusRepository repository, IPatie
         if (batchId == Guid.Empty) throw Missing();
         try
         {
+            if(groups is not null && await groups.TryReadAsync(requesterId,clinicId,batchId,correlationId,ct) is {} grouped)return grouped;
             var identity = await repository.FindIdentityAsync(batchId, ct);
             if (identity is null) throw Missing();
             if (identity.BatchId != batchId || identity.TenantId == Guid.Empty || identity.PatientId == Guid.Empty || identity.OwnerId == Guid.Empty)

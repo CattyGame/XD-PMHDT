@@ -35,7 +35,6 @@ public class JobProcessor : IJobProcessor
     private readonly WorkerOptions _workerOptions;
     private readonly ILogger<JobProcessor> _logger;
     private readonly IBatchRedisProgressService _batchProgress;
-    private readonly IBatchCompletedEventPublisher _batchEvents;
     private readonly string _workerInstanceId;
 
     public JobProcessor(
@@ -45,7 +44,6 @@ public class JobProcessor : IJobProcessor
         IAiHttpClient aiClient,
         IProfileResolveClient profileClient,
         IBatchRedisProgressService batchProgress,
-        IBatchCompletedEventPublisher batchEvents,
         IOptions<WorkerOptions> workerOptions,
         ILogger<JobProcessor> logger)
     {
@@ -55,7 +53,6 @@ public class JobProcessor : IJobProcessor
         _aiClient = aiClient;
         _profileClient = profileClient;
         _batchProgress = batchProgress;
-        _batchEvents = batchEvents;
         _workerOptions = workerOptions.Value;
         _logger = logger;
         _workerInstanceId = $"worker-{Environment.MachineName}-{Guid.NewGuid():N}";
@@ -115,16 +112,22 @@ public class JobProcessor : IJobProcessor
             TimeSpan.FromSeconds(_workerOptions.LeaseSeconds),
             cancellationToken);
 
-        if (!leaseAcquired)
+        if (leaseAcquired is null)
         {
             _logger.LogWarning("Could not acquire lease for job {JobId}. Requeuing message.", message.JobId);
             return JobProcessResult.Requeue;
         }
 
+        var lease = leaseAcquired;
+        using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        await using var heartbeat = new LeaseHeartbeat(_jobRepo,lease,
+            TimeSpan.FromSeconds(Math.Max(1,Math.Min(_workerOptions.HeartbeatSeconds,_workerOptions.LeaseSeconds/3))),
+            TimeSpan.FromSeconds(_workerOptions.LeaseSeconds),operation,_logger);
+        cancellationToken=operation.Token;
+
         // 4. Recheck Profile access BEFORE downloading original image
         var initialAccess = await _profileClient.RecheckAccessAsync(
-            analysis.TenantId,
-            analysis.PatientId,
+            new WorkerAccessContext(analysis.TenantId, analysis.RequesterId, analysis.PatientId, analysis.ClinicContextId, analysis.AnalysisId),
             "ANALYSIS_READ",
             cancellationToken);
 
@@ -145,7 +148,7 @@ public class JobProcessor : IJobProcessor
                 ErrorCodes.ErrUnauthorized,
                 AnalysisStatus.Rejected);
 
-            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, job.JobId, AnalysisStatus.Rejected,
+            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, lease, AnalysisStatus.Rejected,
                 JsonSerializer.Serialize(new { error = "ANALYSIS_ABORT", reason = initialAccess.Reason }), abortEvt, cancellationToken);
             await RecordBatchOutcomeAsync(message, analysis, isSuccess: false, cancellationToken);
             return JobProcessResult.AckFailure;
@@ -168,7 +171,7 @@ public class JobProcessor : IJobProcessor
                 ErrorCodes.ErrImageMissing,
                 AnalysisStatus.Failed);
 
-            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, job.JobId, AnalysisStatus.Failed,
+            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, lease, AnalysisStatus.Failed,
                 JsonSerializer.Serialize(new { error = ErrorCodes.ErrImageMissing, message = ex.Message }), missingEvt, cancellationToken);
             await RecordBatchOutcomeAsync(message, analysis, isSuccess: false, cancellationToken);
             return JobProcessResult.AckFailure;
@@ -177,7 +180,7 @@ public class JobProcessor : IJobProcessor
         // 6. Record durable AI-call intent BEFORE HTTP invocation
         if (_workerOptions.DurableCallIntent)
         {
-            await _jobRepo.RecordCallIntentAsync(job.JobId, cancellationToken);
+            await _jobRepo.RecordCallIntentAsync(lease, cancellationToken);
         }
 
         // 7. Invoke AI REST API
@@ -210,7 +213,7 @@ public class JobProcessor : IJobProcessor
                     ErrorCodes.ErrImageLowQuality,
                     AnalysisStatus.LowQuality);
 
-                await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, job.JobId, AnalysisStatus.LowQuality,
+                await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, lease, AnalysisStatus.LowQuality,
                     JsonSerializer.Serialize(new { errorCode = ErrorCodes.ErrImageLowQuality, message = aiResult.ErrorMessage }), lqEvt, cancellationToken);
                 await RecordBatchOutcomeAsync(message, analysis, isSuccess: false, cancellationToken);
                 return JobProcessResult.AckFailure;
@@ -231,14 +234,14 @@ public class JobProcessor : IJobProcessor
                     var nextJob = await _jobRepo.CreateNextAttemptJobAsync(job, nextAttempt, cancellationToken);
                     var retryMsg = OutboxEventFactory.CreateRetryJobMessage(
                         analysis.TenantId,
-                        analysis.BatchId,
+                        analysis.PublicBatchId ?? analysis.BatchId,
                         analysis.AnalysisId,
                         nextJob.JobId,
                         message.ImageFileId,
                         nextAttempt,
-                        message.CorrelationId);
+                        message.CorrelationId, nextJob.MessageId);
 
-                    await _analysisRepo.ScheduleRetryAsync(analysis.AnalysisId, job.JobId, nextAttempt,
+                    await _analysisRepo.ScheduleRetryAsync(analysis.AnalysisId, lease, nextJob,
                         TimeSpan.FromSeconds(delaySeconds), retryMsg, cancellationToken);
                     return JobProcessResult.AckSuccess;
                 }
@@ -253,7 +256,7 @@ public class JobProcessor : IJobProcessor
                         aiResult.ErrorCode ?? ErrorCodes.ErrAiFailed,
                         AnalysisStatus.Failed);
 
-                    await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, job.JobId, AnalysisStatus.Failed,
+                    await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, lease, AnalysisStatus.Failed,
                         JsonSerializer.Serialize(new { errorCode = aiResult.ErrorCode ?? ErrorCodes.ErrAiFailed, message = aiResult.ErrorMessage }), failEvt, cancellationToken);
                     await RecordBatchOutcomeAsync(message, analysis, isSuccess: false, cancellationToken);
                     return JobProcessResult.AckFailure;
@@ -269,7 +272,7 @@ public class JobProcessor : IJobProcessor
                 aiResult.ErrorCode ?? ErrorCodes.ErrAiFailed,
                 AnalysisStatus.Failed);
 
-            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, job.JobId, AnalysisStatus.Failed,
+            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, lease, AnalysisStatus.Failed,
                 JsonSerializer.Serialize(new { errorCode = aiResult.ErrorCode ?? ErrorCodes.ErrAiFailed, message = aiResult.ErrorMessage }), termEvt, cancellationToken);
             await RecordBatchOutcomeAsync(message, analysis, isSuccess: false, cancellationToken);
             return JobProcessResult.AckFailure;
@@ -296,16 +299,18 @@ public class JobProcessor : IJobProcessor
                 validation.ErrorCode ?? ErrorCodes.ErrAiOutputInvalid,
                 AnalysisStatus.Failed);
 
-            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, job.JobId, AnalysisStatus.Failed,
+            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, lease, AnalysisStatus.Failed,
                 JsonSerializer.Serialize(new { errorCode = validation.ErrorCode, message = validation.ErrorMessage }), invalidEvt, cancellationToken);
             await RecordBatchOutcomeAsync(message, analysis, isSuccess: false, cancellationToken);
             return JobProcessResult.AckFailure;
         }
 
+        lease = await _jobRepo.RenewLeaseAsync(lease, TimeSpan.FromSeconds(_workerOptions.LeaseSeconds), cancellationToken)
+            ?? throw new JobLeaseLostException(lease.JobId);
+
         // 10. Recheck Profile access BEFORE committing result
         var preCommitAccess = await _profileClient.RecheckAccessAsync(
-            analysis.TenantId,
-            analysis.PatientId,
+            new WorkerAccessContext(analysis.TenantId, analysis.RequesterId, analysis.PatientId, analysis.ClinicContextId, analysis.AnalysisId),
             "ANALYSIS_READ",
             cancellationToken);
 
@@ -320,7 +325,7 @@ public class JobProcessor : IJobProcessor
                 ErrorCodes.ErrUnauthorized,
                 AnalysisStatus.Rejected);
 
-            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, job.JobId, AnalysisStatus.Rejected,
+            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId, lease, AnalysisStatus.Rejected,
                 JsonSerializer.Serialize(new { error = "ANALYSIS_ABORT", reason = preCommitAccess.Reason }), abortEvt, cancellationToken);
             await RecordBatchOutcomeAsync(message, analysis, isSuccess: false, cancellationToken);
             return JobProcessResult.AckFailure;
@@ -336,16 +341,34 @@ public class JobProcessor : IJobProcessor
         var maskKey = $"{analysis.TenantId}/{analysis.BatchId}/{analysis.AnalysisId}/mask-{maskFileId}.png";
         var overlayKey = $"{analysis.TenantId}/{analysis.BatchId}/{analysis.AnalysisId}/overlay-{overlayFileId}.png";
 
+        AnnotationDescriptor maskMetadata;
+        AnnotationDescriptor overlayMetadata;
+        try
+        {
+            maskMetadata=AnnotationMetadata.FromPng(maskFileId,"MASK",maskKey,maskBytes);
+            overlayMetadata=AnnotationMetadata.FromPng(overlayFileId,"OVERLAY",overlayKey,overlayBytes);
+            if(maskMetadata.Width!=aiResponse.ImageInfo.Width || maskMetadata.Height!=aiResponse.ImageInfo.Height
+                || overlayMetadata.Width!=aiResponse.ImageInfo.Width || overlayMetadata.Height!=aiResponse.ImageInfo.Height)
+                throw new InvalidDataException("AI annotation geometry differs from its image info.");
+        }
+        catch(InvalidDataException)
+        {
+            var invalid=OutboxEventFactory.CreateFailedEvent(analysis.TenantId,analysis.AnalysisId,analysis.PatientId,
+                message.CorrelationId,ErrorCodes.ErrAiOutputInvalid,AnalysisStatus.Failed);
+            await _analysisRepo.CommitFailureAsync(analysis.AnalysisId,lease,AnalysisStatus.Failed,"{}",invalid,cancellationToken);
+            await RecordBatchOutcomeAsync(message,analysis,false,cancellationToken);
+            return JobProcessResult.AckFailure;
+        }
         await _blobService.UploadAnnotationAsync(maskKey, maskBytes, "image/png", cancellationToken);
         await _blobService.UploadAnnotationAsync(overlayKey, overlayBytes, "image/png", cancellationToken);
 
         // 12. Build public AnalysisResult shape (camelCase per OpenAPI 0.7.0)
         var resultDto = new
         {
-            riskAvailable = false,
-            riskLevel = (string?)null,
-            riskScore = (double?)null,
-            confidenceScore = (double?)null,
+            riskAvailable = aiResponse.RiskAvailable,
+            riskLevel = aiResponse.RiskAssessment?.RiskLevel,
+            riskScore = aiResponse.RiskAssessment?.RiskScore,
+            confidenceScore = aiResponse.RiskAssessment?.ConfidenceScore,
             isMock = false,
             modelVersion = aiResponse.ModelVersion,
             configVersion = aiResponse.ConfigVersion,
@@ -384,7 +407,14 @@ public class JobProcessor : IJobProcessor
             aiResponse.ThresholdVersion);
 
         // 14. Commit Result + Analysis status + Job status + Outbox in SINGLE transaction
-        await _analysisRepo.CommitSuccessAsync(analysis.AnalysisId, job.JobId, resultJson, completedEvt, cancellationToken);
+        await _analysisRepo.CommitSuccessAsync(
+            analysis.AnalysisId,
+            lease,
+            resultJson,
+            new[] { maskMetadata,overlayMetadata },
+            completedEvt,
+            cancellationToken);
+
         await RecordBatchOutcomeAsync(message, analysis, isSuccess: true, cancellationToken);
         _logger.LogInformation("Successfully processed and committed analysis {AnalysisId}", analysis.AnalysisId);
 
@@ -393,24 +423,8 @@ public class JobProcessor : IJobProcessor
 
     private async Task RecordBatchOutcomeAsync(JobRunMessage message, AnalysisRecord analysis, bool isSuccess, CancellationToken cancellationToken)
     {
-        BatchImageCompletionResult result;
-        try
-        {
-            result = await _batchProgress.RecordImageOutcomeAsync(analysis.BatchId, analysis.AnalysisId, isSuccess);
-        }
-        catch (Exception ex)
-        {
-            // Result and job state are already committed. Redis is a rebuildable progress cache;
-            // a cache outage must not cause the worker to re-run a completed image.
-            _logger.LogWarning(ex, "Could not update Redis progress for batch {BatchId}; PostgreSQL remains authoritative", analysis.BatchId);
-            return;
-        }
-        if (result.IsBatchFinished)
-        {
-            _logger.LogInformation("Batch {BatchId} finished: status={Status}, completed={Completed}, failed={Failed}",
-                result.BatchId, result.BatchStatus, result.Completed, result.Failed);
-            await _batchEvents.PublishAsync(analysis.TenantId, analysis.BatchId, analysis.PatientId,
-                message.CorrelationId, result, cancellationToken);
-        }
+        // Completion is already durable in the terminal DB transaction. Redis failures never re-run AI.
+        try { await _batchProgress.RecordImageOutcomeAsync(analysis.PublicBatchId ?? analysis.BatchId, analysis.AnalysisId, isSuccess); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Redis cache update failed for batch {BatchId}", analysis.BatchId); }
     }
 }

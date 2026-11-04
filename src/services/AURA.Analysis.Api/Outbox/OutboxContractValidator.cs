@@ -45,7 +45,7 @@ internal static class OutboxContractValidator
             case "batch.completed":
                 if (!Keys(d,"batchId","patientId","batchStatus","totalImages","completedImages","failedImages")
                     || !Uuid(d,"batchId") || !Uuid(d,"patientId")
-                    || Str(d,"batchStatus") is not ("COMPLETED" or "PARTIAL_COMPLETED" or "FAILED")
+                    || Str(d,"batchStatus") is not ("COMPLETED" or "PARTIAL_FAILED" or "FAILED")
                     || !NonNegativeInteger(d,"completedImages") || !NonNegativeInteger(d,"failedImages")
                     || !Integer(d,"totalImages") || d.GetProperty("totalImages").GetInt32() > 100) return false;
                 return d.GetProperty("completedImages").GetInt32() + d.GetProperty("failedImages").GetInt32()
@@ -53,7 +53,7 @@ internal static class OutboxContractValidator
                     && Uuid(e,"analysisId") && (Str(d,"batchStatus") switch
                     {
                         "COMPLETED" => d.GetProperty("failedImages").GetInt32() == 0,
-                        "PARTIAL_COMPLETED" => d.GetProperty("completedImages").GetInt32() > 0 && d.GetProperty("failedImages").GetInt32() > 0,
+                        "PARTIAL_FAILED" => d.GetProperty("completedImages").GetInt32() > 0 && d.GetProperty("failedImages").GetInt32() > 0,
                         "FAILED" => d.GetProperty("completedImages").GetInt32() == 0 && d.GetProperty("failedImages").GetInt32() > 0,
                         _ => false
                     });

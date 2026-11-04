@@ -26,6 +26,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\services\Aura.Worker.Analysis\Aura.Worker.Analysis.csproj" />
+    <Compile Include="../../src/services/AURA.Analysis.Api/Outbox/Models.cs" Link="ApiOutbox/Models.cs" />
+    <Compile Include="../../src/services/AURA.Analysis.Api/Outbox/OutboxMessageMapper.cs" Link="ApiOutbox/OutboxMessageMapper.cs" />
+    <Compile Include="../../src/services/AURA.Analysis.Api/Outbox/OutboxContractValidator.cs" Link="ApiOutbox/OutboxContractValidator.cs" />
+    <Compile Include="../../src/services/AURA.Analysis.Api/Outbox/OutboxOptions.cs" Link="ApiOutbox/OutboxOptions.cs" />
   </ItemGroup>
 
 </Project>
