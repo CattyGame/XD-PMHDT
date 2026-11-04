@@ -13,6 +13,7 @@ import AppRouter from './AppRouter'
 import AnalysisResultPage from '../pages/AnalysisResultPage'
 import NotificationInboxPage from '../pages/NotificationInboxPage'
 import CampaignManagementPage from '../pages/CampaignManagementPage'
+import DoctorWorkspacePage from '../pages/doctor/DoctorWorkspacePage'
 import ClinicUploadPage from '../pages/ClinicUploadPage'
 
 function DemoScope({ children }: { children: ReactNode }) {
@@ -41,6 +42,7 @@ export default function ApplicationRoutes() {
       <Route path="*" element={<NotFoundPage />} />
       <Route path="/analyses/:analysisId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><NotificationInboxPage /></ProtectedRoute>}/>
+      <Route path="/doctor/workspace" element={<ProtectedRoute><DoctorWorkspacePage /></ProtectedRoute>} />
       <Route path="/campaigns" element={<ProtectedRoute><CampaignManagementPage /></ProtectedRoute>}/>
     </Routes>
   )
