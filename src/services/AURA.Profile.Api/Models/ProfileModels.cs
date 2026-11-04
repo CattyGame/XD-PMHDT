@@ -158,7 +158,8 @@ public sealed record ClinicMembershipDto(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("createdAt")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("updatedAt")] DateTimeOffset UpdatedAt,
-    [property: JsonPropertyName("invitedEmail")] string? InvitedEmail = null
+    [property: JsonPropertyName("invitedEmail")] string? InvitedEmail = null,
+    [property: JsonPropertyName("invitationToken")] string? InvitationToken = null
 );
 
 public sealed record ClinicMemberListResponse(
@@ -289,3 +290,5 @@ public sealed record TransferDoctorAssignmentRequest(
     [property: JsonPropertyName("newDoctorId")] Guid NewDoctorId,
     [property: JsonPropertyName("notes")] string? Notes = null
 );
+
+public sealed record AcceptClinicInvitationRequest(string Token);

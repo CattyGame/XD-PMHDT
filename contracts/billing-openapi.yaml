@@ -1,21 +1,21 @@
 openapi: 3.0.3
 info:
   title: AURA Billing API
-  version: 0.1.0
-  description: >-
-    Sprint 2 Billing contract. Internal endpoints are service-to-service only and
-    must not be routed through the public Gateway. The package catalog remains a
-    compatibility view of the legacy demo catalog until official price versions
+  version: 0.2.0
+  description: Sprint 2 Billing contract. Internal endpoints are service-to-service
+    only and must not be routed through the public Gateway. The package catalog remains
+    a compatibility view of the legacy demo catalog until official price versions
     are published.
 servers:
-  - url: http://127.0.0.1:5002
-    description: Local Development Billing API
+- url: http://127.0.0.1:5002
+  description: Local Development Billing API
 paths:
   /api/v1/billing/packages:
     get:
       operationId: getPackageCatalog
       summary: Get the legacy package catalog
-      description: Anonymous endpoint. Returned prices are demo data, not approved business prices.
+      description: Anonymous endpoint. Returned prices are demo data, not approved
+        business prices.
       responses:
         '200':
           description: Catalog returned.
@@ -23,7 +23,12 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [data, source, cacheHit, ttlSeconds, databaseReadCount]
+                required:
+                - data
+                - source
+                - cacheHit
+                - ttlSeconds
+                - databaseReadCount
                 properties:
                   data:
                     type: array
@@ -41,16 +46,17 @@ paths:
     put:
       operationId: updateLegacyPackage
       summary: Update the legacy PoC package
-      description: Requires a valid Firebase user token whose current Identity roles include SYSTEM_ADMIN. Still updates the legacy PoC catalog only.
+      description: Requires a valid Firebase user token whose current Identity roles
+        include SYSTEM_ADMIN. Still updates the legacy PoC catalog only.
       security:
-        - FirebaseBearer: []
+      - FirebaseBearer: []
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-        - $ref: '#/components/parameters/CorrelationId'
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -74,12 +80,15 @@ paths:
     post:
       operationId: reserveAnalysisCredit
       summary: Reserve one credit for a new FUNDUS analysis
-      description: Caller must be analysis-api with billing:reserve. Billing environment and mock mode are server configuration, not request fields. Billing re-resolves access with Profile and verifies that tenant, patient and billing owner match the request before changing credit.
+      description: Caller must be analysis-api with billing:reserve. Billing environment
+        and mock mode are server configuration, not request fields. Billing re-resolves
+        access with Profile and verifies that tenant, patient and billing owner match
+        the request before changing credit.
       security:
-        - ServiceBearer: []
+      - ServiceBearer: []
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-        - $ref: '#/components/parameters/CorrelationId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -99,7 +108,8 @@ paths:
             Idempotent-Replayed:
               schema:
                 type: string
-                enum: ['true']
+                enum:
+                - 'true'
           content:
             application/json:
               schema:
@@ -121,15 +131,15 @@ paths:
       operationId: getBillingReservation
       summary: Read a reservation state
       security:
-        - ServiceBearer: []
+      - ServiceBearer: []
       parameters:
-        - name: reservationId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationId'
+      - name: reservationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationId'
       responses:
         '200':
           description: Reservation state.
@@ -149,18 +159,21 @@ paths:
     post:
       operationId: captureBillingReservation
       summary: Capture a reservation after a valid completed result
-      description: Requires the billing:capture scope. In the current contract, the event consumer should call the domain service in-process; this HTTP route is retained for the internal interface and is not authorized for analysis-api by the current registry.
+      description: Requires the billing:capture scope. In the current contract, the
+        event consumer should call the domain service in-process; this HTTP route
+        is retained for the internal interface and is not authorized for analysis-api
+        by the current registry.
       security:
-        - ServiceBearer: []
+      - ServiceBearer: []
       parameters:
-        - name: reservationId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/IdempotencyKey'
-        - $ref: '#/components/parameters/CorrelationId'
+      - name: reservationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -190,16 +203,16 @@ paths:
       operationId: releaseBillingReservation
       summary: Release a reservation after a confirmed abort/final failure
       security:
-        - ServiceBearer: []
+      - ServiceBearer: []
       parameters:
-        - name: reservationId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/IdempotencyKey'
-        - $ref: '#/components/parameters/CorrelationId'
+      - name: reservationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -225,6 +238,72 @@ paths:
           $ref: '#/components/responses/ErrorResponse'
         '503':
           $ref: '#/components/responses/ErrorResponse'
+  /api/v1/admin/billing/reservations/batch-refund:
+    post:
+      summary: Audited full refund approved by a verified SYSTEM_ADMIN
+      description: Firebase token resolved by Identity; actor/role headers grant no
+        permission. Full refund once per captured reservation; same key/different
+        reason or approval conflicts. Ledger retains approved_by/refund_authority.
+        No partial-credit refund.
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: &id001
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - tenantId
+              - items
+              properties:
+                tenantId: *id001
+                batchId: *id001
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required:
+                    - reservationId
+                    - reason
+                    properties:
+                      reservationId: *id001
+                      reason:
+                        type: string
+                        minLength: 1
+                        maxLength: 500
+      responses:
+        '200':
+          description: Per-reservation full-refund/replay results
+        '401':
+          description: Invalid Firebase token
+        '403':
+          description: SYSTEM_ADMIN required
+        '409':
+          description: Idempotency or reservation state conflict
+  /internal/v1/billing/reservations/batch-refund:
+    post:
+      summary: Evidence-bound terminal release/full-refund
+      description: Analysis service identity only. billing:release for RESERVED; billing:refund
+        for CAPTURED. Authoritative Analysis RELEASE evidence must match tenant,analysis,reservation,generation.
+        UNKNOWN/active outcomes return conflict and retain held credit. Refund authority
+        and evidence are audited.
+      responses:
+        '200':
+          description: Idempotent per-reservation outcome
+        '403':
+          description: Service/scope denied
+        '409':
+          description: No authoritative terminal release evidence
+        '503':
+          description: Evidence unavailable; HOLD
 components:
   securitySchemes:
     FirebaseBearer:
@@ -253,7 +332,11 @@ components:
   schemas:
     Package:
       type: object
-      required: [id, name, price, credits]
+      required:
+      - id
+      - name
+      - price
+      - credits
       properties:
         id:
           type: integer
@@ -265,7 +348,10 @@ components:
           type: integer
     UpdatePackageRequest:
       type: object
-      required: [name, price, credits]
+      required:
+      - name
+      - price
+      - credits
       properties:
         name:
           type: string
@@ -279,7 +365,14 @@ components:
           minimum: 1
     ReserveCreditRequest:
       type: object
-      required: [analysisId, tenantId, actorAccountId, patientId, billingOwner, units, generation]
+      required:
+      - analysisId
+      - tenantId
+      - actorAccountId
+      - patientId
+      - billingOwner
+      - units
+      - generation
       properties:
         analysisId:
           type: string
@@ -295,30 +388,47 @@ components:
           format: uuid
         billingOwner:
           type: object
-          required: [type, id]
+          required:
+          - type
+          - id
           properties:
             type:
               type: string
-              enum: [ACCOUNT, CLINIC]
+              enum:
+              - ACCOUNT
+              - CLINIC
             id:
               type: string
               format: uuid
         units:
           type: integer
-          enum: [1]
+          enum:
+          - 1
         generation:
           type: integer
           minimum: 1
     ReleaseCreditRequest:
       type: object
-      required: [reason]
+      required:
+      - reason
       properties:
         reason:
           type: string
-          enum: [VALIDATION_ABORT, STORAGE_ABORT, ANALYSIS_ABORT, FINAL_FAILURE, LOW_QUALITY]
+          enum:
+          - VALIDATION_ABORT
+          - STORAGE_ABORT
+          - ANALYSIS_ABORT
+          - FINAL_FAILURE
+          - LOW_QUALITY
     Reservation:
       type: object
-      required: [reservationId, analysisId, generation, units, state, createdAt]
+      required:
+      - reservationId
+      - analysisId
+      - generation
+      - units
+      - state
+      - createdAt
       properties:
         reservationId:
           type: string
@@ -332,17 +442,25 @@ components:
           type: integer
         state:
           type: string
-          enum: [RESERVED, CAPTURED, RELEASED]
+          enum:
+          - RESERVED
+          - CAPTURED
+          - RELEASED
         createdAt:
           type: string
           format: date-time
     ErrorEnvelope:
       type: object
-      required: [error]
+      required:
+      - error
       properties:
         error:
           type: object
-          required: [code, message, correlationId, retryable]
+          required:
+          - code
+          - message
+          - correlationId
+          - retryable
           properties:
             code:
               type: string

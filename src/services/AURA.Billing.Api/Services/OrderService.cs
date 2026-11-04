@@ -229,6 +229,8 @@ public sealed class OrderService
         using var sha = SHA256.Create();
         return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
     }
+
+
 }
 
 public enum OrderOperationStatus

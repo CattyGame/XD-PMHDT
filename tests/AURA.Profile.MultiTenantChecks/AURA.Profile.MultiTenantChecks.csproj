@@ -14,5 +14,12 @@
              Link="ProfileModels.cs" />
     <Compile Include="../../src/services/AURA.Profile.Api/ProfileRepository.cs"
              Link="ProfileRepository.cs" />
+
+    <Compile Include="../../src/services/AURA.Profile.Api/AccountAuthority.cs" Link="AccountAuthority.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/ProfileRepository.Security.cs" Link="ProfileRepository.Security.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/AnalysisBindingAuthority.cs" Link="AnalysisBindingAuthority.cs" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.12" />
+    <Compile Include="../../src/services/AURA.Profile.Api/UserIdentityResolver.cs" Link="UserIdentityResolver.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/ProfilePublicMembershipEndpoints.cs" Link="ProfilePublicMembershipEndpoints.cs" />
   </ItemGroup>
 </Project>

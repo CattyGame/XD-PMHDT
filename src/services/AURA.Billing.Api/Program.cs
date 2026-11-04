@@ -87,6 +87,7 @@ builder.Services.AddSingleton<PackageCatalogService>();
 builder.Services.AddSingleton<OrderRepository>();
 builder.Services.AddSingleton<PaymentSignatureService>();
 builder.Services.AddSingleton<OrderService>();
+builder.Services.AddSingleton<BillingOwnerAuthorizer>();
 builder.Services.AddSingleton<CreditReservationRepository>();
 builder.Services.AddSingleton<CreditSettlementService>();
 builder.Services.AddSingleton<StaleReservationReconciliationService>();
@@ -235,6 +236,7 @@ app.MapPost("/api/v1/billing/orders", async Task<IResult> (
     HttpContext context,
     OrderService orderService,
     BillingRuntimeOptions runtimeOptions,
+    BillingOwnerAuthorizer ownerAuthorizer,
     CancellationToken cancellationToken) =>
 {
     if (!TryReadIdempotencyKey(context, out var idempotencyKey))
@@ -252,6 +254,11 @@ app.MapPost("/api/v1/billing/orders", async Task<IResult> (
         return BillingError(context, StatusCodes.Status400BadRequest, "ERR_VALIDATION",
             "PackageId phải lớn hơn 0 và BillingOwner (ACCOUNT hoặc CLINIC) là bắt buộc.");
     }
+
+    var authority = await ownerAuthorizer.AuthorizeAsync(context.Request,request.BillingOwner.Type.ToUpperInvariant(),request.BillingOwner.Id,true,cancellationToken);
+    if(!authority.Allowed)return BillingError(context,authority.StatusCode,authority.Code,"Billing owner access denied.",authority.StatusCode==503);
+    if(request.TenantId.HasValue && request.TenantId!=authority.TenantId)return BillingError(context,403,"ERR_FORBIDDEN","Tenant does not match authoritative context.");
+    request=request with {TenantId=authority.TenantId};
 
     var result = await orderService.CreateOrderAsync(
         request, idempotencyKey, runtimeOptions, cancellationToken);
@@ -289,12 +296,22 @@ app.MapGet("/api/v1/billing/orders/{orderId:guid}", async Task<IResult> (
     Guid orderId,
     HttpContext context,
     OrderRepository repository,
+    BillingOwnerAuthorizer ownerAuthorizer,
     CancellationToken cancellationToken) =>
 {
+    var authenticated=await ownerAuthorizer.AuthenticateAsync(context.Request,cancellationToken);
+    if(!authenticated.Allowed)return BillingError(context,authenticated.StatusCode,authenticated.Code,"Authentication required.",authenticated.StatusCode==503);
     var order = await repository.GetOrderByIdAsync(orderId, cancellationToken);
-    return order is null
-        ? BillingError(context, StatusCodes.Status404NotFound, "ERR_NOT_FOUND", "Không tìm thấy đơn hàng.")
-        : Results.Ok(order);
+    if (order is null)
+    {
+        return BillingError(context, StatusCodes.Status404NotFound, "ERR_NOT_FOUND", "Không tìm thấy đơn hàng.");
+    }
+
+    var authority=await ownerAuthorizer.AuthorizeAsync(context.Request,order.BillingOwnerType,order.BillingOwnerId,false,cancellationToken);
+    if(!authority.Allowed)return BillingError(context,authority.StatusCode,authority.Code,"Billing owner access denied.",authority.StatusCode==503);
+    if(authority.TenantId!=order.TenantId)return BillingError(context,404,"ERR_NOT_FOUND","Order not found.");
+
+    return Results.Ok(order);
 })
 .WithName("GetBillingOrder")
 .WithTags("Billing Orders")
@@ -362,6 +379,8 @@ app.MapPost("/api/v1/billing/sandbox/pay", async Task<IResult> (
     SandboxPaymentRequest request,
     HttpContext context,
     OrderService orderService,
+    OrderRepository repository,
+    BillingOwnerAuthorizer ownerAuthorizer,
     CancellationToken cancellationToken) =>
 {
     if (request.OrderId == Guid.Empty)
@@ -369,6 +388,18 @@ app.MapPost("/api/v1/billing/sandbox/pay", async Task<IResult> (
         return BillingError(context, StatusCodes.Status400BadRequest, "ERR_VALIDATION",
             "OrderId là bắt buộc.");
     }
+
+    var authenticated=await ownerAuthorizer.AuthenticateAsync(context.Request,cancellationToken);
+    if(!authenticated.Allowed)return BillingError(context,authenticated.StatusCode,authenticated.Code,"Authentication required.",authenticated.StatusCode==503);
+    var order = await repository.GetOrderByIdAsync(request.OrderId, cancellationToken);
+    if (order is null)
+    {
+        return BillingError(context, StatusCodes.Status404NotFound, "ERR_NOT_FOUND", "Không tìm thấy đơn hàng.");
+    }
+
+    var authority=await ownerAuthorizer.AuthorizeAsync(context.Request,order.BillingOwnerType,order.BillingOwnerId,true,cancellationToken);
+    if(!authority.Allowed)return BillingError(context,authority.StatusCode,authority.Code,"Billing owner access denied.",authority.StatusCode==503);
+    if(authority.TenantId!=order.TenantId)return BillingError(context,404,"ERR_NOT_FOUND","Order not found.");
 
     var result = await orderService.SimulateSandboxPaymentAsync(request, cancellationToken);
     if (result.Status == "NOT_FOUND")
@@ -634,15 +665,30 @@ app.MapPost("/internal/v1/billing/reservations/{reservationId:guid}/release", as
 // SCRUM-348: Billing Cấp Tổ chức, Reconciliation Engine & Batch Partial Refund
 // =============================================================================
 
+app.MapPost("/api/v1/admin/billing/reservations/batch-refund", async Task<IResult> (
+    BatchRefundRequest request,HttpContext context,SystemAdminAuthorizer admins,BillingOwnerAuthorizer identities,CreditReservationRepository repository,CancellationToken ct) =>
+{
+    var permitted=await admins.AuthorizeAsync(context.Request,ct);
+    if(!permitted.Allowed)return BillingError(context,permitted.StatusCode,permitted.Code,permitted.Message,permitted.Retryable);
+    var actor=await identities.AuthenticateAsync(context.Request,ct);
+    if(!actor.Allowed)return BillingError(context,actor.StatusCode,actor.Code,"Verified administrator identity required.",actor.StatusCode==503);
+    if(!TryReadIdempotencyKey(context,out var key) || request.TenantId==Guid.Empty || request.Items is null || request.Items.Count is <1 or >100
+        || request.Items.Any(i=>i.ReservationId==Guid.Empty || string.IsNullOrWhiteSpace(i.Reason) || i.Reason.Length>500))
+        return BillingError(context,400,"ERR_VALIDATION","Refund requires tenant,1–100 reservations,explicit reasons and Idempotency-Key.");
+    var result=await repository.ExecuteBatchRefundAsync(request,key,true,ct,new RefundAuthorization(actor.AccountId,"SYSTEM_ADMIN"));
+    return Results.Ok(result);
+});
+
 app.MapPost("/internal/v1/billing/reservations/batch-refund", async Task<IResult> (
     BatchRefundRequest request,
     HttpContext context,
     ServiceTokenValidator tokenValidator,
     CreditReservationRepository repository,
+    AnalysisSettlementResolverClient resolver,
     CancellationToken cancellationToken) =>
 {
-    var tokenResult = await tokenValidator.ValidateAsync(
-        context.Request, "billing:release", "analysis-api", cancellationToken);
+    var tokenResult = await tokenValidator.ValidateAnyScopeAsync(
+        context.Request, ["billing:refund", "billing:release"], "analysis-api", cancellationToken);
     if (!tokenResult.Succeeded)
     {
         return BillingError(context, tokenResult.StatusCode, tokenResult.Code,
@@ -655,62 +701,31 @@ app.MapPost("/internal/v1/billing/reservations/batch-refund", async Task<IResult
             "Header Idempotency-Key hợp lệ dạng UUID là bắt buộc.");
     }
 
-    if (request.TenantId == Guid.Empty || request.Items is null || request.Items.Count == 0)
+    if (request.TenantId == Guid.Empty || request.Items is null || request.Items.Count is <1 or >100 || request.Items.Any(i=>i.ReservationId==Guid.Empty))
     {
         return BillingError(context, StatusCodes.Status400BadRequest, "ERR_VALIDATION",
             "TenantId và danh sách items cần hoàn credit không được rỗng.");
     }
 
-    var results = new List<BatchRefundItemResult>();
-    var refundedCount = 0;
-    var creditsRefunded = 0;
-
-    foreach (var item in request.Items)
+    var canRefundCaptured = tokenResult.HasScope("billing:refund");
+    var evidence=new Dictionary<Guid,string>();
     {
-        if (item.ReservationId == Guid.Empty)
+        foreach(var item in request.Items)
         {
-            results.Add(new BatchRefundItemResult(item.ReservationId, "INVALID_ID", false, "ReservationId rỗng."));
-            continue;
-        }
-
-        var itemReason = string.IsNullOrWhiteSpace(item.Reason) ? "BATCH_PARTIAL_REFUND" : item.Reason.Trim().ToUpperInvariant();
-        var itemKeyBytes = System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes($"{batchIdempotencyKey:D}|{item.ReservationId:D}"));
-        var itemGuidBytes = new byte[16];
-        Array.Copy(itemKeyBytes, itemGuidBytes, 16);
-        var itemKey = new Guid(itemGuidBytes);
-
-        var fingerprint = ReservationFingerprint.ForRelease(item.ReservationId, itemReason);
-        var result = await repository.ReleaseAsync(item.ReservationId, itemKey, fingerprint, itemReason, cancellationToken);
-
-        if (result.Status == ReservationOperationStatus.Changed && result.Reservation is not null)
-        {
-            refundedCount++;
-            creditsRefunded += result.Reservation.Units;
-            results.Add(new BatchRefundItemResult(item.ReservationId, "RELEASED", true));
-        }
-        else if (result.Status == ReservationOperationStatus.Replayed && result.Reservation is not null)
-        {
-            results.Add(new BatchRefundItemResult(item.ReservationId, "ALREADY_RELEASED", false, "Đã được hoàn credit trước đó (Replayed)."));
-        }
-        else if (result.Status == ReservationOperationStatus.NotFound)
-        {
-            results.Add(new BatchRefundItemResult(item.ReservationId, "NOT_FOUND", false, "Không tìm thấy reservation."));
-        }
-        else
-        {
-            results.Add(new BatchRefundItemResult(item.ReservationId, "CONFLICT", false, "Trạng thái không cho phép hoàn credit."));
+            var reservation=await repository.GetAsync(item.ReservationId,request.TenantId,cancellationToken);
+            if(reservation is null)return BillingError(context,404,"ERR_NOT_FOUND","Không tìm thấy reservation.");
+            if(reservation.State is not ("CAPTURED" or "RESERVED"))continue;
+            if(reservation.State=="CAPTURED" && !canRefundCaptured)return BillingError(context,403,"ERR_FORBIDDEN","Captured refund requires billing:refund.");
+            var eventId=new Guid(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"refund-evidence|{item.ReservationId:D}|{reservation.Generation}"))[..16]);
+            SettlementResolutionResponse decision;
+            try{decision=await resolver.ResolveAsync(eventId,reservation.AnalysisId,request.TenantId,context.Items["CorrelationId"] as string,cancellationToken);}
+            catch(SettlementResolverCallException){return BillingError(context,503,"ERR_REFUND_EVIDENCE_UNAVAILABLE","Refund outcome could not be verified.",true);}
+            if(!decision.Applicable || decision.SettlementAction!="RELEASE" || decision.TenantId!=request.TenantId || decision.AnalysisId!=reservation.AnalysisId || decision.ReservationId!=item.ReservationId || decision.Generation!=reservation.Generation)
+                return BillingError(context,409,"ERR_REFUND_EVIDENCE_REQUIRED","Captured refund requires authoritative terminal-failure evidence or an audited SYSTEM_ADMIN approval.");
+            evidence[item.ReservationId]=$"{eventId:D}|{reservation.AnalysisId:D}|{reservation.Generation}|{decision.Reason}";
         }
     }
-
-    var response = new BatchRefundResponse(
-        request.TenantId,
-        request.BatchId,
-        request.Items.Count,
-        refundedCount,
-        creditsRefunded,
-        results);
-
+    var response = await repository.ExecuteBatchRefundAsync(request, batchIdempotencyKey, canRefundCaptured, cancellationToken,new RefundAuthorization(null,"ANALYSIS_TERMINAL",evidence));
     return Results.Ok(response);
 })
 .WithName("BatchRefundReservations")

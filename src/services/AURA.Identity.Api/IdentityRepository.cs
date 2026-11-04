@@ -105,4 +105,26 @@ public class IdentityRepository
         cmd.Parameters.AddWithValue(accountId);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    public async Task<BootstrapResponse?> GetAccountByIdAsync(Guid accountId)
+    {
+        await using var connection=await _dataSource.OpenConnectionAsync();
+        await using var cmd=new NpgsqlCommand("SELECT firebase_uid FROM identity.accounts WHERE account_id=$1",connection);
+        cmd.Parameters.AddWithValue(accountId);
+        var uid=await cmd.ExecuteScalarAsync() as string;
+        return uid is null ? null : await GetAccountByFirebaseUidAsync(uid);
+    }
+    public async Task<bool> SetDoctorCapabilityAsync(Guid actor, Guid target, bool approved, string reason)
+    {
+        await using var connection=await _dataSource.OpenConnectionAsync();
+        await using var tx=await connection.BeginTransactionAsync();
+        await using var account=new NpgsqlCommand("SELECT account_id FROM identity.accounts WHERE account_id=$1 AND account_status='ACTIVE' FOR UPDATE",connection,tx);
+        account.Parameters.AddWithValue(target);
+        if(await account.ExecuteScalarAsync() is null)return false;
+        await using var role=new NpgsqlCommand(approved ? "INSERT INTO identity.account_roles(account_id,role_name) VALUES($1,'DOCTOR') ON CONFLICT DO NOTHING" : "DELETE FROM identity.account_roles WHERE account_id=$1 AND role_name='DOCTOR'",connection,tx);
+        role.Parameters.AddWithValue(target);await role.ExecuteNonQueryAsync();
+        await using var audit=new NpgsqlCommand("INSERT INTO identity.doctor_capability_audit(actor_account_id,target_account_id,approved,reason) VALUES($1,$2,$3,$4)",connection,tx);
+        audit.Parameters.AddWithValue(actor);audit.Parameters.AddWithValue(target);audit.Parameters.AddWithValue(approved);audit.Parameters.AddWithValue(reason);await audit.ExecuteNonQueryAsync();
+        await tx.CommitAsync();return true;
+    }
 }

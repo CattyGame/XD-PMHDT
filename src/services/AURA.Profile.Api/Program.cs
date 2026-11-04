@@ -13,6 +13,8 @@ var postgresConnString = builder.Configuration.GetConnectionString("Postgres")
     ?? "Host=127.0.0.1;Port=5432;Database=aura_dev;Username=aura_profile_app;Password=aura_profile_pass;";
 
 builder.Services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(postgresConnString));
+builder.Services.AddSingleton<IAccountAuthority, AccountAuthority>();
+builder.Services.AddSingleton<IAnalysisBindingAuthority, AnalysisBindingAuthority>();
 builder.Services.AddSingleton<ProfileRepository>();
 builder.Services.AddSingleton<UserIdentityResolver>();
 
@@ -31,6 +33,13 @@ builder.Services.AddHttpClient("IdentityClient", (sp, client) =>
 })
 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
 .RedactLoggedHeaders(new[] { "Authorization", "X-User-Authorization" });
+
+builder.Services.AddHttpClient("AnalysisClient", client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["Services:Analysis:BaseUrl"] ??
+        (Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true" ? "http://analysis-api:8080" : "http://127.0.0.1:5001"));
+    client.Timeout = TimeSpan.FromSeconds(5);
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
 builder.Services.AddSingleton<ServiceTokenValidator>();
 
@@ -250,6 +259,27 @@ app.MapPost("/internal/v1/profile/access/resolve", async (
 .WithName("ResolveAccess")
 .WithTags("Internal");
 
+app.MapPost("/internal/v1/profile/billing-owner/resolve", async Task<IResult> (HttpRequest request, BillingOwnerResolveRequest body, ProfileRepository repository, ServiceTokenValidator validator, CancellationToken ct) =>
+{
+    var bearer=request.Headers.Authorization.ToString();
+    if(!bearer.StartsWith("Bearer ",StringComparison.OrdinalIgnoreCase))return Results.Unauthorized();
+    var(valid,_,code,_)=await validator.ValidateTokenAsync(bearer[7..],"aura-profile","profile:resolve");
+    if(!valid)return Results.StatusCode(code=="ERR_FORBIDDEN"?403:401);
+    try {return Results.Ok(await repository.ResolveBillingOwnerAsync(body.ActorAccountId,body.OwnerType,body.OwnerId,body.Action,ct));}
+    catch(Exception e)when(e is HttpRequestException or IOException or System.Text.Json.JsonException){return Results.StatusCode(503);}
+});
+
+app.MapPost("/internal/v1/profile/clinic-access/resolve", async Task<IResult> (HttpRequest request, ClinicAccessRequest body, ProfileRepository repository, ServiceTokenValidator validator, CancellationToken ct) =>
+{
+    var bearer=request.Headers.Authorization.ToString();
+    if(!bearer.StartsWith("Bearer ",StringComparison.OrdinalIgnoreCase))return Results.Unauthorized();
+    var(valid,_,code,_)=await validator.ValidateTokenAsync(bearer[7..],"aura-profile","profile:resolve");
+    if(!valid)return Results.StatusCode(code=="ERR_FORBIDDEN"?403:401);
+    try { return Results.Ok(await repository.ResolveClinicAccessAsync(body.ActorAccountId,body.ClinicId,body.Action,ct)); }
+    catch(Exception e)when(e is HttpRequestException or IOException or System.Text.Json.JsonException or OperationCanceledException && !ct.IsCancellationRequested)
+    {return Results.StatusCode(503);}
+});
+
 // 5. POST /internal/v1/profile/camera-delegation/resolve (Bảo vệ bằng Service JWT: scope profile:resolve)
 app.MapPost("/internal/v1/profile/camera-delegation/resolve", async (
     HttpRequest request,
@@ -287,6 +317,8 @@ app.MapPost("/internal/v1/profile/camera-delegation/resolve", async (
 // --- CLINIC LIFECYCLE & MEMBERSHIP ENDPOINTS (Task W4-M6-01 / SCRUM-358) ---
 
 // POST /api/v1/clinics (Đăng ký phòng khám mới)
+
+
 app.MapPost("/api/v1/clinics", async (
     RegisterClinicRequest body,
     HttpRequest request,
@@ -424,6 +456,10 @@ app.MapPost("/api/v1/clinics/{clinicId:guid}/memberships/invite", async (
 })
 .WithName("InviteClinicMember")
 .WithTags("Clinics");
+
+// 5b. POST /api/v1/clinics/invitations/{membershipId:guid}/accept (Chấp nhận lời mời phòng khám - ADR-005 D2)
+
+
 
 // 6. GET /api/v1/clinics/{clinicId:guid}/memberships
 app.MapGet("/api/v1/clinics/{clinicId:guid}/memberships", async (
@@ -902,6 +938,7 @@ app.MapPost("/api/v1/clinics/{clinicId:guid}/patients", async (
     var (allowed, failureReason) = await repository.CheckClinicAccessAuthorityAsync(
         identity.AccountId, clinicId, identity.Roles, ct);
 
+    allowed = allowed && (await repository.ResolveClinicAccessAsync(identity.AccountId,clinicId,"REGISTRY_MANAGE",ct)).Allowed;
     if (!allowed)
     {
         if (failureReason == "CLINIC_NOT_FOUND" || failureReason == "NOT_A_MEMBER")
@@ -981,8 +1018,8 @@ app.MapGet("/api/v1/clinics/{clinicId:guid}/patients", async (
             statusCode: StatusCodes.Status403Forbidden);
     }
 
-    var (success, response, errCode, errMsg) = await repository.GetClinicPatientsAsync(
-        clinicId, search, status, limit, offset, ct);
+    var (success, response, errCode, errMsg) = await repository.GetClinicPatientsForActorAsync(
+        identity.AccountId, clinicId, search, status, limit, offset, ct);
 
     if (!success)
     {
@@ -1017,6 +1054,7 @@ app.MapGet("/api/v1/clinics/{clinicId:guid}/patients/{patientId:guid}", async (
     var (allowed, failureReason) = await repository.CheckClinicAccessAuthorityAsync(
         identity.AccountId, clinicId, identity.Roles, ct);
 
+    allowed = allowed && await repository.CanAccessRegistryPatientAsync(identity.AccountId,clinicId,patientId,false,ct);
     if (!allowed)
     {
         if (failureReason == "CLINIC_NOT_FOUND" || failureReason == "NOT_A_MEMBER")
@@ -1039,7 +1077,8 @@ app.MapGet("/api/v1/clinics/{clinicId:guid}/patients/{patientId:guid}", async (
             statusCode: StatusCodes.Status404NotFound);
     }
 
-    return Results.Ok(patient);
+    var registryPolicy=await repository.ResolveClinicAccessAsync(identity.AccountId,clinicId,"REGISTRY_READ",ct);
+    return Results.Ok(registryPolicy.Role=="STAFF" ? patient! with {MedicalHistory=null} : patient);
 })
 .WithName("GetClinicPatientById")
 .WithTags("ClinicPatients");
@@ -1066,6 +1105,7 @@ app.MapPatch("/api/v1/clinics/{clinicId:guid}/patients/{patientId:guid}", async 
     var (allowed, failureReason) = await repository.CheckClinicAccessAuthorityAsync(
         identity.AccountId, clinicId, identity.Roles, ct);
 
+    allowed = allowed && await repository.CanAccessRegistryPatientAsync(identity.AccountId,clinicId,patientId,true,ct);
     if (!allowed)
     {
         if (failureReason == "CLINIC_NOT_FOUND" || failureReason == "NOT_A_MEMBER")
@@ -1080,6 +1120,8 @@ app.MapPatch("/api/v1/clinics/{clinicId:guid}/patients/{patientId:guid}", async 
             statusCode: StatusCodes.Status403Forbidden);
     }
 
+    var registryPolicy = await repository.ResolveClinicAccessAsync(identity.AccountId,clinicId,"REGISTRY_READ",ct);
+    if(registryPolicy.Role=="STAFF" && body.MedicalHistory is not null)return Results.StatusCode(403);
     var (success, updated, errCode, errMsg) = await repository.UpdateClinicPatientAsync(clinicId, patientId, body, ct);
     if (!success)
     {
@@ -1094,4 +1136,5 @@ app.MapPatch("/api/v1/clinics/{clinicId:guid}/patients/{patientId:guid}", async 
 .WithName("UpdateClinicPatient")
 .WithTags("ClinicPatients");
 
+app.MapProfilePublicMembershipEndpoints();
 app.Run();

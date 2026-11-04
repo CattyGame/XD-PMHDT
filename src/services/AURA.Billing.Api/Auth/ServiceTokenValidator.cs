@@ -11,7 +11,12 @@ public sealed record ServiceTokenValidationResult(
     int StatusCode,
     string Code,
     string Message,
-    bool Retryable = false);
+    bool Retryable = false,
+    IReadOnlyCollection<string>? Scopes = null)
+{
+    public bool HasScope(string scope) =>
+        Scopes is not null && Scopes.Contains(scope, StringComparer.Ordinal);
+}
 
 /// <summary>
 /// Validates service-to-service JWTs. The trusted public key is read from
@@ -38,17 +43,56 @@ public sealed class ServiceTokenValidator(
         string? expectedClientId,
         CancellationToken cancellationToken)
     {
+        var (error, principal, scopes) = await ValidateCoreAsync(request, expectedClientId, cancellationToken);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        if (!scopes.Contains(expectedScope, StringComparer.Ordinal))
+        {
+            return Failure(403, "ERR_FORBIDDEN", $"Service token thiếu scope bắt buộc: {expectedScope}.");
+        }
+
+        return new ServiceTokenValidationResult(true, principal, 200, string.Empty, string.Empty, false, scopes);
+    }
+
+    public async Task<ServiceTokenValidationResult> ValidateAnyScopeAsync(
+        HttpRequest request,
+        IReadOnlyCollection<string> expectedScopes,
+        string? expectedClientId,
+        CancellationToken cancellationToken)
+    {
+        var (error, principal, scopes) = await ValidateCoreAsync(request, expectedClientId, cancellationToken);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        if (!expectedScopes.Any(s => scopes.Contains(s, StringComparer.Ordinal)))
+        {
+            return Failure(403, "ERR_FORBIDDEN", $"Service token thiếu ít nhất một trong các scope bắt buộc: {string.Join(", ", expectedScopes)}.");
+        }
+
+        return new ServiceTokenValidationResult(true, principal, 200, string.Empty, string.Empty, false, scopes);
+    }
+
+    private async Task<(ServiceTokenValidationResult? Error, ClaimsPrincipal? Principal, string[] Scopes)> ValidateCoreAsync(
+        HttpRequest request,
+        string? expectedClientId,
+        CancellationToken cancellationToken)
+    {
         var header = request.Headers.Authorization.ToString();
         if (string.IsNullOrWhiteSpace(header)
             || !header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
-            return Failure(401, "ERR_UNAUTHORIZED", "Thiếu service token.");
+            return (Failure(401, "ERR_UNAUTHORIZED", "Thiếu service token."), null, Array.Empty<string>());
         }
 
         var token = header["Bearer ".Length..].Trim();
         if (token.Length == 0)
         {
-            return Failure(401, "ERR_UNAUTHORIZED", "Thiếu service token.");
+            return (Failure(401, "ERR_UNAUTHORIZED", "Thiếu service token."), null, Array.Empty<string>());
         }
 
         SecurityKey? key;
@@ -63,20 +107,20 @@ public sealed class ServiceTokenValidator(
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Unable to load the trusted Identity public key.");
-            return Failure(503, "ERR_SERVICE_AUTH_UNAVAILABLE",
-                "Chưa thể xác thực service token vì khóa công khai chưa sẵn sàng.", retryable: true);
+            return (Failure(503, "ERR_SERVICE_AUTH_UNAVAILABLE",
+                "Chưa thể xác thực service token vì khóa công khai chưa sẵn sàng.", retryable: true), null, Array.Empty<string>());
         }
 
         if (key is null)
         {
-            return Failure(503, "ERR_SERVICE_AUTH_UNAVAILABLE",
-                "Chưa thể xác thực service token vì khóa công khai chưa sẵn sàng.", retryable: true);
+            return (Failure(503, "ERR_SERVICE_AUTH_UNAVAILABLE",
+                "Chưa thể xác thực service token vì khóa công khai chưa sẵn sàng.", retryable: true), null, Array.Empty<string>());
         }
 
         var handler = new JwtSecurityTokenHandler { MapInboundClaims = false };
         if (!handler.CanReadToken(token))
         {
-            return Failure(401, "ERR_UNAUTHORIZED", "Service token không đúng định dạng JWT.");
+            return (Failure(401, "ERR_UNAUTHORIZED", "Service token không đúng định dạng JWT."), null, Array.Empty<string>());
         }
 
         ClaimsPrincipal principal;
@@ -98,44 +142,40 @@ public sealed class ServiceTokenValidator(
             if (validatedToken is not JwtSecurityToken jwt
                 || !string.Equals(jwt.Header.Alg, SecurityAlgorithms.RsaSha256, StringComparison.Ordinal))
             {
-                return Failure(401, "ERR_UNAUTHORIZED", "Service token phải sử dụng RS256.");
+                return (Failure(401, "ERR_UNAUTHORIZED", "Service token phải sử dụng RS256."), null, Array.Empty<string>());
             }
         }
         catch (SecurityTokenInvalidAudienceException)
         {
-            return Failure(403, "ERR_FORBIDDEN", "Audience của service token không hợp lệ.");
+            return (Failure(403, "ERR_FORBIDDEN", "Audience của service token không hợp lệ."), null, Array.Empty<string>());
         }
         catch (SecurityTokenException)
         {
-            return Failure(401, "ERR_UNAUTHORIZED", "Service token không hợp lệ hoặc đã hết hạn.");
+            return (Failure(401, "ERR_UNAUTHORIZED", "Service token không hợp lệ hoặc đã hết hạn."), null, Array.Empty<string>());
         }
         catch (ArgumentException)
         {
-            return Failure(401, "ERR_UNAUTHORIZED", "Service token không hợp lệ.");
+            return (Failure(401, "ERR_UNAUTHORIZED", "Service token không hợp lệ."), null, Array.Empty<string>());
         }
 
         var clientId = principal.FindFirst("client_id")?.Value;
         if (string.IsNullOrWhiteSpace(clientId))
         {
-            return Failure(401, "ERR_UNAUTHORIZED", "Service token thiếu client_id.");
+            return (Failure(401, "ERR_UNAUTHORIZED", "Service token thiếu client_id."), null, Array.Empty<string>());
         }
 
         if (!string.IsNullOrWhiteSpace(expectedClientId)
             && !string.Equals(clientId, expectedClientId, StringComparison.Ordinal))
         {
-            return Failure(403, "ERR_FORBIDDEN", "Caller không được phép gọi endpoint này.");
+            return (Failure(403, "ERR_FORBIDDEN", "Caller không được phép gọi endpoint này."), null, Array.Empty<string>());
         }
 
         var scopeClaim = principal.FindFirst("scope")?.Value
             ?? principal.FindFirst("http://schemas.microsoft.com/identity/claims/scope")?.Value;
         var scopes = (scopeClaim ?? string.Empty)
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (!scopes.Contains(expectedScope, StringComparer.Ordinal))
-        {
-            return Failure(403, "ERR_FORBIDDEN", $"Service token thiếu scope bắt buộc: {expectedScope}.");
-        }
 
-        return new ServiceTokenValidationResult(true, principal, 200, string.Empty, string.Empty);
+        return (null, principal, scopes);
     }
 
     private async Task<SecurityKey?> GetPublicKeyAsync(CancellationToken cancellationToken)

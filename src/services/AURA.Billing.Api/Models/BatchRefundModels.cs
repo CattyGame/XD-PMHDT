@@ -26,3 +26,10 @@ public sealed record BatchRefundResponse(
 public sealed record ReconcileStaleRequest(
     int? OlderThanMinutes = 30,
     int? Limit = 100);
+
+/// <summary>Created only by authenticated server handlers; never accepted from a public request body.</summary>
+public sealed record RefundAuthorization(Guid? ApprovedBy,string Source,IReadOnlyDictionary<Guid,string>? Evidence = null)
+{
+    public bool Allows(Guid reservationId) => Source=="SYSTEM_ADMIN" && ApprovedBy is {} actor && actor!=Guid.Empty
+        || Source=="ANALYSIS_TERMINAL" && Evidence?.TryGetValue(reservationId,out var evidence)==true && !string.IsNullOrWhiteSpace(evidence);
+}

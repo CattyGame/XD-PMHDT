@@ -1,33 +1,41 @@
 openapi: 3.0.3
 info:
   title: AURA Identity Service API
-  description: |
-    API quản lý danh tính, xác thực Firebase ID Token, ánh xạ tài khoản nội bộ và cấp phát Service-to-Service JWT Token cho hệ thống AURA.
+  description: 'API quản lý danh tính, xác thực Firebase ID Token, ánh xạ tài khoản
+    nội bộ và cấp phát Service-to-Service JWT Token cho hệ thống AURA.
+
     Tuân thủ quy chuẩn Sprint 2: Mã đề tài SP26SE025, Task W2-M6-03.
-  version: 1.0.0
+
+    '
+  version: 0.2.0
   contact:
     name: AURA Team - Module M6 (Identity & Profile)
     url: https://github.com/CattyGame/XD-PMHDT
 servers:
-  - url: http://127.0.0.1:5000
-    description: Qua API Gateway (Đường dẫn Public)
-  - url: http://127.0.0.1:5004
-    description: Trực tiếp Localhost Development
+- url: http://127.0.0.1:5000
+  description: Qua API Gateway (Đường dẫn Public)
+- url: http://127.0.0.1:5004
+  description: Trực tiếp Localhost Development
 paths:
   /api/v1/identity/bootstrap:
     post:
       summary: Khởi tạo hoặc đối soát tài khoản người dùng (Idempotent)
-      description: |
-        Được gọi bởi Frontend ngay sau khi người dùng đăng nhập Firebase thành công.
-        Xác minh Firebase ID Token, ánh xạ hoặc tạo mới tài khoản `accountId` nội bộ,
+      description: 'Được gọi bởi Frontend ngay sau khi người dùng đăng nhập Firebase
+        thành công.
+
+        Xác minh Firebase ID Token, ánh xạ hoặc tạo mới tài khoản `accountId` nội
+        bộ,
+
         gán vai trò mặc định `PATIENT` và kích hoạt luồng khởi tạo Profile nội bộ.
+
+        '
       operationId: bootstrapAccount
       tags:
-        - Identity Public
+      - Identity Public
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       responses:
         '200':
           description: Khởi tạo hoặc lấy thông tin tài khoản thành công.
@@ -48,20 +56,21 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           $ref: '#/components/responses/500InternalError'
-
   /api/v1/identity/me:
     get:
       summary: Lấy thông tin tài khoản và vai trò của người dùng hiện tại
-      description: |
-        Truy vấn thông tin tài khoản nội bộ dựa trên Firebase ID Token.
+      description: 'Truy vấn thông tin tài khoản nội bộ dựa trên Firebase ID Token.
+
         Nếu người dùng chưa gọi bootstrap trước đó, sẽ trả về lỗi `409 ERR_ACCOUNT_NOT_INITIALIZED`.
+
+        '
       operationId: getCurrentIdentity
       tags:
-        - Identity Public
+      - Identity Public
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       responses:
         '200':
           description: Lấy thông tin thành công.
@@ -86,16 +95,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
   /internal/v1/identity/service-tokens:
     post:
       summary: Cấp phát Token dịch vụ ngắn hạn (Service-to-Service JWT)
-      description: |
-        Endpoint nội bộ dành cho các Microservices (Analysis, Billing, NiFi...) lấy token xác thực Machine-to-Machine theo chuẩn OAuth2 Client Credentials.
+      description: 'Endpoint nội bộ dành cho các Microservices (Analysis, Billing,
+        NiFi...) lấy token xác thực Machine-to-Machine theo chuẩn OAuth2 Client Credentials.
+
         Thời hạn hiệu lực 5 phút (300 giây).
+
+        '
       operationId: issueServiceToken
       tags:
-        - Identity Internal
+      - Identity Internal
       requestBody:
         required: true
         content:
@@ -113,25 +124,27 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
-
   /internal/v1/identity/context:
     post:
       summary: Phân giải ngữ cảnh tài khoản người dùng từ token nội bộ
-      description: |
-        Được gọi bởi các Microservices khác (ví dụ Analysis Service) để phân giải thông tin `accountId`, trạng thái và danh sách vai trò từ header `X-User-Authorization`.
+      description: 'Được gọi bởi các Microservices khác (ví dụ Analysis Service) để
+        phân giải thông tin `accountId`, trạng thái và danh sách vai trò từ header
+        `X-User-Authorization`.
+
+        '
       operationId: resolveIdentityContext
       tags:
-        - Identity Internal
+      - Identity Internal
       security:
-        - ServiceTokenAuth: []
+      - ServiceTokenAuth: []
       parameters:
-        - name: X-User-Authorization
-          in: header
-          required: true
-          description: Bearer Firebase ID Token của người dùng cần phân giải
-          schema:
-            type: string
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: X-User-Authorization
+        in: header
+        required: true
+        description: Bearer Firebase ID Token của người dùng cần phân giải
+        schema:
+          type: string
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       responses:
         '200':
           description: Phân giải ngữ cảnh thành công.
@@ -142,7 +155,8 @@ paths:
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
-          description: Service token không có scope identity:context hoặc audience sai.
+          description: Service token không có scope identity:context hoặc audience
+            sai.
           content:
             application/json:
               schema:
@@ -153,13 +167,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
   /health:
     get:
       summary: Kiểm tra trạng thái hoạt động của dịch vụ
       operationId: checkHealth
       tags:
-        - Platform
+      - Platform
       responses:
         '200':
           description: Dịch vụ đang hoạt động bình thường.
@@ -168,7 +181,56 @@ paths:
               schema:
                 type: string
                 example: Healthy
-
+  /api/v1/admin/accounts/{accountId}/doctor-capability:
+    put:
+      summary: Approve/revoke global Doctor capability with audit
+      description: Verified Firebase account SYSTEM_ADMIN only; clinic invitations
+        cannot grant this capability.
+      parameters:
+      - name: accountId
+        in: path
+        required: true
+        schema: &id001
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - approved
+              - reason
+              properties:
+                approved:
+                  type: boolean
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Audited capability outcome
+        '403':
+          description: SYSTEM_ADMIN required
+  /internal/v1/identity/accounts/{accountId}/context:
+    get:
+      summary: Read current account status and global capabilities
+      description: Service JWT identity:context only; no consumer cross-schema Identity
+        queries.
+      parameters:
+      - name: accountId
+        in: path
+        required: true
+        schema: *id001
+      responses:
+        '200':
+          description: accountId,accountStatus,roles
+        '401':
+          description: Invalid service identity
+        '403':
+          description: Missing scope
+        '404':
+          description: Missing account
 components:
   securitySchemes:
     BearerAuth:
@@ -180,8 +242,8 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Service-to-Service JWT Token do Identity cấp (RS256, audience aura-identity, scope identity:context).
-
+      description: Service-to-Service JWT Token do Identity cấp (RS256, audience aura-identity,
+        scope identity:context).
   parameters:
     CorrelationIdHeader:
       name: X-Correlation-Id
@@ -192,22 +254,20 @@ components:
         type: string
         maxLength: 64
         example: a0000000-0000-4000-8000-000000000001
-
   headers:
     CorrelationIdHeader:
       description: Mã truy vết tương ứng cho phản hồi.
       schema:
         type: string
-
   schemas:
     AccountDto:
       type: object
       required:
-        - accountId
-        - firebaseUid
-        - accountStatus
-        - roles
-        - profileProvisioningStatus
+      - accountId
+      - firebaseUid
+      - accountStatus
+      - roles
+      - profileProvisioningStatus
       properties:
         accountId:
           type: string
@@ -220,23 +280,27 @@ components:
           example: hoang_dev_1
         accountStatus:
           type: string
-          enum: [ACTIVE, DISABLED]
+          enum:
+          - ACTIVE
+          - DISABLED
           example: ACTIVE
         roles:
           type: array
           items:
             type: string
-          example: ["PATIENT"]
+          example:
+          - PATIENT
         profileProvisioningStatus:
           type: string
-          enum: [PENDING, READY]
+          enum:
+          - PENDING
+          - READY
           example: READY
-
     ServiceTokenRequest:
       type: object
       required:
-        - clientId
-        - clientSecret
+      - clientId
+      - clientSecret
       properties:
         clientId:
           type: string
@@ -247,19 +311,19 @@ components:
           example: secret_analysis_pass
         audience:
           type: string
-          description: Target audience của dịch vụ đích (ví dụ aura-profile, aura-identity, aura-billing).
+          description: Target audience của dịch vụ đích (ví dụ aura-profile, aura-identity,
+            aura-billing).
           example: aura-profile
         scope:
           type: string
           description: Chuỗi scope phân cách bằng khoảng trắng.
-          example: "identity:context profile:resolve"
-
+          example: identity:context profile:resolve
     ServiceTokenResponse:
       type: object
       required:
-        - accessToken
-        - tokenType
-        - expiresIn
+      - accessToken
+      - tokenType
+      - expiresIn
       properties:
         accessToken:
           type: string
@@ -271,13 +335,12 @@ components:
           type: integer
           description: Thời hạn hiệu lực tính bằng giây.
           example: 300
-
     IdentityContextResponse:
       type: object
       required:
-        - accountId
-        - accountStatus
-        - roles
+      - accountId
+      - accountStatus
+      - roles
       properties:
         accountId:
           type: string
@@ -290,23 +353,22 @@ components:
           type: array
           items:
             type: string
-          example: ["PATIENT"]
-
+          example:
+          - PATIENT
     ErrorEnvelope:
       type: object
       required:
-        - error
+      - error
       properties:
         error:
           $ref: '#/components/schemas/ErrorDetails'
-
     ErrorDetails:
       type: object
       required:
-        - code
-        - message
-        - correlationId
-        - retryable
+      - code
+      - message
+      - correlationId
+      - retryable
       properties:
         code:
           type: string
@@ -323,7 +385,6 @@ components:
           type: boolean
           description: Cho biết client có nên thử lại yêu cầu này hay không.
           example: false
-
   responses:
     400BadRequest:
       description: Dữ liệu gửi lên không hợp lệ hoặc thiếu trường bắt buộc.
@@ -337,7 +398,6 @@ components:
               message: Thiếu clientId hoặc clientSecret.
               correlationId: a0000000-0000-4000-8000-000000000001
               retryable: false
-
     401Unauthorized:
       description: Chưa xác thực hoặc Firebase ID token không hợp lệ / hết hạn.
       content:
@@ -350,7 +410,6 @@ components:
               message: Thiếu Firebase ID token hoặc token không hợp lệ.
               correlationId: a0000000-0000-4000-8000-000000000001
               retryable: false
-
     500InternalError:
       description: Lỗi máy chủ nội bộ.
       content:

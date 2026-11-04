@@ -367,7 +367,7 @@ if (args.Contains("--database"))
 {
     Console.WriteLine("\n--- Chạy kiểm thử tích hợp trực tiếp trên PostgreSQL ---");
     var connString = Environment.GetEnvironmentVariable("AURA_TEST_POSTGRES")
-        ?? "Host=127.0.0.1;Port=5432;Database=aura_dev;Username=aura_profile_app;Password=aura_profile_pass;";
+        ?? throw new InvalidOperationException("AURA_TEST_POSTGRES must explicitly identify an isolated fixture database.");
 
     try
     {
@@ -395,11 +395,11 @@ if (args.Contains("--database"))
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[CẢNH BÁO DB] Bỏ qua kiểm tra DB do không kết nối được PostgreSQL: {ex.Message}");
+        throw new InvalidOperationException("Explicit database checks failed; they must not be silently skipped.", ex);
     }
 }
 
 Console.WriteLine($"\n====================================================================");
-Console.WriteLine($"KẾT QUẢ: {passed} kiểm tra AC1, AC2, AC3 đạt chuẩn tuyệt đối!");
+Console.WriteLine($"KẾT QUẢ: {passed} model/fixture checks passed; HTTP/DB acceptance needs its own evidence.");
 Console.WriteLine($"====================================================================");
 return 0;

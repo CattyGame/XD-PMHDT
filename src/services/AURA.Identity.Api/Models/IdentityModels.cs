@@ -37,7 +37,9 @@ public sealed record ServiceTokenResponse(
 public sealed record IdentityContextResponse(
     [property: JsonPropertyName("accountId")] Guid AccountId,
     [property: JsonPropertyName("accountStatus")] string AccountStatus,
-    [property: JsonPropertyName("roles")] IReadOnlyList<string> Roles
+    [property: JsonPropertyName("roles")] IReadOnlyList<string> Roles,
+    [property: JsonPropertyName("email")] string? Email = null,
+    [property: JsonPropertyName("emailVerified")] bool EmailVerified = false
 );
 
 public sealed record ProvisionProfileRequest(

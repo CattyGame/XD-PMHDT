@@ -77,24 +77,24 @@ static string? ExtractBearerToken(HttpRequest request)
 }
 
 // Helper to verify Firebase Token
-static async Task<(bool Success, string? Uid, string? Email, string? Name, string? ErrorCode)> VerifyFirebaseTokenAsync(
+static async Task<(bool Success, string? Uid, string? Email, string? Name, string? ErrorCode, bool EmailVerified)> VerifyFirebaseTokenAsync(
     string token, FirebaseAuth? auth, IWebHostEnvironment env)
 {
     // Support simulated development tokens for testing
-    if (env.IsDevelopment() && token.StartsWith("mock-dev-token-", StringComparison.OrdinalIgnoreCase))
+    if (env.IsDevelopment() && Environment.GetEnvironmentVariable("AURA_ALLOW_MOCK_IDENTITY") == "true" && token.StartsWith("mock-dev-token-", StringComparison.OrdinalIgnoreCase))
     {
         var mockUid = token["mock-dev-token-".Length..];
-        return (true, mockUid, $"{mockUid}@example.com", "Mock User", null);
+        return (true, mockUid, $"{mockUid}@example.com", "Mock User", null, false);
     }
-    if (env.IsDevelopment() && token.StartsWith("mock-token-", StringComparison.OrdinalIgnoreCase))
+    if (env.IsDevelopment() && Environment.GetEnvironmentVariable("AURA_ALLOW_MOCK_IDENTITY") == "true" && token.StartsWith("mock-token-", StringComparison.OrdinalIgnoreCase))
     {
         var mockUid = token["mock-token-".Length..];
-        return (true, mockUid, $"{mockUid}@example.com", "Mock User", null);
+        return (true, mockUid, $"{mockUid}@example.com", "Mock User", null, false);
     }
 
     if (auth == null)
     {
-        return (false, null, null, null, "ERR_UNAUTHORIZED");
+        return (false, null, null, null, "ERR_UNAUTHORIZED", false);
     }
 
     try
@@ -102,15 +102,16 @@ static async Task<(bool Success, string? Uid, string? Email, string? Name, strin
         var decoded = await auth.VerifyIdTokenAsync(token, checkRevoked: true);
         var email = decoded.Claims.TryGetValue("email", out var e) ? e?.ToString() : null;
         var name = decoded.Claims.TryGetValue("name", out var n) ? n?.ToString() : null;
-        return (true, decoded.Uid, email, name, null);
+        var verified = decoded.Claims.TryGetValue("email_verified", out var v) && v is bool b && b;
+        return (true, decoded.Uid, email, name, null, verified);
     }
     catch (FirebaseAuthException)
     {
-        return (false, null, null, null, "ERR_UNAUTHORIZED");
+        return (false, null, null, null, "ERR_UNAUTHORIZED", false);
     }
     catch
     {
-        return (false, null, null, null, "ERR_UNAUTHORIZED");
+        return (false, null, null, null, "ERR_UNAUTHORIZED", false);
     }
 }
 
@@ -132,7 +133,7 @@ app.MapPost("/api/v1/identity/bootstrap", async (
             statusCode: StatusCodes.Status401Unauthorized);
     }
 
-    var (success, uid, email, name, errorCode) = await VerifyFirebaseTokenAsync(token, authProvider.Auth, env);
+    var (success, uid, email, name, errorCode, _) = await VerifyFirebaseTokenAsync(token, authProvider.Auth, env);
     if (!success || string.IsNullOrWhiteSpace(uid))
     {
         return Results.Json(
@@ -225,7 +226,7 @@ app.MapGet("/api/v1/identity/me", async (
             statusCode: StatusCodes.Status401Unauthorized);
     }
 
-    var (success, uid, _, _, errorCode) = await VerifyFirebaseTokenAsync(token, authProvider.Auth, env);
+    var (success, uid, email, _, errorCode, emailVerified) = await VerifyFirebaseTokenAsync(token, authProvider.Auth, env);
     if (!success || string.IsNullOrWhiteSpace(uid))
     {
         return Results.Json(
@@ -328,7 +329,7 @@ app.MapPost("/internal/v1/identity/context", async (
         ? userAuth["Bearer ".Length..].Trim()
         : userAuth.Trim();
 
-    var (success, uid, _, _, errorCode) = await VerifyFirebaseTokenAsync(token, authProvider.Auth, env);
+    var (success, uid, email, _, errorCode, emailVerified) = await VerifyFirebaseTokenAsync(token, authProvider.Auth, env);
     if (!success || string.IsNullOrWhiteSpace(uid))
     {
         return Results.Json(
@@ -344,7 +345,7 @@ app.MapPost("/internal/v1/identity/context", async (
             statusCode: StatusCodes.Status404NotFound);
     }
 
-    return Results.Ok(new IdentityContextResponse(account.AccountId, account.AccountStatus, account.Roles));
+    return Results.Ok(new IdentityContextResponse(account.AccountId, account.AccountStatus, account.Roles, email, emailVerified));
 })
 .WithName("ResolveIdentityContext")
 .WithTags("Internal");
@@ -356,6 +357,25 @@ app.MapGet("/internal/v1/identity/public-key", (ServiceTokenIssuer issuer) =>
 })
 .WithName("GetIdentityPublicKey")
 .WithTags("Internal");
+
+
+app.MapGet("/internal/v1/identity/accounts/{accountId:guid}/context", async Task<IResult> (Guid accountId, HttpRequest request, IdentityRepository repository, ServiceTokenIssuer issuer) =>
+{
+    var token=ExtractBearerToken(request);
+    var (valid,_,code,message)=issuer.ValidateServiceToken(token ?? "", "aura-identity", "identity:context");
+    if(!valid)return Results.Json(new {error=new {code,message}},statusCode:code=="ERR_FORBIDDEN"?403:401);
+    var account=await repository.GetAccountByIdAsync(accountId);
+    return account is null ? Results.NotFound() : Results.Ok(new IdentityContextResponse(account.AccountId,account.AccountStatus,account.Roles));
+});
+app.MapPut("/api/v1/admin/accounts/{accountId:guid}/doctor-capability", async Task<IResult> (Guid accountId, DoctorCapabilityRequest body, HttpRequest request, IdentityRepository repository, FirebaseAuthProvider authProvider, IWebHostEnvironment env) =>
+{
+    var (valid,uid,_,_,_,_)=await VerifyFirebaseTokenAsync(ExtractBearerToken(request) ?? "",authProvider.Auth,env);
+    if(!valid || uid is null)return Results.Unauthorized();
+    var actor=await repository.GetAccountByFirebaseUidAsync(uid);
+    if(actor?.AccountStatus!="ACTIVE" || !actor.Roles.Contains("SYSTEM_ADMIN",StringComparer.Ordinal))return Results.StatusCode(403);
+    if(string.IsNullOrWhiteSpace(body.Reason) || body.Reason.Length>1000)return Results.BadRequest();
+    return await repository.SetDoctorCapabilityAsync(actor.AccountId,accountId,body.Approved,body.Reason.Trim()) ? Results.NoContent() : Results.NotFound();
+});
 
 app.Run();
 
@@ -392,3 +412,5 @@ public class FirebaseAuthProvider
         }
     }
 }
+
+public sealed record DoctorCapabilityRequest(bool Approved, string Reason);

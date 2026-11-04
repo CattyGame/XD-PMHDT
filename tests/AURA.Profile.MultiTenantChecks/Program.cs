@@ -740,5 +740,11 @@ Check("TC-AC3.7: Phân giải Quyền theo Analysis ID cho M2 (SLA < 5ms): Resol
 // TỔNG KẾT BỘ TEST
 // -----------------------------------------------------------------------------
 Console.WriteLine("====================================================================");
-Console.WriteLine($"KẾT QUẢ: {passed}/38 CHECKS PASS HOÀN TOÀN! (100% AC1, AC2, AC3)");
+Console.WriteLine($"Model checks: {passed}/38 PASS; not HTTP/DB security acceptance.");
 Console.WriteLine("====================================================================");
+
+if(args.Contains("--database"))
+{
+    var connection=Environment.GetEnvironmentVariable("AURA_TEST_POSTGRES") ?? throw new InvalidOperationException("AURA_TEST_POSTGRES is required for isolated database checks.");
+    await DatabaseChecks.RunAsync(connection);
+}

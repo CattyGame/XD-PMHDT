@@ -1,38 +1,54 @@
 openapi: 3.0.3
 info:
   title: AURA Profile Service API
-  description: |
-    API quản lý hồ sơ cá nhân, hồ sơ bệnh nhân, cơ cấu tổ chức phòng khám và phân giải quyền truy cập cho hệ thống AURA.
+  description: 'API quản lý hồ sơ cá nhân, hồ sơ bệnh nhân, cơ cấu tổ chức phòng khám
+    và phân giải quyền truy cập cho hệ thống AURA.
+
     Đặc tính kỹ thuật cốt lõi:
+
     - Tách biệt định danh: accountId != patientId != clinicId != tenantId.
+
     - Chống sửa role qua Profile: Loại bỏ triệt để nguy cơ leo thang đặc quyền.
-    - Optimistic Concurrency Control: Kiểm soát cập nhật xung đột bằng header If-Match và ETag ("<profileVersion>").
-    - Phân giải quyền (Access Resolution): Xác định quyền thao tác ảnh đáy mắt cho Analysis Service.
-  version: 1.1.0
+
+    - Optimistic Concurrency Control: Kiểm soát cập nhật xung đột bằng header If-Match
+    và ETag ("<profileVersion>").
+
+    - Phân giải quyền (Access Resolution): Xác định quyền thao tác ảnh đáy mắt cho
+    Analysis Service.
+
+    '
+  version: 0.2.0
   contact:
     name: AURA Team - Module M6 (Identity & Profile)
     url: https://github.com/CattyGame/XD-PMHDT
 servers:
-  - url: http://127.0.0.1:5000
-    description: Qua API Gateway (Đường dẫn Public)
-  - url: http://127.0.0.1:5005
-    description: Trực tiếp Localhost Development
+- url: http://127.0.0.1:5000
+  description: Qua API Gateway (Đường dẫn Public)
+- url: http://127.0.0.1:5005
+  description: Trực tiếp Localhost Development
 paths:
   /api/v1/profiles/me:
     get:
       summary: Xem hồ sơ cá nhân của người dùng hiện tại
-      description: |
-        Truy vấn thông tin hồ sơ của chính người dùng đã đăng nhập.
-        Trả về header `ETag: "<profileVersion>"` phục vụ cho các thao tác cập nhật tiếp theo.
-        Profile phân giải accountId qua Identity /context bằng service JWT riêng; không tự suy ra từ Firebase UID.
-        Nếu tài khoản chưa hoàn tất bootstrap, trả về `409 ERR_PROFILE_NOT_READY` (`retryable: true`).
+      description: 'Truy vấn thông tin hồ sơ của chính người dùng đã đăng nhập.
+
+        Trả về header `ETag: "<profileVersion>"` phục vụ cho các thao tác cập nhật
+        tiếp theo.
+
+        Profile phân giải accountId qua Identity /context bằng service JWT riêng;
+        không tự suy ra từ Firebase UID.
+
+        Nếu tài khoản chưa hoàn tất bootstrap, trả về `409 ERR_PROFILE_NOT_READY`
+        (`retryable: true`).
+
+        '
       operationId: getMyProfile
       tags:
-        - Profile Public
+      - Profile Public
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       responses:
         '200':
           description: Lấy hồ sơ thành công.
@@ -54,7 +70,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '503':
-          description: Không thể phân giải danh tính qua Identity (ERR_IDENTITY_DEPENDENCY_UNAVAILABLE, retryable=true).
+          description: Không thể phân giải danh tính qua Identity (ERR_IDENTITY_DEPENDENCY_UNAVAILABLE,
+            retryable=true).
           content:
             application/json:
               schema:
@@ -71,21 +88,25 @@ paths:
               message: Hồ sơ chưa được khởi tạo. Hãy gọi bootstrap trước.
               correlationId: a0000000-0000-4000-8000-000000000001
               retryable: true
-
     patch:
       summary: Cập nhật thông tin hồ sơ cá nhân (Chống sửa Role & Kiểm soát ETag)
-      description: |
-        Chỉ cho phép cập nhật `displayName` (1-100 ký tự) và `phone` (tối đa 30 ký tự).
+      description: 'Chỉ cho phép cập nhật `displayName` (1-100 ký tự) và `phone` (tối
+        đa 30 ký tự).
+
         Bắt buộc truyền header `If-Match` mang giá trị ETag của phiên bản hiện tại.
-        Tuyệt đối không nhận các trường `role`, `roles`, `accountId`, `tenantId`, `patientId` (bảo vệ chống leo thang đặc quyền).
+
+        Tuyệt đối không nhận các trường `role`, `roles`, `accountId`, `tenantId`,
+        `patientId` (bảo vệ chống leo thang đặc quyền).
+
+        '
       operationId: updateMyProfile
       tags:
-        - Profile Public
+      - Profile Public
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/IfMatchHeader'
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - $ref: '#/components/parameters/IfMatchHeader'
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       requestBody:
         required: true
         content:
@@ -94,7 +115,8 @@ paths:
               $ref: '#/components/schemas/UpdateProfileRequest'
       responses:
         '200':
-          description: Cập nhật hồ sơ thành công. Trả về hồ sơ mới và ETag phiên bản mới.
+          description: Cập nhật hồ sơ thành công. Trả về hồ sơ mới và ETag phiên bản
+            mới.
           headers:
             ETag:
               $ref: '#/components/headers/ETagHeader'
@@ -125,7 +147,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '503':
-          description: Không thể phân giải danh tính qua Identity (ERR_IDENTITY_DEPENDENCY_UNAVAILABLE, retryable=true).
+          description: Không thể phân giải danh tính qua Identity (ERR_IDENTITY_DEPENDENCY_UNAVAILABLE,
+            retryable=true).
           content:
             application/json:
               schema:
@@ -137,7 +160,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '409':
-          description: Xung đột phiên bản ETag / If-Match hoặc tài khoản chưa bootstrap (ERR_PROFILE_NOT_READY, retryable=true).
+          description: Xung đột phiên bản ETag / If-Match hoặc tài khoản chưa bootstrap
+            (ERR_PROFILE_NOT_READY, retryable=true).
           content:
             application/json:
               schema:
@@ -145,74 +169,41 @@ paths:
           example:
             error:
               code: ERR_PROFILE_VERSION_CONFLICT
-              message: Phiên bản hồ sơ không khớp (xung đột dữ liệu). Hãy tải lại hồ sơ mới nhất.
+              message: Phiên bản hồ sơ không khớp (xung đột dữ liệu). Hãy tải lại
+                hồ sơ mới nhất.
               correlationId: a0000000-0000-4000-8000-000000000001
               retryable: false
-
   /api/v1/clinics:
-    post:
-      summary: Đăng ký thông tin phòng khám mới (Clinic Lifecycle)
-      description: |
-        Đăng ký một tổ chức y tế (phòng khám) mới vào hệ thống.
-        Phòng khám ban đầu có trạng thái PENDING và chờ SYSTEM_ADMIN phê duyệt.
-        Người đăng ký được tạo tenant phòng khám và được gán vai trò CLINIC_ADMIN đầu tiên.
-      operationId: registerClinic
-      tags:
-        - Clinic Lifecycle
-      security:
-        - BearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/CorrelationIdHeader'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterClinicRequest'
+    get:
+      summary: Discover the authenticated account active clinic memberships
       responses:
-        '201':
-          description: Đăng ký phòng khám thành công (trạng thái PENDING).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ClinicDto'
-        '400':
-          description: Dữ liệu đầu vào không hợp lệ.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+        '200':
+          description: items of clinicId,clinicName,role,status; no PHI
         '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '409':
-          description: Trùng mã số thuế hoặc thông tin phòng khám.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '500':
-          $ref: '#/components/responses/500InternalError'
-
+          description: Invalid Firebase token
   /api/v1/admin/clinics/{clinicId}/status:
     patch:
       summary: Xét duyệt trạng thái phòng khám dành cho Quản trị viên hệ thống (SYSTEM_ADMIN)
-      description: |
-        SYSTEM_ADMIN phê duyệt hoặc chuyển trạng thái phòng khám (PENDING -> ACTIVE, SUSPENDED, REJECTED).
+      description: 'SYSTEM_ADMIN phê duyệt hoặc chuyển trạng thái phòng khám (PENDING
+        -> ACTIVE, SUSPENDED, REJECTED).
+
         Bắt buộc ghi nhận lý do xét duyệt (reason) và lưu vết audit log vào profile.clinic_audit_logs.
+
+        '
       operationId: updateClinicStatus
       tags:
-        - Clinic Lifecycle Admin
+      - Clinic Lifecycle Admin
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          description: Định danh phòng khám
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        description: Định danh phòng khám
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       requestBody:
         required: true
         content:
@@ -248,27 +239,30 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           $ref: '#/components/responses/500InternalError'
-
   /api/v1/clinics/{clinicId}/memberships/invite:
     post:
       summary: Mời Bác sĩ / Kỹ thuật viên vào phòng khám bằng email
-      description: |
-        Mời thành viên mới vào phòng khám bằng email và gán vai trò (ClinicManager, ClinicDoctor, ClinicStaff).
-        Bản ghi membership được tạo ở trạng thái INVITED và sẽ tự động kích hoạt (chuyển sang ACTIVE) khi người dùng có email tương ứng đăng nhập vào hệ thống.
+      description: 'Mời thành viên mới vào phòng khám bằng email và gán vai trò (ClinicManager,
+        ClinicDoctor, ClinicStaff).
+
+        Bản ghi membership được tạo ở trạng thái INVITED và sẽ tự động kích hoạt (chuyển
+        sang ACTIVE) khi người dùng có email tương ứng đăng nhập vào hệ thống.
+
+        '
       operationId: inviteClinicMember
       tags:
-        - Clinic Memberships
+      - Clinic Memberships
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          description: Định danh phòng khám
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        description: Định danh phòng khám
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       requestBody:
         required: true
         content:
@@ -291,7 +285,8 @@ paths:
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
-          description: Không đủ quyền quản trị phòng khám (chỉ SYSTEM_ADMIN hoặc CLINIC_ADMIN của chính phòng khám).
+          description: Không đủ quyền quản trị phòng khám (chỉ SYSTEM_ADMIN hoặc CLINIC_ADMIN
+            của chính phòng khám).
           content:
             application/json:
               schema:
@@ -310,36 +305,42 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           $ref: '#/components/responses/500InternalError'
-
   /api/v1/clinics/{clinicId}/memberships:
     get:
       summary: L?y danh s�ch th�nh vi�n ph�ng kh�m
-      description: |
-        Truy v?n to�n b? danh s�ch th�nh vi�n trong ph�ng kh�m.
-        Ch? cho ph�p SYSTEM_ADMIN ho?c CLINIC_ADMIN dang ACTIVE trong ch�nh Clinic d�.
+      description: 'Truy v?n to�n b? danh s�ch th�nh vi�n trong ph�ng kh�m.
+
+        Ch? cho ph�p SYSTEM_ADMIN ho?c CLINIC_ADMIN dang ACTIVE trong ch�nh Clinic
+        d�.
+
         Ngu?i ngo�i Clinic s? nh?n 404 Not Found (ngan ng?a r� r? tenant).
+
+        '
       operationId: getClinicMemberships
       tags:
-        - Clinic Memberships
+      - Clinic Memberships
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          description: �?nh danh ph�ng kh�m
-          schema:
-            type: string
-            format: uuid
-        - name: status
-          in: query
-          required: false
-          description: L?c theo tr?ng th�i th�nh vi�n (ACTIVE, REVOKED, ho?c ALL)
-          schema:
-            type: string
-            enum: [ACTIVE, REVOKED, ALL]
-            default: ALL
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        description: �?nh danh ph�ng kh�m
+        schema:
+          type: string
+          format: uuid
+      - name: status
+        in: query
+        required: false
+        description: L?c theo tr?ng th�i th�nh vi�n (ACTIVE, REVOKED, ho?c ALL)
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - REVOKED
+          - ALL
+          default: ALL
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       responses:
         '200':
           description: L?y danh s�ch th�nh vi�n th�nh c�ng.
@@ -363,27 +364,31 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           $ref: '#/components/responses/500InternalError'
-
     post:
       summary: Th�m m?i ho?c t�i k�ch ho?t th�nh vi�n ph�ng kh�m
-      description: |
-        Th�m m?t th�nh vi�n m?i v�o ph�ng kh�m v?i vai tr� ch? d?nh (CLINIC_ADMIN, DOCTOR, STAFF).
-        N?u th�nh vi�n t?ng b? g? (REVOKED), h? th?ng s? t�i k�ch ho?t l?i (status = ACTIVE).
+      description: 'Th�m m?t th�nh vi�n m?i v�o ph�ng kh�m v?i vai tr� ch? d?nh (CLINIC_ADMIN,
+        DOCTOR, STAFF).
+
+        N?u th�nh vi�n t?ng b? g? (REVOKED), h? th?ng s? t�i k�ch ho?t l?i (status
+        = ACTIVE).
+
         N?u th�nh vi�n dang ACTIVE, tr? v? l?i 409 ERR_MEMBERSHIP_ALREADY_EXISTS.
+
+        '
       operationId: addClinicMembership
       tags:
-        - Clinic Memberships
+      - Clinic Memberships
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          description: �?nh danh ph�ng kh�m
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        description: �?nh danh ph�ng kh�m
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       requestBody:
         required: true
         content:
@@ -425,35 +430,39 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           $ref: '#/components/responses/500InternalError'
-
   /api/v1/clinics/{clinicId}/memberships/{accountId}:
     delete:
       summary: Thu h?i tu c�ch th�nh vi�n ph�ng kh�m (Soft Delete luu v?t audit)
-      description: |
-        G? b? m?t th�nh vi�n kh?i ph�ng kh�m.
-        Chuy?n tr?ng th�i status = REVOKED, kh�ng x�a d�ng d? li?u kh?i co s? d? li?u d? b?o to�n v?t audit.
-        Ngan ch?n t? thu h?i n?u ngu?i b? thu h?i l� CLINIC_ADMIN duy nh?t c�n l?i c?a ph�ng kh�m.
+      description: 'G? b? m?t th�nh vi�n kh?i ph�ng kh�m.
+
+        Chuy?n tr?ng th�i status = REVOKED, kh�ng x�a d�ng d? li?u kh?i co s? d? li?u
+        d? b?o to�n v?t audit.
+
+        Ngan ch?n t? thu h?i n?u ngu?i b? thu h?i l� CLINIC_ADMIN duy nh?t c�n l?i
+        c?a ph�ng kh�m.
+
+        '
       operationId: revokeClinicMembership
       tags:
-        - Clinic Memberships
+      - Clinic Memberships
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          description: �?nh danh ph�ng kh�m
-          schema:
-            type: string
-            format: uuid
-        - name: accountId
-          in: path
-          required: true
-          description: �?nh danh t�i kho?n th�nh vi�n c?n thu h?i
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        description: �?nh danh ph�ng kh�m
+        schema:
+          type: string
+          format: uuid
+      - name: accountId
+        in: path
+        required: true
+        description: �?nh danh t�i kho?n th�nh vi�n c?n thu h?i
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       responses:
         '204':
           description: Thu h?i th�nh vi�n th�nh c�ng (No Content).
@@ -472,29 +481,36 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '404':
-          description: Kh�ng t�m th?y ph�ng kh�m ho?c th�nh vi�n kh�ng ho?t d?ng trong ph�ng kh�m.
+          description: Kh�ng t�m th?y ph�ng kh�m ho?c th�nh vi�n kh�ng ho?t d?ng trong
+            ph�ng kh�m.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           $ref: '#/components/responses/500InternalError'
-
   /internal/v1/profile/provision:
     post:
       summary: Khởi tạo hồ sơ và Personal Tenant nội bộ (Idempotent)
-      description: |
-        Được gọi bởi Identity Service trong quá trình bootstrap tài khoản người dùng mới.
+      description: 'Được gọi bởi Identity Service trong quá trình bootstrap tài khoản
+        người dùng mới.
+
         Tự động tạo:
-        1. Một Personal Tenant (`tenant_kind = 'PERSONAL'`).
+
+        1. Một Personal Tenant (`tenant_kind = ''PERSONAL''`).
+
         2. Một Hồ sơ người dùng (`profile.profiles`) với `profile_version = 1`.
+
         3. Một Hồ sơ bệnh nhân mặc định (`profile.patients`).
+
         Đảm bảo tách biệt tuyệt đối 3 định danh: `accountId` != `patientId` != `personalTenantId`.
+
+        '
       operationId: provisionProfile
       tags:
-        - Profile Internal
+      - Profile Internal
       security:
-        - ServiceTokenAuth: []
+      - ServiceTokenAuth: []
       requestBody:
         required: true
         content:
@@ -520,22 +536,32 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           $ref: '#/components/responses/500InternalError'
-
   /internal/v1/profile/access/resolve:
     post:
       summary: Phân giải quyền truy cập hồ sơ bệnh nhân cho Analysis Service
-      description: |
-        Được gọi nội bộ bởi Analysis Service trước khi tiếp nhận ảnh upload hoặc đọc kết quả phân tích.
+      description: 'Được gọi nội bộ bởi Analysis Service trước khi tiếp nhận ảnh upload
+        hoặc đọc kết quả phân tích.
+
         Hệ thống kiểm tra ngữ cảnh:
-        - Ngữ cảnh chính chủ (`OWN`): actorAccountId trùng với linkedAccountId / ownerPrincipalId của bệnh nhân.
-        - Phân công bác sĩ (`ASSIGNED`): actorAccountId có phân công bác sĩ (`profile.doctor_assignments`) còn hiệu lực (`ACTIVE`).
-        - Ngữ cảnh phòng khám (`TENANT`): actorAccountId có membership trong phòng khám sở hữu bệnh nhân.
-        Nếu không có quyền hoặc bệnh nhân không tồn tại, trả về `allowed: false` mà không làm lộ dữ liệu.
+
+        - Ngữ cảnh chính chủ (`OWN`): actorAccountId trùng với linkedAccountId / ownerPrincipalId
+        của bệnh nhân.
+
+        - Phân công bác sĩ (`ASSIGNED`): actorAccountId có phân công bác sĩ (`profile.doctor_assignments`)
+        còn hiệu lực (`ACTIVE`).
+
+        - Ngữ cảnh phòng khám (`TENANT`): actorAccountId có membership trong phòng
+        khám sở hữu bệnh nhân.
+
+        Nếu không có quyền hoặc bệnh nhân không tồn tại, trả về `allowed: false` mà
+        không làm lộ dữ liệu.
+
+        '
       operationId: resolveAccess
       tags:
-        - Profile Internal
+      - Profile Internal
       security:
-        - ServiceTokenAuth: []
+      - ServiceTokenAuth: []
       requestBody:
         required: true
         content:
@@ -557,26 +583,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
   /api/v1/clinics/{clinicId}/patients:
     post:
       summary: Đăng ký hồ sơ bệnh nhân mới vào phòng khám
-      description: |
-        Tạo mới hồ sơ bệnh nhân nội bộ do phòng khám quản lý (CLINIC_MANAGED).
-        Lưu trữ thông tin cá nhân, mã BHYT và tiền sử bệnh án (đái tháo đường, tăng huyết áp).
+      description: 'Tạo mới hồ sơ bệnh nhân nội bộ do phòng khám quản lý (CLINIC_MANAGED).
+
+        Lưu trữ thông tin cá nhân, mã BHYT và tiền sử bệnh án (đái tháo đường, tăng
+        huyết áp).
+
+        '
       operationId: registerClinicPatient
       tags:
-        - Clinic Patients
+      - Clinic Patients
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       requestBody:
         required: true
         content:
@@ -606,46 +634,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
     get:
       summary: Lấy danh sách bệnh nhân của phòng khám
-      description: Truy vấn danh sách bệnh nhân thuộc phòng khám, hỗ trợ tìm kiếm theo tên hoặc mã BHYT và phân trang.
+      description: Truy vấn danh sách bệnh nhân thuộc phòng khám, hỗ trợ tìm kiếm
+        theo tên hoặc mã BHYT và phân trang.
       operationId: getClinicPatients
       tags:
-        - Clinic Patients
+      - Clinic Patients
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: search
-          in: query
-          required: false
-          description: Từ khóa tìm kiếm họ tên hoặc mã BHYT
-          schema:
-            type: string
-        - name: status
-          in: query
-          required: false
-          schema:
-            type: string
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            default: 20
-        - name: offset
-          in: query
-          required: false
-          schema:
-            type: integer
-            default: 0
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: search
+        in: query
+        required: false
+        description: Từ khóa tìm kiếm họ tên hoặc mã BHYT
+        schema:
+          type: string
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 20
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       responses:
         '200':
           description: Tải danh sách bệnh nhân thành công.
@@ -663,30 +691,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
   /api/v1/clinics/{clinicId}/patients/{patientId}:
     get:
       summary: Xem chi tiết thông tin bệnh nhân
-      description: Lấy thông tin cá nhân, mã BHYT và tiền sử bệnh án của bệnh nhân trong phòng khám.
+      description: Lấy thông tin cá nhân, mã BHYT và tiền sử bệnh án của bệnh nhân
+        trong phòng khám.
       operationId: getClinicPatientById
       tags:
-        - Clinic Patients
+      - Clinic Patients
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: patientId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: patientId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       responses:
         '200':
           description: Lấy thông tin bệnh nhân thành công.
@@ -704,29 +732,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
     patch:
       summary: Cập nhật thông tin bệnh nhân phòng khám
-      description: Chỉnh sửa họ tên, ngày sinh, số điện thoại, mã BHYT hoặc cập nhật tiền sử bệnh án.
+      description: Chỉnh sửa họ tên, ngày sinh, số điện thoại, mã BHYT hoặc cập nhật
+        tiền sử bệnh án.
       operationId: updateClinicPatient
       tags:
-        - Clinic Patients
+      - Clinic Patients
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: patientId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: patientId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       requestBody:
         required: true
         content:
@@ -752,24 +780,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
   /api/v1/clinics/{clinicId}/assignments/batch:
     post:
       summary: Phân công theo nhóm bệnh nhân cho Bác sĩ
-      description: Gán một danh sách nhiều bệnh nhân cho một Bác sĩ chuyên khoa phụ trách theo dõi.
+      description: Gán một danh sách nhiều bệnh nhân cho một Bác sĩ chuyên khoa phụ
+        trách theo dõi.
       operationId: batchAssignDoctor
       tags:
-        - Doctor Assignments
+      - Doctor Assignments
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       requestBody:
         required: true
         content:
@@ -791,30 +819,30 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
-
   /api/v1/clinics/{clinicId}/assignments/{assignmentId}/transfer:
     post:
       summary: Chuyển giao ca bệnh cho Bác sĩ khác (Hội chẩn)
-      description: Thu hồi phân công của Bác sĩ hiện tại và gán phân công cho Bác sĩ mới được chỉ định, lưu vết nguồn gốc chuyển giao.
+      description: Thu hồi phân công của Bác sĩ hiện tại và gán phân công cho Bác
+        sĩ mới được chỉ định, lưu vết nguồn gốc chuyển giao.
       operationId: transferDoctorAssignment
       tags:
-        - Doctor Assignments
+      - Doctor Assignments
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       parameters:
-        - name: clinicId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: assignmentId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/CorrelationIdHeader'
+      - name: clinicId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: assignmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/CorrelationIdHeader'
       requestBody:
         required: true
         content:
@@ -840,21 +868,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
   /api/v1/clinics/{clinicId}/assignments:
     post:
       summary: Phân công bác sĩ phụ trách bệnh nhân tại phòng khám
-      description: |
-        Chỉ cho phép CLINIC_ADMIN của phòng khám hoặc SYSTEM_ADMIN thực hiện.
+      description: 'Chỉ cho phép CLINIC_ADMIN của phòng khám hoặc SYSTEM_ADMIN thực
+        hiện.
+
         Bác sĩ phải là thành viên ACTIVE có vai trò DOCTOR tại phòng khám.
+
         Bệnh nhân phải thuộc phạm vi quản lý của phòng khám.
+
+        '
       operationId: createDoctorAssignment
       tags:
-        - Doctor Assignments
+      - Doctor Assignments
       security:
-        - UserBearerAuth: []
+      - UserBearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/ClinicId'
+      - $ref: '#/components/parameters/ClinicId'
       requestBody:
         required: true
         content:
@@ -882,37 +913,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
     get:
       summary: Lấy danh sách phân công bác sĩ tại phòng khám
-      description: |
-        CLINIC_ADMIN và SYSTEM_ADMIN xem được toàn bộ.
+      description: 'CLINIC_ADMIN và SYSTEM_ADMIN xem được toàn bộ.
+
         DOCTOR chỉ xem được danh sách phân công của chính mình.
+
+        '
       operationId: getDoctorAssignments
       tags:
-        - Doctor Assignments
+      - Doctor Assignments
       security:
-        - UserBearerAuth: []
+      - UserBearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/ClinicId'
-        - name: doctorId
-          in: query
-          required: false
-          schema:
-            type: string
-            format: uuid
-        - name: patientId
-          in: query
-          required: false
-          schema:
-            type: string
-            format: uuid
-        - name: status
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: [ACTIVE, REVOKED, ALL]
+      - $ref: '#/components/parameters/ClinicId'
+      - name: doctorId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: patientId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - REVOKED
+          - ALL
       responses:
         '200':
           description: Danh sách phân công bác sĩ.
@@ -926,26 +961,28 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
-
   /api/v1/clinics/{clinicId}/assignments/{assignmentId}:
     delete:
       summary: Thu hồi phân công bác sĩ tại phòng khám
-      description: |
-        Chuyển trạng thái phân công thành REVOKED (bảo toàn audit trail, không hard delete).
+      description: 'Chuyển trạng thái phân công thành REVOKED (bảo toàn audit trail,
+        không hard delete).
+
         Chỉ cho phép CLINIC_ADMIN của phòng khám hoặc SYSTEM_ADMIN thực hiện.
+
+        '
       operationId: revokeDoctorAssignment
       tags:
-        - Doctor Assignments
+      - Doctor Assignments
       security:
-        - UserBearerAuth: []
+      - UserBearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/ClinicId'
-        - name: assignmentId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
+      - $ref: '#/components/parameters/ClinicId'
+      - name: assignmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
       responses:
         '204':
           description: Thu hồi phân công thành công.
@@ -957,19 +994,23 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
-
   /internal/v1/profile/camera-delegation/resolve:
     post:
       summary: Phân giải ủy quyền thiết bị camera chụp đáy mắt cho Analysis Service
-      description: |
-        Được gọi nội bộ bởi Analysis Service khi tiếp nhận ảnh từ NiFi Camera.
-        Xác minh tính hợp lệ của grant, deviceId, clientId, servicePrincipalId, patientId, tenantId.
+      description: 'Được gọi nội bộ bởi Analysis Service khi tiếp nhận ảnh từ NiFi
+        Camera.
+
+        Xác minh tính hợp lệ của grant, deviceId, clientId, servicePrincipalId, patientId,
+        tenantId.
+
         Sprint 3 chỉ chấp nhận camera cho tenant PERSONAL.
+
+        '
       operationId: resolveCameraDelegation
       tags:
-        - Profile Internal
+      - Profile Internal
       security:
-        - ServiceTokenAuth: []
+      - ServiceTokenAuth: []
       requestBody:
         required: true
         content:
@@ -991,13 +1032,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
   /health:
     get:
       summary: Kiểm tra trạng thái hoạt động của dịch vụ Profile
       operationId: checkHealth
       tags:
-        - Platform
+      - Platform
       responses:
         '200':
           description: Dịch vụ đang hoạt động bình thường.
@@ -1006,7 +1046,50 @@ paths:
               schema:
                 type: string
                 example: Healthy
-
+  /api/v1/clinics/invitations/{membershipId}/accept:
+    post:
+      summary: Explicit one-time clinic invitation acceptance
+      description: Firebase verified email must match invitation. Token hash stored
+        server-side, expires after72hours; role membership does not grant global Doctor
+        capability.
+      parameters:
+      - name: membershipId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - token
+              properties:
+                token:
+                  type: string
+      responses:
+        '200':
+          description: Activated membership
+        '400':
+          description: Token invalid/used
+        '403':
+          description: Email unverified,wrong email or clinic suspended
+        '410':
+          description: Invitation expired
+  /internal/v1/profile/clinic-access/resolve:
+    post:
+      summary: Resolve clinic operation authority independently of patient
+      description: Service JWT profile:resolve; input actorAccountId,clinicId,action
+        (CAMPAIGN_MANAGE/BILLING_MANAGE/etc). Profile owns clinic-to-tenant mapping
+        and current membership.
+      responses:
+        '200':
+          description: allowed,tenantId,role,reason; allowed=false must deny
+        '401':
+          description: Invalid service token
 components:
   securitySchemes:
     BearerAuth:
@@ -1019,7 +1102,6 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: Service-to-Service JWT do Identity cấp (RS256, audience aura-profile).
-
   parameters:
     CorrelationIdHeader:
       name: X-Correlation-Id
@@ -1030,7 +1112,6 @@ components:
         type: string
         maxLength: 64
         example: a0000000-0000-4000-8000-000000000001
-
     IfMatchHeader:
       name: If-Match
       in: header
@@ -1039,26 +1120,30 @@ components:
       schema:
         type: string
         example: '"1"'
-
+    ClinicId:
+      name: clinicId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   headers:
     ETagHeader:
       description: Chuỗi ETag định danh phiên bản của hồ sơ ("<profileVersion>").
       schema:
         type: string
         example: '"1"'
-
     CorrelationIdHeader:
       description: Mã truy vết tương ứng cho phản hồi.
       schema:
         type: string
-
   schemas:
     ProfileDto:
       type: object
       required:
-        - accountId
-        - displayName
-        - profileVersion
+      - accountId
+      - displayName
+      - profileVersion
       properties:
         accountId:
           type: string
@@ -1073,7 +1158,7 @@ components:
           type: string
           nullable: true
           description: Số điện thoại liên hệ.
-          example: "0912345678"
+          example: 0912345678
         patientId:
           type: string
           format: uuid
@@ -1090,10 +1175,10 @@ components:
           type: integer
           description: Phiên bản hồ sơ hiện tại.
           example: 1
-
     UpdateProfileRequest:
       type: object
-      description: Dữ liệu cập nhật hồ sơ. Không chấp nhận bất kỳ trường phân quyền nào.
+      description: Dữ liệu cập nhật hồ sơ. Không chấp nhận bất kỳ trường phân quyền
+        nào.
       properties:
         displayName:
           type: string
@@ -1106,14 +1191,13 @@ components:
           maxLength: 30
           nullable: true
           description: Số điện thoại mới (tối đa 30 ký tự).
-          example: "0912345678"
-
+          example: 0912345678
     ProvisionProfileRequest:
       type: object
       required:
-        - accountId
-        - firebaseUid
-        - displayName
+      - accountId
+      - firebaseUid
+      - displayName
       properties:
         accountId:
           type: string
@@ -1130,13 +1214,12 @@ components:
           format: email
           nullable: true
           example: hoang@example.com
-
     AccessResolveRequest:
       type: object
       required:
-        - actorAccountId
-        - patientId
-        - action
+      - actorAccountId
+      - patientId
+      - action
       properties:
         actorAccountId:
           type: string
@@ -1156,13 +1239,16 @@ components:
           example: null
         action:
           type: string
-          enum: [ANALYSIS_CREATE, ANALYSIS_READ, ANALYSIS_FILE_READ, DOCTOR_REVIEW]
+          enum:
+          - ANALYSIS_CREATE
+          - ANALYSIS_READ
+          - ANALYSIS_FILE_READ
+          - DOCTOR_REVIEW
           example: ANALYSIS_CREATE
-
     AccessResolveResponse:
       type: object
       required:
-        - allowed
+      - allowed
       properties:
         allowed:
           type: boolean
@@ -1185,7 +1271,9 @@ components:
         tenantKind:
           type: string
           nullable: true
-          enum: [PERSONAL, CLINIC]
+          enum:
+          - PERSONAL
+          - CLINIC
           example: PERSONAL
         ownerPrincipalId:
           type: string
@@ -1197,25 +1285,25 @@ components:
         permissionVersion:
           type: integer
           example: 1
-
     BillingOwnerDto:
       type: object
       nullable: true
       properties:
         type:
           type: string
-          enum: [ACCOUNT, CLINIC]
+          enum:
+          - ACCOUNT
+          - CLINIC
           example: ACCOUNT
         id:
           type: string
           format: uuid
           example: 668c4a32-5342-4d8b-b505-07d548732120
-
     AddClinicMemberRequest:
       type: object
       required:
-        - accountId
-        - role
+      - accountId
+      - role
       properties:
         accountId:
           type: string
@@ -1224,21 +1312,23 @@ components:
           example: f0000000-0000-0000-0000-000000000001
         role:
           type: string
-          enum: [CLINIC_ADMIN, DOCTOR, STAFF]
+          enum:
+          - CLINIC_ADMIN
+          - DOCTOR
+          - STAFF
           description: Vai tr� du?c c?p trong ph?m vi ph�ng kh�m.
           example: DOCTOR
-
     ClinicMembershipDto:
       type: object
       required:
-        - membershipId
-        - clinicId
-        - accountId
-        - displayName
-        - role
-        - status
-        - createdAt
-        - updatedAt
+      - membershipId
+      - clinicId
+      - accountId
+      - displayName
+      - role
+      - status
+      - createdAt
+      - updatedAt
       properties:
         membershipId:
           type: string
@@ -1263,26 +1353,37 @@ components:
           example: BS. Nh�n khoa Alpha
         role:
           type: string
-          enum: [CLINIC_ADMIN, DOCTOR, STAFF]
+          enum:
+          - CLINIC_ADMIN
+          - DOCTOR
+          - STAFF
           example: DOCTOR
         status:
           type: string
-          enum: [ACTIVE, REVOKED]
+          enum:
+          - ACTIVE
+          - REVOKED
           example: ACTIVE
         createdAt:
           type: string
           format: date-time
-          example: "2026-10-29T10:00:00Z"
+          example: '2026-10-29T10:00:00Z'
         updatedAt:
           type: string
           format: date-time
-          example: "2026-10-29T10:00:00Z"
-
+          example: '2026-10-29T10:00:00Z'
+        invitationToken:
+          type: string
+          nullable: true
+          readOnly: true
+          description: Returned once to authorized inviter. Hash stored server-side;
+            72-hour TTL, explicit verified-email acceptance. Never included on list
+            responses.
     ClinicMemberListResponse:
       type: object
       required:
-        - clinicId
-        - items
+      - clinicId
+      - items
       properties:
         clinicId:
           type: string
@@ -1292,22 +1393,20 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ClinicMembershipDto'
-
     ErrorEnvelope:
       type: object
       required:
-        - error
+      - error
       properties:
         error:
           $ref: '#/components/schemas/ErrorDetails'
-
     ErrorDetails:
       type: object
       required:
-        - code
-        - message
-        - correlationId
-        - retryable
+      - code
+      - message
+      - correlationId
+      - retryable
       properties:
         code:
           type: string
@@ -1321,40 +1420,11 @@ components:
         retryable:
           type: boolean
           example: false
-
-  responses:
-    400BadRequest:
-      description: Dữ liệu gửi lên không hợp lệ hoặc thiếu header bắt buộc.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorEnvelope'
-
-    401Unauthorized:
-      description: Cần đăng nhập để thực hiện thao tác.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorEnvelope'
-          example:
-            error:
-              code: ERR_UNAUTHORIZED
-              message: Cần đăng nhập để cập nhật hồ sơ.
-              correlationId: a0000000-0000-4000-8000-000000000001
-              retryable: false
-
-    500InternalError:
-      description: Lỗi máy chủ hoặc cơ sở dữ liệu nội bộ.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorEnvelope'
-
     CreateDoctorAssignmentRequest:
       type: object
       required:
-        - doctorId
-        - patientId
+      - doctorId
+      - patientId
       properties:
         doctorId:
           type: string
@@ -1362,19 +1432,18 @@ components:
         patientId:
           type: string
           format: uuid
-
     DoctorAssignmentDto:
       type: object
       required:
-        - assignmentId
-        - clinicId
-        - doctorId
-        - doctorName
-        - patientId
-        - status
-        - assignedAt
-        - createdAt
-        - updatedAt
+      - assignmentId
+      - clinicId
+      - doctorId
+      - doctorName
+      - patientId
+      - status
+      - assignedAt
+      - createdAt
+      - updatedAt
       properties:
         assignmentId:
           type: string
@@ -1392,7 +1461,10 @@ components:
           format: uuid
         status:
           type: string
-          enum: [ACTIVE, REVOKED, EXPIRED]
+          enum:
+          - ACTIVE
+          - REVOKED
+          - EXPIRED
         assignedAt:
           type: string
           format: date-time
@@ -1406,12 +1478,22 @@ components:
         updatedAt:
           type: string
           format: date-time
-
+        analysisId:
+          type: string
+          format: uuid
+          nullable: true
+        transferredFromAssignmentId:
+          type: string
+          format: uuid
+          nullable: true
+        notes:
+          type: string
+          nullable: true
     DoctorAssignmentListResponse:
       type: object
       required:
-        - clinicId
-        - items
+      - clinicId
+      - items
       properties:
         clinicId:
           type: string
@@ -1420,17 +1502,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DoctorAssignmentDto'
-
     CameraDelegationResolveRequest:
       type: object
       required:
-        - actorAccountId
-        - patientId
-        - servicePrincipalId
-        - clientId
-        - deviceId
-        - expectedTenantId
-        - action
+      - actorAccountId
+      - patientId
+      - servicePrincipalId
+      - clientId
+      - deviceId
+      - expectedTenantId
+      - action
       properties:
         actorAccountId:
           type: string
@@ -1451,11 +1532,10 @@ components:
         action:
           type: string
           example: ANALYSIS_CREATE
-
     CameraDelegationResolveResponse:
       type: object
       required:
-        - allowed
+      - allowed
       properties:
         allowed:
           type: boolean
@@ -1483,21 +1563,20 @@ components:
         reason:
           type: string
           nullable: true
-
     RegisterClinicRequest:
       type: object
       required:
-        - name
-        - taxId
-        - address
-        - representativeName
+      - name
+      - taxId
+      - address
+      - representativeName
       properties:
         name:
           type: string
           example: Phòng khám Đa khoa Quốc tế AURA
         taxId:
           type: string
-          example: 0101234567
+          example: 17119607
         address:
           type: string
           example: 123 Đường Giải Phóng, Hà Nội
@@ -1508,26 +1587,28 @@ components:
           type: string
           nullable: true
           example: 0987654321
-
     UpdateClinicStatusRequest:
       type: object
       required:
-        - status
+      - status
       properties:
         status:
           type: string
-          enum: [PENDING, ACTIVE, SUSPENDED, REJECTED]
+          enum:
+          - PENDING
+          - ACTIVE
+          - SUSPENDED
+          - REJECTED
           example: ACTIVE
         reason:
           type: string
           nullable: true
           example: Hồ sơ pháp lý đầy đủ và hợp lệ
-
     InviteClinicMemberRequest:
       type: object
       required:
-        - email
-        - role
+      - email
+      - role
       properties:
         email:
           type: string
@@ -1535,17 +1616,17 @@ components:
           example: doctor.tran@auraclinic.vn
         role:
           type: string
-          description: Vai trò trong phòng khám (ClinicManager, ClinicDoctor, ClinicStaff hoặc CLINIC_ADMIN, DOCTOR, STAFF)
+          description: Vai trò trong phòng khám (ClinicManager, ClinicDoctor, ClinicStaff
+            hoặc CLINIC_ADMIN, DOCTOR, STAFF)
           example: ClinicDoctor
-
     ClinicDto:
       type: object
       required:
-        - clinicId
-        - name
-        - status
-        - createdAt
-        - updatedAt
+      - clinicId
+      - name
+      - status
+      - createdAt
+      - updatedAt
       properties:
         clinicId:
           type: string
@@ -1556,12 +1637,16 @@ components:
           example: Phòng khám Đa khoa Quốc tế AURA
         status:
           type: string
-          enum: [PENDING, ACTIVE, SUSPENDED, REJECTED]
+          enum:
+          - PENDING
+          - ACTIVE
+          - SUSPENDED
+          - REJECTED
           example: PENDING
         taxId:
           type: string
           nullable: true
-          example: 0101234567
+          example: 17119607
         address:
           type: string
           nullable: true
@@ -1584,7 +1669,6 @@ components:
         updatedAt:
           type: string
           format: date-time
-
     ClinicPatientMedicalHistoryDto:
       type: object
       properties:
@@ -1600,11 +1684,10 @@ components:
         otherConditions:
           type: string
           example: Rối loạn lipid máu
-
     RegisterClinicPatientRequest:
       type: object
       required:
-        - fullName
+      - fullName
       properties:
         fullName:
           type: string
@@ -1612,20 +1695,22 @@ components:
         dateOfBirth:
           type: string
           format: date
-          example: "1975-08-15"
+          example: '1975-08-15'
         gender:
           type: string
-          enum: [MALE, FEMALE, OTHER]
+          enum:
+          - MALE
+          - FEMALE
+          - OTHER
           example: MALE
         phone:
           type: string
-          example: "0912345678"
+          example: 0912345678
         healthInsuranceNumber:
           type: string
-          example: "DN4010123456789"
+          example: DN4010123456789
         medicalHistory:
           $ref: '#/components/schemas/ClinicPatientMedicalHistoryDto'
-
     UpdateClinicPatientRequest:
       type: object
       properties:
@@ -1635,29 +1720,28 @@ components:
         dateOfBirth:
           type: string
           format: date
-          example: "1975-08-15"
+          example: '1975-08-15'
         gender:
           type: string
           example: MALE
         phone:
           type: string
-          example: "0912345678"
+          example: 0912345678
         healthInsuranceNumber:
           type: string
-          example: "DN4010123456789"
+          example: DN4010123456789
         medicalHistory:
           $ref: '#/components/schemas/ClinicPatientMedicalHistoryDto'
-
     ClinicPatientDto:
       type: object
       required:
-        - patientId
-        - clinicId
-        - tenantId
-        - patientType
-        - status
-        - createdAt
-        - updatedAt
+      - patientId
+      - clinicId
+      - tenantId
+      - patientType
+      - status
+      - createdAt
+      - updatedAt
       properties:
         patientId:
           type: string
@@ -1673,7 +1757,9 @@ components:
           example: t1111111-0000-0000-0000-000000000001
         patientType:
           type: string
-          enum: [PERSONAL, CLINIC_MANAGED]
+          enum:
+          - PERSONAL
+          - CLINIC_MANAGED
           example: CLINIC_MANAGED
         fullName:
           type: string
@@ -1683,7 +1769,7 @@ components:
           type: string
           format: date
           nullable: true
-          example: "1975-08-15"
+          example: '1975-08-15'
         gender:
           type: string
           nullable: true
@@ -1691,11 +1777,11 @@ components:
         phone:
           type: string
           nullable: true
-          example: "0912345678"
+          example: 0912345678
         healthInsuranceNumber:
           type: string
           nullable: true
-          example: "DN4010123456789"
+          example: DN4010123456789
         medicalHistory:
           $ref: '#/components/schemas/ClinicPatientMedicalHistoryDto'
         status:
@@ -1707,13 +1793,12 @@ components:
         updatedAt:
           type: string
           format: date-time
-
     ClinicPatientListResponse:
       type: object
       required:
-        - clinicId
-        - items
-        - totalCount
+      - clinicId
+      - items
+      - totalCount
       properties:
         clinicId:
           type: string
@@ -1725,12 +1810,11 @@ components:
         totalCount:
           type: integer
           example: 42
-
     BatchAssignDoctorRequest:
       type: object
       required:
-        - doctorId
-        - patientIds
+      - doctorId
+      - patientIds
       properties:
         doctorId:
           type: string
@@ -1743,11 +1827,10 @@ components:
         notes:
           type: string
           nullable: true
-
     TransferDoctorAssignmentRequest:
       type: object
       required:
-        - newDoctorId
+      - newDoctorId
       properties:
         newDoctorId:
           type: string
@@ -1755,3 +1838,41 @@ components:
         notes:
           type: string
           nullable: true
+  responses:
+    400BadRequest: &id001
+      description: Dữ liệu gửi lên không hợp lệ hoặc thiếu header bắt buộc.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    401Unauthorized:
+      description: Cần đăng nhập để thực hiện thao tác.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: ERR_UNAUTHORIZED
+              message: Cần đăng nhập để cập nhật hồ sơ.
+              correlationId: a0000000-0000-4000-8000-000000000001
+              retryable: false
+    500InternalError:
+      description: Lỗi máy chủ hoặc cơ sở dữ liệu nội bộ.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    400ValidationError: *id001
+    403Forbidden:
+      description: Authenticated account lacks current operation permission.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    404NotFound:
+      description: Resource missing or outside current tenant or assignment scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'

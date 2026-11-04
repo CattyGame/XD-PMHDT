@@ -1,16 +1,23 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using AURA.Profile.Api.Models;
 using Npgsql;
 
 namespace AURA.Profile.Api;
 
-public class ProfileRepository
+public partial class ProfileRepository
 {
     private readonly NpgsqlDataSource _dataSource;
 
-    public ProfileRepository(NpgsqlDataSource dataSource)
+    private readonly IAccountAuthority? _accountAuthority;
+    private readonly IAnalysisBindingAuthority? _analysisBindingAuthority;
+
+    public ProfileRepository(NpgsqlDataSource dataSource, IAccountAuthority? accountAuthority = null, IAnalysisBindingAuthority? analysisBindingAuthority = null)
     {
         _dataSource = dataSource;
+        _accountAuthority = accountAuthority;
+        _analysisBindingAuthority = analysisBindingAuthority;
     }
 
     public async Task<UserProfileResponse?> GetProfileByAccountIdAsync(Guid accountId, CancellationToken cancellationToken = default)
@@ -207,223 +214,8 @@ public class ProfileRepository
     public async Task<AccessResolveResponse> ResolveAccessAsync(
         Guid actorAccountId, Guid patientId, Guid? clinicContextId, string action, Guid? analysisId, CancellationToken cancellationToken = default)
     {
-        var allowedActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "ANALYSIS_CREATE",
-            "ANALYSIS_READ",
-            "ANALYSIS_FILE_READ",
-            "DOCTOR_REVIEW"
-        };
-
-        if (string.IsNullOrWhiteSpace(action) || !allowedActions.Contains(action))
-        {
-            return new AccessResolveResponse(false, "ACTIVE", patientId, null, null, null, null, 1);
-        }
-
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-
-        // 1. Kiểm tra trạng thái tài khoản Actor trong identity.accounts (Fail-Closed nếu DISABLED)
-        const string accountCheckSql = "SELECT account_status FROM identity.accounts WHERE account_id = $1 LIMIT 1;";
-        await using (var accCmd = new NpgsqlCommand(accountCheckSql, connection))
-        {
-            accCmd.Parameters.AddWithValue(actorAccountId);
-            var accStatusObj = await accCmd.ExecuteScalarAsync(cancellationToken);
-            if (accStatusObj is string accStatus && !string.Equals(accStatus, "ACTIVE", StringComparison.OrdinalIgnoreCase))
-            {
-                return new AccessResolveResponse(false, accStatus, patientId, null, null, null, null, 1);
-            }
-        }
-
-        // 2. Tìm thông tin bệnh nhân
-        const string patientSql = @"
-            SELECT patient_id, tenant_id, linked_account_id, owner_principal_id, status
-            FROM profile.patients
-            WHERE patient_id = $1;";
-
-        Guid pTenantId;
-        Guid? pLinkedAccountId;
-        Guid pOwnerPrincipalId;
-        string pStatus;
-
-        await using (var pCmd = new NpgsqlCommand(patientSql, connection))
-        {
-            pCmd.Parameters.AddWithValue(patientId);
-            await using var reader = await pCmd.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
-            {
-                return new AccessResolveResponse(false, null, null, null, null, null, null, 1);
-            }
-
-            pTenantId = reader.GetGuid(1);
-            pLinkedAccountId = reader.IsDBNull(2) ? (Guid?)null : reader.GetGuid(2);
-            pOwnerPrincipalId = reader.GetGuid(3);
-            pStatus = reader.GetString(4);
-        }
-
-        if (pStatus != "ACTIVE")
-        {
-            return new AccessResolveResponse(false, "DISABLED", patientId, null, null, null, null, 1);
-        }
-
-        // 3. Ngữ cảnh cá nhân (clinicContextId is null)
-        if (!clinicContextId.HasValue)
-        {
-            if (action.Equals("DOCTOR_REVIEW", StringComparison.OrdinalIgnoreCase))
-            {
-                return new AccessResolveResponse(false, "ACTIVE", patientId, null, null, null, null, 1);
-            }
-
-            var isOwn = (pLinkedAccountId.HasValue && pLinkedAccountId.Value == actorAccountId)
-                        || pOwnerPrincipalId == actorAccountId;
-
-            if (isOwn)
-            {
-                return new AccessResolveResponse(
-                    Allowed: true,
-                    AccountStatus: "ACTIVE",
-                    PatientId: patientId,
-                    TenantId: pTenantId,
-                    TenantKind: "PERSONAL",
-                    OwnerPrincipalId: actorAccountId,
-                    BillingOwner: new BillingOwnerDto("ACCOUNT", actorAccountId),
-                    PermissionVersion: 1
-                );
-            }
-
-            return new AccessResolveResponse(false, "ACTIVE", patientId, null, null, null, null, 1);
-        }
-
-        // 4. Ngữ cảnh phòng khám (Clinic context)
-        var clinicId = clinicContextId.Value;
-
-        const string clinicSql = "SELECT tenant_id, status FROM profile.clinics WHERE clinic_id = $1 LIMIT 1;";
-        Guid clinicTenantId;
-        string clinicStatus = "ACTIVE";
-        await using (var cCmd = new NpgsqlCommand(clinicSql, connection))
-        {
-            cCmd.Parameters.AddWithValue(clinicId);
-            await using var cReader = await cCmd.ExecuteReaderAsync(cancellationToken);
-            if (!await cReader.ReadAsync(cancellationToken))
-            {
-                return new AccessResolveResponse(false, "ACTIVE", patientId, null, null, null, null, 1);
-            }
-            clinicTenantId = cReader.GetGuid(0);
-            clinicStatus = cReader.GetString(1);
-        }
-
-        // AC3: Khi Clinic bị SUSPENDED, phong tỏa quyền tạo ca chụp mới (ANALYSIS_CREATE)
-        if (clinicStatus.Equals(ClinicStatuses.Suspended, StringComparison.OrdinalIgnoreCase) &&
-            action.Equals("ANALYSIS_CREATE", StringComparison.OrdinalIgnoreCase))
-        {
-            return new AccessResolveResponse(
-                Allowed: false,
-                AccountStatus: "ACTIVE",
-                PatientId: patientId,
-                TenantId: clinicTenantId,
-                TenantKind: "CLINIC",
-                OwnerPrincipalId: clinicId,
-                BillingOwner: new BillingOwnerDto("CLINIC", clinicId),
-                PermissionVersion: 1,
-                Reason: "CLINIC_SUSPENDED"
-            );
-        }
-
-        if (!clinicStatus.Equals(ClinicStatuses.Active, StringComparison.OrdinalIgnoreCase) &&
-            action.Equals("ANALYSIS_CREATE", StringComparison.OrdinalIgnoreCase))
-        {
-            return new AccessResolveResponse(
-                Allowed: false,
-                AccountStatus: "ACTIVE",
-                PatientId: patientId,
-                TenantId: clinicTenantId,
-                TenantKind: "CLINIC",
-                OwnerPrincipalId: clinicId,
-                BillingOwner: new BillingOwnerDto("CLINIC", clinicId),
-                PermissionVersion: 1,
-                Reason: "CLINIC_" + clinicStatus.ToUpperInvariant()
-            );
-        }
-
-        var patientBelongsToClinic = (pTenantId == clinicTenantId || pOwnerPrincipalId == clinicId);
-        if (!patientBelongsToClinic)
-        {
-            return new AccessResolveResponse(false, "ACTIVE", patientId, null, null, null, null, 1);
-        }
-
-        const string memberSql = "SELECT role FROM profile.memberships WHERE clinic_id = $1 AND account_id = $2 AND status = 'ACTIVE';";
-        string? memberRole = null;
-        await using (var mCmd = new NpgsqlCommand(memberSql, connection))
-        {
-            mCmd.Parameters.AddWithValue(clinicId);
-            mCmd.Parameters.AddWithValue(actorAccountId);
-            var roleObj = await mCmd.ExecuteScalarAsync(cancellationToken);
-            memberRole = roleObj as string;
-        }
-
-        if (string.IsNullOrEmpty(memberRole))
-        {
-            return new AccessResolveResponse(false, "ACTIVE", patientId, null, null, null, null, 1);
-        }
-
-        if (memberRole == "CLINIC_ADMIN")
-        {
-            if (action.Equals("DOCTOR_REVIEW", StringComparison.OrdinalIgnoreCase))
-            {
-                return new AccessResolveResponse(false, "ACTIVE", patientId, null, null, null, null, 1);
-            }
-
-            return new AccessResolveResponse(
-                Allowed: true,
-                AccountStatus: "ACTIVE",
-                PatientId: patientId,
-                TenantId: clinicTenantId,
-                TenantKind: "CLINIC",
-                OwnerPrincipalId: clinicId,
-                BillingOwner: new BillingOwnerDto("CLINIC", clinicId),
-                PermissionVersion: 1
-            );
-        }
-
-        if (memberRole == "DOCTOR")
-        {
-            const string assignSql = @"
-                SELECT assignment_id FROM profile.doctor_assignments
-                WHERE clinic_id = $1 AND doctor_account_id = $2
-                  AND (
-                    (patient_id = $3 AND analysis_id IS NULL)
-                    OR ($4::uuid IS NOT NULL AND analysis_id = $4::uuid)
-                  )
-                  AND status = 'ACTIVE'
-                LIMIT 1;";
-
-            await using var aCmd = new NpgsqlCommand(assignSql, connection);
-            aCmd.Parameters.AddWithValue(clinicId);
-            aCmd.Parameters.AddWithValue(actorAccountId);
-            aCmd.Parameters.AddWithValue(patientId);
-            aCmd.Parameters.AddWithValue((object?)analysisId ?? DBNull.Value);
-
-            var assignObj = await aCmd.ExecuteScalarAsync(cancellationToken);
-            if (assignObj is Guid)
-            {
-                return new AccessResolveResponse(
-                    Allowed: true,
-                    AccountStatus: "ACTIVE",
-                    PatientId: patientId,
-                    TenantId: clinicTenantId,
-                    TenantKind: "CLINIC",
-                    OwnerPrincipalId: clinicId,
-                    BillingOwner: new BillingOwnerDto("CLINIC", clinicId),
-                    PermissionVersion: 1
-                );
-            }
-        }
-
-        return new AccessResolveResponse(false, "ACTIVE", patientId, null, null, null, null, 1);
+        return await ResolvePatientAccessCoreAsync(actorAccountId, patientId, clinicContextId, action, analysisId, cancellationToken);
     }
-
-    // ====================================================================
-    // CAMERA DELEGATION RESOLUTION (Task W3-M6-02 / AC1)
-    // ====================================================================
 
     public async Task<CameraDelegationResolveResponse> ResolveCameraDelegationAsync(
         CameraDelegationResolveRequest request, CancellationToken cancellationToken = default)
@@ -802,7 +594,10 @@ public class ProfileRepository
             }
 
             var now = DateTimeOffset.UtcNow;
-            var initialStatus = existingAccountId.HasValue ? MembershipStatuses.Active : MembershipStatuses.Invited;
+            var invitationToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            var invitationHash = SHA256.HashData(Encoding.UTF8.GetBytes(invitationToken));
+            // ADR-005 D2 & R15: Require explicit invitation acceptance for all accounts (no auto-active on invite)
+            var initialStatus = MembershipStatuses.Invited;
 
             // 2. Kiểm tra xem đã có membership với account_id hoặc email này trong clinic chưa
             const string checkMembershipSql = @"
@@ -842,8 +637,8 @@ public class ProfileRepository
                 membershipId = existingMembershipId.Value;
                 const string updateSql = @"
                     UPDATE profile.memberships
-                    SET role = $1, status = $2, account_id = COALESCE(account_id, $3),
-                        invited_email = $4, updated_at = $5
+                    SET role = $1, status = $2, account_id = $3,
+                        invited_email = $4, created_at = $5, updated_at = $5
                     WHERE membership_id = $6;";
 
                 await using var updateCmd = new NpgsqlCommand(updateSql, connection, transaction);
@@ -875,6 +670,16 @@ public class ProfileRepository
                 await insertCmd.ExecuteNonQueryAsync(cancellationToken);
             }
 
+            await using (var invite = new NpgsqlCommand("""
+                INSERT INTO profile.clinic_invitations(membership_id,token_hash,issued_at,expires_at,consumed_at)
+                VALUES($1,$2,$3,$4,NULL) ON CONFLICT(membership_id) DO UPDATE
+                SET token_hash=EXCLUDED.token_hash,issued_at=EXCLUDED.issued_at,expires_at=EXCLUDED.expires_at,consumed_at=NULL
+                """,connection,transaction))
+            {
+                invite.Parameters.AddWithValue(membershipId);invite.Parameters.AddWithValue(invitationHash);
+                invite.Parameters.AddWithValue(now);invite.Parameters.AddWithValue(now.AddHours(72));
+                await invite.ExecuteNonQueryAsync(cancellationToken);
+            }
             await transaction.CommitAsync(cancellationToken);
 
             return (new ClinicMembershipDto(
@@ -886,7 +691,7 @@ public class ProfileRepository
                 initialStatus,
                 now,
                 now,
-                cleanEmail
+                cleanEmail, invitationToken
             ), null);
         }
         catch
@@ -901,19 +706,9 @@ public class ProfileRepository
         string? email,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(email)) return 0;
-        var cleanEmail = email.Trim().ToLowerInvariant();
-
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        const string sql = @"
-            UPDATE profile.memberships
-            SET account_id = $1, status = 'ACTIVE', updated_at = NOW()
-            WHERE LOWER(invited_email) = $2 AND status = 'INVITED';";
-
-        await using var cmd = new NpgsqlCommand(sql, connection);
-        cmd.Parameters.AddWithValue(accountId);
-        cmd.Parameters.AddWithValue(cleanEmail);
-        return await cmd.ExecuteNonQueryAsync(cancellationToken);
+        // ADR-005 D2 & R15: Deprecated legacy auto-activation.
+        // Explicit acceptance via /api/v1/clinics/invitations/{membershipId}/accept is mandatory.
+        return 0;
     }
 
     // ====================================================================
@@ -968,43 +763,9 @@ public class ProfileRepository
     public async Task<(bool Allowed, string? FailureReason)> CheckClinicAccessAuthorityAsync(
         Guid actorAccountId, Guid clinicId, IReadOnlyList<string> actorRoles, CancellationToken cancellationToken = default)
     {
-        if (actorRoles.Contains("SYSTEM_ADMIN", StringComparer.OrdinalIgnoreCase))
-        {
-            return (true, null);
-        }
-
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-
-        const string clinicSql = "SELECT tenant_id FROM profile.clinics WHERE clinic_id = $1 AND status = 'ACTIVE' LIMIT 1;";
-        await using (var clinicCmd = new NpgsqlCommand(clinicSql, connection))
-        {
-            clinicCmd.Parameters.AddWithValue(clinicId);
-            var tenantObj = await clinicCmd.ExecuteScalarAsync(cancellationToken);
-            if (tenantObj is not Guid)
-            {
-                return (false, "CLINIC_NOT_FOUND");
-            }
-        }
-
-        const string memberSql = @"
-            SELECT role FROM profile.memberships
-            WHERE clinic_id = $1 AND account_id = $2 AND status = 'ACTIVE'
-            LIMIT 1;";
-
-        await using (var memberCmd = new NpgsqlCommand(memberSql, connection))
-        {
-            memberCmd.Parameters.AddWithValue(clinicId);
-            memberCmd.Parameters.AddWithValue(actorAccountId);
-            var roleObj = await memberCmd.ExecuteScalarAsync(cancellationToken);
-            if (roleObj is not string)
-            {
-                return (false, "NOT_A_MEMBER");
-            }
-
-            return (true, null);
-        }
+        var decision=await ResolveClinicAccessAsync(actorAccountId,clinicId,"REGISTRY_READ",cancellationToken);
+        return(decision.Allowed,decision.Reason);
     }
-
 
     public async Task<IReadOnlyList<ClinicMembershipDto>> GetClinicMembersAsync(
         Guid clinicId, string? statusFilter = null, CancellationToken cancellationToken = default)
@@ -1212,14 +973,18 @@ public class ProfileRepository
         => CreateOrReactivateDoctorAssignmentAsync(clinicId, doctorId, patientId, null, null, null, cancellationToken);
 
     public async Task<(bool Success, DoctorAssignmentDto? Assignment, string? ErrorCode, string? ErrorMessage)> CreateOrReactivateDoctorAssignmentAsync(
-        Guid clinicId, Guid doctorId, Guid patientId, Guid? analysisId, string? notes = null, Guid? transferredFromAssignmentId = null, CancellationToken cancellationToken = default)
+        Guid clinicId, Guid doctorId, Guid patientId, Guid? analysisId, string? notes = null, Guid? transferredFromAssignmentId = null, CancellationToken cancellationToken = default, NpgsqlConnection? existingConnection = null, NpgsqlTransaction? existingTransaction = null)
     {
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var ownedConnection = existingConnection is null ? await _dataSource.OpenConnectionAsync(cancellationToken) : null;
+        var connection = existingConnection ?? ownedConnection!;
+        var account = await AccountAsync(doctorId, cancellationToken);
+        if (account?.AccountStatus != "ACTIVE" || !account.Roles.Contains("DOCTOR", StringComparer.Ordinal))
+            return (false, null, "ERR_INVALID_DOCTOR", "Global Doctor capability is required.");
 
         // 1. Kiểm tra Clinic tồn tại và ACTIVE
         const string clinicSql = "SELECT tenant_id FROM profile.clinics WHERE clinic_id = $1 AND status = 'ACTIVE' LIMIT 1;";
         Guid clinicTenantId;
-        await using (var clinicCmd = new NpgsqlCommand(clinicSql, connection))
+        await using (var clinicCmd = new NpgsqlCommand(clinicSql, connection, existingTransaction))
         {
             clinicCmd.Parameters.AddWithValue(clinicId);
             var ctObj = await clinicCmd.ExecuteScalarAsync(cancellationToken);
@@ -1239,7 +1004,7 @@ public class ProfileRepository
             LIMIT 1;";
 
         string doctorName;
-        await using (var docCmd = new NpgsqlCommand(checkDoctorSql, connection))
+        await using (var docCmd = new NpgsqlCommand(checkDoctorSql, connection, existingTransaction))
         {
             docCmd.Parameters.AddWithValue(clinicId);
             docCmd.Parameters.AddWithValue(doctorId);
@@ -1257,7 +1022,7 @@ public class ProfileRepository
             WHERE patient_id = $1 AND (tenant_id = $2 OR owner_principal_id = $3) AND status = 'ACTIVE'
             LIMIT 1;";
 
-        await using (var patientCmd = new NpgsqlCommand(checkPatientSql, connection))
+        await using (var patientCmd = new NpgsqlCommand(checkPatientSql, connection, existingTransaction))
         {
             patientCmd.Parameters.AddWithValue(patientId);
             patientCmd.Parameters.AddWithValue(clinicTenantId);
@@ -1267,6 +1032,13 @@ public class ProfileRepository
             {
                 return (false, null, "ERR_PATIENT_NOT_IN_CLINIC", "Bệnh nhân không thuộc phạm vi quản lý của phòng khám.");
             }
+        }
+
+        if (analysisId is {} caseId)
+        {
+            var binding = await (_analysisBindingAuthority ?? throw new InvalidOperationException("Analysis binding authority not configured.")).GetAsync(caseId, cancellationToken);
+            if (binding is null || binding.PatientId != patientId || binding.TenantId != clinicTenantId)
+                return (false, null, "ERR_INVALID_ANALYSIS_BINDING", "Analysis does not belong to this clinic patient.");
         }
 
         // 4. Kiểm tra phân công đã tồn tại chưa
@@ -1291,7 +1063,7 @@ public class ProfileRepository
         Guid? existingAssignId = null;
         string? existingStatus = null;
 
-        await using (var checkCmd = new NpgsqlCommand(checkAssignSql, connection))
+        await using (var checkCmd = new NpgsqlCommand(checkAssignSql, connection, existingTransaction))
         {
             checkCmd.Parameters.AddWithValue(clinicId);
             checkCmd.Parameters.AddWithValue(doctorId);
@@ -1319,7 +1091,7 @@ public class ProfileRepository
                 WHERE assignment_id = $1
                 RETURNING assigned_at, created_at, updated_at;";
 
-            await using var reactivateCmd = new NpgsqlCommand(reactivateSql, connection);
+            await using var reactivateCmd = new NpgsqlCommand(reactivateSql, connection, existingTransaction);
             reactivateCmd.Parameters.AddWithValue(existingAssignId.Value);
             reactivateCmd.Parameters.AddWithValue((object?)notes ?? DBNull.Value);
             reactivateCmd.Parameters.AddWithValue((object?)transferredFromAssignmentId ?? DBNull.Value);
@@ -1347,7 +1119,7 @@ public class ProfileRepository
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', NOW(), NOW(), NOW())
                 RETURNING assigned_at, created_at, updated_at;";
 
-            await using var insertCmd = new NpgsqlCommand(insertSql, connection);
+            await using var insertCmd = new NpgsqlCommand(insertSql, connection, existingTransaction);
             insertCmd.Parameters.AddWithValue(newAssignId);
             insertCmd.Parameters.AddWithValue(clinicId);
             insertCmd.Parameters.AddWithValue(doctorId);
@@ -1389,36 +1161,13 @@ public class ProfileRepository
             }
         }
 
-        // 2. Xác định vai trò của Actor tại phòng khám
-        var isSystemAdmin = actorRoles.Contains("SYSTEM_ADMIN", StringComparer.OrdinalIgnoreCase);
-        string? memberRole = null;
-
-        if (!isSystemAdmin)
+        var policy=await ResolveClinicAccessAsync(actorAccountId,clinicId,"ASSIGNMENT_READ",cancellationToken);
+        if(!policy.Allowed)return(false,null,"ERR_FORBIDDEN","Assignment access denied.");
+        Guid? effectiveDoctorId=doctorIdFilter;
+        if(policy.Role=="DOCTOR")
         {
-            const string memberSql = "SELECT role FROM profile.memberships WHERE clinic_id = $1 AND account_id = $2 AND status = 'ACTIVE' LIMIT 1;";
-            await using var memberCmd = new NpgsqlCommand(memberSql, connection);
-            memberCmd.Parameters.AddWithValue(clinicId);
-            memberCmd.Parameters.AddWithValue(actorAccountId);
-            var roleObj = await memberCmd.ExecuteScalarAsync(cancellationToken);
-            memberRole = roleObj as string;
-
-            if (string.IsNullOrEmpty(memberRole))
-            {
-                return (false, null, "ERR_CLINIC_NOT_FOUND", "Không tìm thấy phòng khám.");
-            }
-        }
-
-        // 3. Ràng buộc quyền xem:
-        // CLINIC_ADMIN hoặc SYSTEM_ADMIN: Xem được toàn bộ, tùy chọn lọc doctorId
-        // DOCTOR: Chỉ được xem của chính mình (nếu truyền doctorId khác mình -> 403)
-        Guid? effectiveDoctorId = doctorIdFilter;
-        if (!isSystemAdmin && string.Equals(memberRole, "DOCTOR", StringComparison.OrdinalIgnoreCase))
-        {
-            if (doctorIdFilter.HasValue && doctorIdFilter.Value != actorAccountId)
-            {
-                return (false, null, "ERR_FORBIDDEN_DOCTOR_ACCESS", "Bác sĩ chỉ có quyền xem danh sách phân công của chính mình.");
-            }
-            effectiveDoctorId = actorAccountId;
+            if(doctorIdFilter.HasValue && doctorIdFilter!=actorAccountId)return(false,null,"ERR_FORBIDDEN_DOCTOR_ACCESS","Doctor can read only own assignments.");
+            effectiveDoctorId=actorAccountId;
         }
 
         var queryStatus = string.IsNullOrWhiteSpace(statusFilter) || statusFilter.Equals("ALL", StringComparison.OrdinalIgnoreCase)
@@ -1459,7 +1208,8 @@ public class ProfileRepository
             var updatedAt = reader.GetFieldValue<DateTimeOffset>(9);
 
             list.Add(new DoctorAssignmentDto(
-                assignmentId, cId, docId, doctorName, pId, status, assignedAt, revokedAt, createdAt, updatedAt));
+                assignmentId, cId, docId, doctorName, pId, status, assignedAt, revokedAt, createdAt, updatedAt,
+                reader.IsDBNull(10) ? null : reader.GetGuid(10), reader.IsDBNull(11) ? null : reader.GetGuid(11), reader.IsDBNull(12) ? null : reader.GetString(12)));
         }
 
         return (true, list, null, null);
@@ -1539,20 +1289,21 @@ public class ProfileRepository
         Guid clinicId, Guid assignmentId, Guid newDoctorId, string? notes = null, CancellationToken cancellationToken = default)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
         // 1. Tìm thông tin phân công hiện tại
         const string findSql = @"
             SELECT patient_id, analysis_id, status, doctor_account_id
             FROM profile.doctor_assignments
             WHERE clinic_id = $1 AND assignment_id = $2
-            LIMIT 1;";
+            LIMIT 1 FOR UPDATE;";
 
         Guid patientId;
         Guid? analysisId = null;
         string status;
         Guid currentDoctorId;
 
-        await using (var cmd = new NpgsqlCommand(findSql, connection))
+        await using (var cmd = new NpgsqlCommand(findSql, connection, transaction))
         {
             cmd.Parameters.AddWithValue(clinicId);
             cmd.Parameters.AddWithValue(assignmentId);
@@ -1582,15 +1333,18 @@ public class ProfileRepository
             UPDATE profile.doctor_assignments
             SET status = 'REVOKED', revoked_at = NOW(), updated_at = NOW()
             WHERE assignment_id = $1;";
-        await using (var rCmd = new NpgsqlCommand(revokeSql, connection))
+        await using (var rCmd = new NpgsqlCommand(revokeSql, connection, transaction))
         {
             rCmd.Parameters.AddWithValue(assignmentId);
             await rCmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
         // 3. Tạo phân công mới cho Bác sĩ mới (ghi nhận transferred_from_assignment_id)
-        return await CreateOrReactivateDoctorAssignmentAsync(
-            clinicId, newDoctorId, patientId, analysisId, notes, assignmentId, cancellationToken);
+        var result = await CreateOrReactivateDoctorAssignmentAsync(
+            clinicId, newDoctorId, patientId, analysisId, notes, assignmentId, cancellationToken, connection, transaction);
+        if (result.Success) await transaction.CommitAsync(cancellationToken);
+        else await transaction.RollbackAsync(cancellationToken);
+        return result;
     }
 
     // ====================================================================
@@ -1666,7 +1420,7 @@ public class ProfileRepository
     }
 
     public async Task<(bool Success, ClinicPatientListResponse? Response, string? ErrorCode, string? ErrorMessage)> GetClinicPatientsAsync(
-        Guid clinicId, string? search, string? status, int limit, int offset, CancellationToken cancellationToken = default)
+        Guid clinicId, string? search, string? status, int limit, int offset, CancellationToken cancellationToken = default, Guid? doctorFilter = null)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
 
@@ -1691,6 +1445,7 @@ public class ProfileRepository
         const string countSql = @"
             SELECT COUNT(*) FROM profile.patients
             WHERE owner_principal_id = $1
+              AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM profile.doctor_assignments da WHERE da.clinic_id=$1 AND da.doctor_account_id=$4 AND da.patient_id=profile.patients.patient_id AND da.analysis_id IS NULL AND da.status='ACTIVE'))
               AND ($2::text IS NULL OR status = $2)
               AND ($3::text IS NULL OR full_name ILIKE ('%' || $3 || '%') OR health_insurance_number ILIKE ('%' || $3 || '%'));";
 
@@ -1700,6 +1455,7 @@ public class ProfileRepository
             countCmd.Parameters.AddWithValue(clinicId);
             countCmd.Parameters.AddWithValue((object?)filterStatus ?? DBNull.Value);
             countCmd.Parameters.AddWithValue((object?)searchTrim ?? DBNull.Value);
+            countCmd.Parameters.AddWithValue((object?)doctorFilter ?? DBNull.Value);
             totalCount = (long)(await countCmd.ExecuteScalarAsync(cancellationToken))!;
         }
 
@@ -1713,6 +1469,7 @@ public class ProfileRepository
                        status, created_at, updated_at
                 FROM profile.patients
                 WHERE owner_principal_id = $1
+                  AND ($6::uuid IS NULL OR EXISTS(SELECT 1 FROM profile.doctor_assignments da WHERE da.clinic_id=$1 AND da.doctor_account_id=$6 AND da.patient_id=profile.patients.patient_id AND da.analysis_id IS NULL AND da.status='ACTIVE'))
                   AND ($2::text IS NULL OR status = $2)
                   AND ($3::text IS NULL OR full_name ILIKE ('%' || $3 || '%') OR health_insurance_number ILIKE ('%' || $3 || '%'))
                 ORDER BY created_at DESC
@@ -1727,6 +1484,7 @@ public class ProfileRepository
             listCmd.Parameters.AddWithValue((object?)searchTrim ?? DBNull.Value);
             listCmd.Parameters.AddWithValue(Math.Clamp(limit, 1, 100));
             listCmd.Parameters.AddWithValue(Math.Max(0, offset));
+            listCmd.Parameters.AddWithValue((object?)doctorFilter ?? DBNull.Value);
 
             await using var reader = await listCmd.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
@@ -1855,4 +1613,44 @@ public class ProfileRepository
         return (false, null, "ERR_INTERNAL_DB", "Không thể cập nhật hồ sơ bệnh nhân.");
     }
 
+
+    /// <summary>
+    /// ADR-005 D2: Chấp nhận lời mời tham gia phòng khám rõ ràng (Explicit Acceptance).
+    /// Kiểm tra token/lời mời trong hạn 72 giờ và email trùng khớp với tài khoản được xác nhận.
+    /// </summary>
+    public async Task<(bool Succeeded, string? ErrorCode, ClinicMembershipDto? Result)> AcceptClinicInvitationExplicitAsync(
+        Guid accountId, string? email, Guid membershipId, string token, CancellationToken cancellationToken = default)
+    {
+        if(string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(token) || token.Length>256)return(false,"ERR_INVALID_INVITATION",null);
+        await using var connection=await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction=await connection.BeginTransactionAsync(cancellationToken);
+        await using var cmd=new NpgsqlCommand("""
+            SELECT m.clinic_id,m.account_id,m.role,m.status,m.invited_email,m.created_at,c.status,
+                   i.token_hash,i.expires_at,i.consumed_at
+            FROM profile.memberships m JOIN profile.clinics c ON c.clinic_id=m.clinic_id
+            JOIN profile.clinic_invitations i ON i.membership_id=m.membership_id
+            WHERE m.membership_id=$1 FOR UPDATE OF m,i
+            """,connection,transaction);
+        cmd.Parameters.AddWithValue(membershipId);
+        Guid clinicId;string role;DateTimeOffset createdAt;
+        await using(var reader=await cmd.ExecuteReaderAsync(cancellationToken))
+        {
+            if(!await reader.ReadAsync(cancellationToken))return(false,"ERR_INVITATION_NOT_FOUND",null);
+            clinicId=reader.GetGuid(0);var linked=reader.IsDBNull(1)?(Guid?)null:reader.GetGuid(1);
+            role=reader.GetString(2);createdAt=reader.GetFieldValue<DateTimeOffset>(5);
+            if(reader.GetString(6)!="ACTIVE")return(false,"ERR_CLINIC_SUSPENDED",null);
+            if(reader.GetString(3)!="INVITED" || !reader.IsDBNull(9))return(false,"ERR_INVITATION_REVOKED",null);
+            if(reader.GetFieldValue<DateTimeOffset>(8)<=DateTimeOffset.UtcNow)return(false,"ERR_INVITATION_EXPIRED",null);
+            if(linked.HasValue && linked!=accountId || !string.Equals(reader.GetString(4),email.Trim(),StringComparison.OrdinalIgnoreCase))return(false,"ERR_EMAIL_MISMATCH",null);
+            if(!CryptographicOperations.FixedTimeEquals(reader.GetFieldValue<byte[]>(7),SHA256.HashData(Encoding.UTF8.GetBytes(token))))return(false,"ERR_INVALID_INVITATION",null);
+        }
+        await using var update=new NpgsqlCommand("""
+            UPDATE profile.memberships SET account_id=$1,status='ACTIVE',updated_at=now() WHERE membership_id=$2;
+            """,connection,transaction);
+        update.Parameters.AddWithValue(accountId);update.Parameters.AddWithValue(membershipId);await update.ExecuteNonQueryAsync(cancellationToken);
+        await using var consume=new NpgsqlCommand("UPDATE profile.clinic_invitations SET consumed_at=now() WHERE membership_id=$1",connection,transaction);
+        consume.Parameters.AddWithValue(membershipId);await consume.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return(true,null,new ClinicMembershipDto(membershipId,clinicId,accountId,null,role,"ACTIVE",createdAt,DateTimeOffset.UtcNow,email));
+    }
 }

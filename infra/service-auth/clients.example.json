@@ -17,7 +17,8 @@
         "aura-billing": [
           "billing:reserve",
           "billing:read",
-          "billing:release"
+          "billing:release",
+          "billing:refund"
         ]
       }
     },
@@ -36,6 +37,12 @@
       "allowedTargets": {
         "aura-profile": [
           "profile:resolve"
+        ],
+        "aura-identity": [
+          "identity:context"
+        ],
+        "aura-analysis": [
+          "analysis:reconcile"
         ]
       }
     },
@@ -45,6 +52,21 @@
       "allowedTargets": {
         "aura-identity": [
           "identity:context"
+        ],
+        "aura-analysis": [
+          "analysis:binding"
+        ]
+      }
+    },
+    {
+      "clientId": "analysis-worker",
+      "principalId": "d118f0f0-98b9-52e1-a4a5-5b094496ae37",
+      "allowedTargets": {
+        "aura-profile": [
+          "profile:resolve"
+        ],
+        "aura-ai": [
+          "ai:analyze"
         ]
       }
     }

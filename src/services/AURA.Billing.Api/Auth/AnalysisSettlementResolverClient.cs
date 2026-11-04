@@ -240,7 +240,7 @@ public sealed class AnalysisSettlementResolverClient(
         return token.AccessToken!;
     }
 
-    private static void ValidateResolution(
+    internal static void ValidateResolution(
         SettlementResolutionResponse result,
         Guid expectedEventId,
         Guid expectedAnalysisId,
@@ -307,7 +307,7 @@ public sealed class AnalysisSettlementResolverClient(
                 && reservationId != Guid.Empty
                 && result.Generation is > 0
                 && result.ResultVersion is null
-                && result.IsMock == false;
+                && result.IsMock is false or null;
 
             if (!valid)
             {
