@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
+import type { BackendContext } from '../api/backendContext'
 import {
   getActorClinics,
   getClinicPatients,
@@ -14,11 +15,7 @@ import {
 import { AnalysisResultError } from '../api/analysisResult'
 import './ClinicPatientPage.css'
 
-export default function ClinicPatientPage() {
-  const { state } = useBackendSession()
-  if (state.status !== 'ready') return <BackendSessionNotice />
-  const { context } = state
-
+function ClinicPatientContent({ context }: { context: BackendContext }) {
   const [clinics, setClinics] = useState<readonly ClinicInfo[]>([])
   const [selectedClinicId, setSelectedClinicId] = useState<string>('')
   const [patients, setPatients] = useState<readonly ClinicPatient[]>([])
@@ -26,9 +23,10 @@ export default function ClinicPatientPage() {
   const [search, setSearch] = useState<string>('')
   const [selectedPatient, setSelectedPatient] = useState<ClinicPatient | null>(null)
 
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>('')
   const [successMsg, setSuccessMsg] = useState<string>('')
+  const [reloadTrigger, setReloadTrigger] = useState(0)
 
   // Modal register patient state
   const [showRegisterModal, setShowRegisterModal] = useState(false)
@@ -49,8 +47,6 @@ export default function ClinicPatientPage() {
   // 1. Load actor's clinics
   useEffect(() => {
     const controller = new AbortController()
-    setLoading(true)
-    setError('')
     getActorClinics(context, controller.signal)
       .then((items) => {
         if (controller.signal.aborted) return
@@ -76,44 +72,33 @@ export default function ClinicPatientPage() {
   }, [context])
 
   // 2. Load patients for selected clinic (AC2)
-  const loadPatients = useCallback(
-    (clinicId: string, keyword: string) => {
-      if (!clinicId) return
-      const controller = new AbortController()
-      setLoading(true)
-      setError('')
-
-      getClinicPatients(context, clinicId, { search: keyword, limit: 100 }, controller.signal)
-        .then((res) => {
-          if (!controller.signal.aborted) {
-            setPatients(res.items)
-            setTotalCount(res.totalCount)
-          }
-        })
-        .catch((err) => {
-          if (!controller.signal.aborted) {
-            setPatients([])
-            setError(
-              err instanceof AnalysisResultError && err.status === 403
-                ? 'Bạn không có quyền xem danh sách bệnh nhân tại phòng khám này.'
-                : 'Không thể tải danh sách bệnh nhân.',
-            )
-          }
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false)
-        })
-
-      return () => controller.abort()
-    },
-    [context],
-  )
-
   useEffect(() => {
-    if (selectedClinicId) {
-      loadPatients(selectedClinicId, search)
-    }
-  }, [selectedClinicId, search, loadPatients])
+    if (!selectedClinicId) return
+    const controller = new AbortController()
+
+    getClinicPatients(context, selectedClinicId, { search, limit: 100 }, controller.signal)
+      .then((res) => {
+        if (!controller.signal.aborted) {
+          setPatients(res.items)
+          setTotalCount(res.totalCount)
+        }
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setPatients([])
+          setError(
+            err instanceof AnalysisResultError && err.status === 403
+              ? 'Bạn không có quyền xem danh sách bệnh nhân tại phòng khám này.'
+              : 'Không thể tải danh sách bệnh nhân.',
+          )
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [context, selectedClinicId, search, reloadTrigger])
 
   // 3. View Patient Detail
   const handleSelectPatient = async (patient: ClinicPatient) => {
@@ -157,7 +142,7 @@ export default function ClinicPatientPage() {
           notes: '',
         },
       })
-      loadPatients(selectedClinicId, search)
+      setReloadTrigger((v) => v + 1)
       setSelectedPatient(newPatient)
     } catch (err) {
       if (err instanceof AnalysisResultError && err.status === 403) {
@@ -522,3 +507,8 @@ export default function ClinicPatientPage() {
   )
 }
 
+export default function ClinicPatientPage() {
+  const { state } = useBackendSession()
+  if (state.status !== 'ready') return <BackendSessionNotice />
+  return <ClinicPatientContent context={state.context} />
+}

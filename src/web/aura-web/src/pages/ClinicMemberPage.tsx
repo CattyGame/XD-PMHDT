@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
+import type { BackendContext } from '../api/backendContext'
 import {
   getActorClinics,
   getClinicMembers,
@@ -9,24 +10,20 @@ import {
   revokeClinicMember,
   type ClinicInfo,
   type ClinicMember,
-  type ClinicMemberRole,
   type ClinicInvitationResult,
 } from '../api/clinicManagement'
 import { AnalysisResultError } from '../api/analysisResult'
 import './ClinicMemberPage.css'
 
-export default function ClinicMemberPage() {
-  const { state } = useBackendSession()
-  if (state.status !== 'ready') return <BackendSessionNotice />
-  const { context } = state
-
+function ClinicMemberContent({ context }: { context: BackendContext }) {
   const [clinics, setClinics] = useState<readonly ClinicInfo[]>([])
   const [selectedClinicId, setSelectedClinicId] = useState<string>('')
   const [members, setMembers] = useState<readonly ClinicMember[]>([])
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>('')
   const [successMsg, setSuccessMsg] = useState<string>('')
+  const [reloadTrigger, setReloadTrigger] = useState(0)
 
   // Modal invite state
   const [showInviteModal, setShowInviteModal] = useState(false)
@@ -38,8 +35,6 @@ export default function ClinicMemberPage() {
   // 1. Load actor's clinics
   useEffect(() => {
     const controller = new AbortController()
-    setLoading(true)
-    setError('')
     getActorClinics(context, controller.signal)
       .then((items) => {
         if (controller.signal.aborted) return
@@ -65,43 +60,32 @@ export default function ClinicMemberPage() {
   }, [context])
 
   // 2. Load members for selected clinic
-  const loadMembers = useCallback(
-    (clinicId: string, filter: string) => {
-      if (!clinicId) return
-      const controller = new AbortController()
-      setLoading(true)
-      setError('')
-      const apiStatus = filter === 'ALL' ? undefined : filter
-
-      getClinicMembers(context, clinicId, controller.signal, apiStatus)
-        .then((items) => {
-          if (!controller.signal.aborted) {
-            setMembers(items)
-          }
-        })
-        .catch((err) => {
-          if (!controller.signal.aborted) {
-            setError(
-              err instanceof AnalysisResultError && err.status === 403
-                ? 'Bạn không có quyền xem thành viên của phòng khám này.'
-                : 'Không thể tải danh sách thành viên.',
-            )
-          }
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false)
-        })
-
-      return () => controller.abort()
-    },
-    [context],
-  )
-
   useEffect(() => {
-    if (selectedClinicId) {
-      loadMembers(selectedClinicId, statusFilter)
-    }
-  }, [selectedClinicId, statusFilter, loadMembers])
+    if (!selectedClinicId) return
+    const controller = new AbortController()
+    const apiStatus = statusFilter === 'ALL' ? undefined : statusFilter
+
+    getClinicMembers(context, selectedClinicId, controller.signal, apiStatus)
+      .then((items) => {
+        if (!controller.signal.aborted) {
+          setMembers(items)
+        }
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setError(
+            err instanceof AnalysisResultError && err.status === 403
+              ? 'Bạn không có quyền xem thành viên của phòng khám này.'
+              : 'Không thể tải danh sách thành viên.',
+          )
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [context, selectedClinicId, statusFilter, reloadTrigger])
 
   // 3. Handle Invite Member
   const handleInvite = async (e: React.FormEvent) => {
@@ -120,7 +104,7 @@ export default function ClinicMemberPage() {
       setLastInvitation(result)
       setSuccessMsg(`Đã gửi lời mời thành công đến ${result.email}!`)
       setInviteEmail('')
-      loadMembers(selectedClinicId, statusFilter)
+      setReloadTrigger((v) => v + 1)
     } catch (err) {
       if (err instanceof AnalysisResultError) {
         if (err.status === 409) {
@@ -156,7 +140,7 @@ export default function ClinicMemberPage() {
     try {
       await revokeClinicMember(context, selectedClinicId, member.accountId)
       setSuccessMsg(`Đã thu hồi quyền truy cập thành công!`)
-      loadMembers(selectedClinicId, statusFilter)
+      setReloadTrigger((v) => v + 1)
     } catch (err) {
       if (err instanceof AnalysisResultError && err.status === 400) {
         setError('Không thể thu hồi quyền quản trị viên duy nhất của phòng khám.')
@@ -402,3 +386,8 @@ export default function ClinicMemberPage() {
   )
 }
 
+export default function ClinicMemberPage() {
+  const { state } = useBackendSession()
+  if (state.status !== 'ready') return <BackendSessionNotice />
+  return <ClinicMemberContent context={state.context} />
+}
