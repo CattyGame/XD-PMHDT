@@ -31,33 +31,12 @@ public sealed class NotificationAuthorityClient(IHttpClientFactory clients, ICon
         return await clients.CreateClient(clientName).SendAsync(request, ct);
     }
 
-    public async Task<HttpResponseMessage> GetAsync(string audience, string scope, string path, CancellationToken ct)
-    {
-        var identity = clients.CreateClient("IdentityAuthority");
-        using var issued = await identity.PostAsJsonAsync("/internal/v1/identity/service-tokens", new
-        {
-            clientId = configuration["ServiceAuth:ClientId"],
-            clientSecret = configuration["ServiceAuth:ClientSecret"],
-            audience,
-            scope
-        }, ct);
-        issued.EnsureSuccessStatusCode();
-        var token = await issued.Content.ReadFromJsonAsync<Token>(cancellationToken: ct);
-        if (string.IsNullOrWhiteSpace(token?.AccessToken)) throw new HttpRequestException("Missing service authority token.");
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
-
-        var clientName = audience switch
-        {
-            "aura-identity" => "IdentityAuthority",
-            "aura-billing" => "BillingAuthority",
-            _ => "AnalysisAuthority"
-        };
-        return await clients.CreateClient(clientName).SendAsync(request, ct);
-    }
-
     private sealed record Token(string AccessToken);
+}
+
+public sealed class NotificationContextRejectedException : HttpRequestException
+{
+    public NotificationContextRejectedException() : base("Notification context is not applicable.") { }
 }
 
 public sealed record NotificationContext(
@@ -101,15 +80,16 @@ public sealed class NotificationContextResolver(NotificationAuthorityClient clie
 
     public async Task<PaymentNotificationContext> ResolvePaymentAsync(Guid eventId, Guid orderId, Guid tenantId, CancellationToken ct)
     {
-        using var response = await client.GetAsync(
-            "aura-billing",
-            "billing:read",
-            $"/internal/v1/billing/orders/{orderId:D}/recipient",
-            ct);
+        using var response = await client.SendAsync(
+            "aura-billing", "billing:notify", "/internal/v1/billing/notification-context/resolve",
+            new { eventId, orderId, tenantId }, ct);
+        if (response.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Forbidden)
+            throw new NotificationContextRejectedException();
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync<PaymentNotificationContext>(cancellationToken: ct);
-        if (result is null || result.OrderId != orderId || result.RecipientAccountId == Guid.Empty)
-            throw new HttpRequestException("Billing notification authority returned mismatched payment context.");
+        if (result is null || result.EventId != eventId || result.OrderId != orderId || result.TenantId != tenantId ||
+            result.RecipientAccountId == Guid.Empty || result.Status != "COMPLETED")
+            throw new NotificationContextRejectedException();
         return result;
     }
 }

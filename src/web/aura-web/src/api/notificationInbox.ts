@@ -7,8 +7,9 @@ import { validBatchId } from './batchProgress'
 export type InboxNotification = Readonly<{
   notificationId: string
   eventId: string
-  analysisId: string
-  type: 'ANALYSIS_COMPLETED' | 'ANALYSIS_FAILED'
+  analysisId: string | null
+  orderId?: string | null
+  type: 'ANALYSIS_COMPLETED' | 'ANALYSIS_FAILED' | 'PAYMENT_SUCCESS'
   title: string
   isRead: boolean
   createdAt: string
@@ -52,20 +53,27 @@ function parseNotification(value: unknown): InboxNotification {
   if (!isRecord(value) ||
     typeof value.notificationId !== 'string' || !validBatchId(value.notificationId) ||
     typeof value.eventId !== 'string' || !validBatchId(value.eventId) ||
-    typeof value.analysisId !== 'string' || !validBatchId(value.analysisId) ||
-    !['ANALYSIS_COMPLETED', 'ANALYSIS_FAILED'].includes(String(value.type)) ||
+    !['ANALYSIS_COMPLETED', 'ANALYSIS_FAILED', 'PAYMENT_SUCCESS'].includes(String(value.type)) ||
     typeof value.title !== 'string' || value.title.length > 500 ||
     typeof value.isRead !== 'boolean' || !validDate(value.createdAt) ||
     (value.readAt !== null && !validDate(value.readAt)) ||
-    typeof value.targetPath !== 'string' ||
-    value.targetPath.toLowerCase() !== `/analyses/${value.analysisId.toLowerCase()}`) {
+    typeof value.targetPath !== 'string') {
     invalidResponse()
   }
+
+  const payment = value.type === 'PAYMENT_SUCCESS'
+  if (payment) {
+    if (value.analysisId !== null || typeof value.orderId !== 'string' || !validBatchId(value.orderId) ||
+        value.targetPath !== `/billing/orders/${value.orderId}`) invalidResponse()
+  } else if (typeof value.analysisId !== 'string' || !validBatchId(value.analysisId) ||
+      (value.orderId !== undefined && value.orderId !== null) ||
+      ![`/analyses/${value.analysisId}`, `/batches/${value.analysisId}`].includes(String(value.targetPath))) invalidResponse()
 
   return {
     notificationId: value.notificationId as string,
     eventId: value.eventId as string,
-    analysisId: value.analysisId as string,
+    analysisId: value.analysisId as string | null,
+    ...(payment ? { orderId: value.orderId as string } : {}),
     type: value.type as InboxNotification['type'],
     title: value.title as string,
     isRead: value.isRead as boolean,

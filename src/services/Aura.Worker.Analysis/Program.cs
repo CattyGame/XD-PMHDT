@@ -22,7 +22,11 @@ builder.Services.Configure<ServiceAuthOptions>(builder.Configuration.GetSection(
 var connectionString = builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException("Worker PostgreSQL credentials are required.");
 var redisConnection = builder.Configuration.GetConnectionString("Redis") ?? "redis:6379";
-builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnection));
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ => {
+    var options = ConfigurationOptions.Parse(redisConnection);
+    options.Password = builder.Configuration["Redis:Password"] ?? options.Password;
+    return ConnectionMultiplexer.Connect(options);
+});
 builder.Services.AddSingleton<IBatchRedisProgressService, BatchRedisProgressService>();
 builder.Services.AddSingleton<RabbitMqConnectionProvider>();
 builder.Services.AddDbContext<WorkerDbContext>(options =>

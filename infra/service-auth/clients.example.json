@@ -79,6 +79,9 @@
         ],
         "aura-analysis": [
           "analysis:notify"
+        ],
+        "aura-billing": [
+          "billing:notify"
         ]
       }
     }

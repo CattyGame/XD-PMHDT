@@ -26,12 +26,17 @@ self.addEventListener('notificationclick', (event) => {
       const existing = windows.find(
         (client) => new URL(client.url).origin === self.location.origin,
       )
+      const data = event.notification.data?.FCM_MSG?.data ?? event.notification.data ?? {}
+      const candidate = data.targetPath ?? '/notifications'
+      const allowed = /^\/(?:analyses|batches|billing\/orders)\/[0-9a-f-]{36}$/i.test(candidate)
+      const target = new URL(allowed ? candidate : '/notifications', self.location.origin).href
 
       if (existing) {
+        await existing.navigate(target)
         return existing.focus()
       }
 
-      return self.clients.openWindow('/')
+      return self.clients.openWindow(target)
     })(),
   )
 })

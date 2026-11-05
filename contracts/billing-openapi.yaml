@@ -10,6 +10,46 @@ servers:
 - url: http://127.0.0.1:5002
   description: Local Development Billing API
 paths:
+  /internal/v1/billing/notification-context/resolve:
+    post:
+      operationId: resolvePaymentNotificationContext
+      summary: Resolve a canonical completed payment for notification-api
+      description: Requires audience aura-billing, client notification-api and scope billing:notify. Event, order and tenant must match the committed payment outbox. The recipient is the verified purchaser account.
+      security:
+      - ServiceBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventId, orderId, tenantId]
+              properties:
+                eventId: {type: string, format: uuid}
+                orderId: {type: string, format: uuid}
+                tenantId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Authoritative completed payment context
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [eventId, orderId, tenantId, recipientAccountId, status]
+                properties:
+                  eventId: {type: string, format: uuid}
+                  orderId: {type: string, format: uuid}
+                  tenantId: {type: string, format: uuid}
+                  recipientAccountId: {type: string, format: uuid}
+                  status: {type: string, enum: [COMPLETED]}
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
   /api/v1/billing/packages:
     get:
       operationId: getPackageCatalog

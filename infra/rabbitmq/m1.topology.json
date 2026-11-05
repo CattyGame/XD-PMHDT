@@ -1,0 +1,540 @@
+{
+  "vhosts": [
+    {
+      "name": "/aura-s3"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "aura.s3.jobs",
+      "vhost": "/aura-s3",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "aura.s3.events",
+      "vhost": "/aura-s3",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "aura.s3.retry.return",
+      "vhost": "/aura-s3",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "aura.s3.dead.jobs",
+      "vhost": "/aura-s3",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "aura.s3.retry.jobs",
+      "vhost": "/aura-s3",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "aura.s3.dead.billing",
+      "vhost": "/aura-s3",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "aura.s3.retry.billing",
+      "vhost": "/aura-s3",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "aura.s3.dead.notification",
+      "vhost": "/aura-s3",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "aura.s3.retry.notification",
+      "vhost": "/aura-s3",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "aura.s3.dead.audit",
+      "vhost": "/aura-s3",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "aura.s3.analysis.jobs",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.dead.jobs",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.retry.jobs",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.billing.events",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.dead.billing",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.retry.billing",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.notification.events",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.dead.notification",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.retry.notification",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.analysis.audit",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    },
+    {
+      "name": "aura.s3.dead.audit",
+      "vhost": "/aura-s3",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-quorum-initial-group-size": 1
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "aura.s3.jobs",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.analysis.jobs",
+      "destination_type": "queue",
+      "routing_key": "analysis.job.run",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.dead.jobs",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.dead.jobs",
+      "destination_type": "queue",
+      "routing_key": "jobs",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.retry.jobs",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.retry.jobs",
+      "destination_type": "queue",
+      "routing_key": "jobs",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.retry.return",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.analysis.jobs",
+      "destination_type": "queue",
+      "routing_key": "jobs",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.events",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.billing.events",
+      "destination_type": "queue",
+      "routing_key": "analysis.completed",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.events",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.billing.events",
+      "destination_type": "queue",
+      "routing_key": "analysis.failed",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.dead.billing",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.dead.billing",
+      "destination_type": "queue",
+      "routing_key": "billing",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.retry.billing",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.retry.billing",
+      "destination_type": "queue",
+      "routing_key": "billing",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.retry.return",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.billing.events",
+      "destination_type": "queue",
+      "routing_key": "billing",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.events",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.notification.events",
+      "destination_type": "queue",
+      "routing_key": "analysis.completed",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.events",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.notification.events",
+      "destination_type": "queue",
+      "routing_key": "analysis.failed",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.dead.notification",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.dead.notification",
+      "destination_type": "queue",
+      "routing_key": "notification",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.retry.notification",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.retry.notification",
+      "destination_type": "queue",
+      "routing_key": "notification",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.retry.return",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.notification.events",
+      "destination_type": "queue",
+      "routing_key": "notification",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.events",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.analysis.audit",
+      "destination_type": "queue",
+      "routing_key": "analysis.requested",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.dead.audit",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.dead.audit",
+      "destination_type": "queue",
+      "routing_key": "audit",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.events",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.notification.events",
+      "destination_type": "queue",
+      "routing_key": "billing.payment.success",
+      "arguments": {}
+    },
+    {
+      "source": "aura.s3.events",
+      "vhost": "/aura-s3",
+      "destination": "aura.s3.notification.events",
+      "destination_type": "queue",
+      "routing_key": "batch.completed",
+      "arguments": {}
+    }
+  ],
+  "policies": [
+    {
+      "vhost": "/aura-s3",
+      "name": "jobs-safety",
+      "pattern": "^aura\\.s3\\.analysis\\.jobs$",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "dead-letter-exchange": "aura.s3.dead.jobs",
+        "dead-letter-routing-key": "jobs",
+        "dead-letter-strategy": "at-least-once",
+        "overflow": "reject-publish",
+        "delivery-limit": 3,
+        "max-length": 10000,
+        "max-length-bytes": 67108864
+      }
+    },
+    {
+      "vhost": "/aura-s3",
+      "name": "jobs-delay",
+      "pattern": "^aura\\.s3\\.retry\\.jobs$",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "message-ttl": 5000,
+        "dead-letter-exchange": "aura.s3.retry.return",
+        "dead-letter-routing-key": "jobs",
+        "dead-letter-strategy": "at-least-once",
+        "overflow": "reject-publish",
+        "delivery-limit": 3,
+        "max-length": 10000,
+        "max-length-bytes": 67108864
+      }
+    },
+    {
+      "vhost": "/aura-s3",
+      "name": "billing-safety",
+      "pattern": "^aura\\.s3\\.billing\\.events$",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "dead-letter-exchange": "aura.s3.dead.billing",
+        "dead-letter-routing-key": "billing",
+        "dead-letter-strategy": "at-least-once",
+        "overflow": "reject-publish",
+        "delivery-limit": 3,
+        "max-length": 10000,
+        "max-length-bytes": 67108864
+      }
+    },
+    {
+      "vhost": "/aura-s3",
+      "name": "billing-delay",
+      "pattern": "^aura\\.s3\\.retry\\.billing$",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "message-ttl": 5000,
+        "dead-letter-exchange": "aura.s3.retry.return",
+        "dead-letter-routing-key": "billing",
+        "dead-letter-strategy": "at-least-once",
+        "overflow": "reject-publish",
+        "delivery-limit": 3,
+        "max-length": 10000,
+        "max-length-bytes": 67108864
+      }
+    },
+    {
+      "vhost": "/aura-s3",
+      "name": "notification-safety",
+      "pattern": "^aura\\.s3\\.notification\\.events$",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "dead-letter-exchange": "aura.s3.dead.notification",
+        "dead-letter-routing-key": "notification",
+        "dead-letter-strategy": "at-least-once",
+        "overflow": "reject-publish",
+        "delivery-limit": 3,
+        "max-length": 10000,
+        "max-length-bytes": 67108864
+      }
+    },
+    {
+      "vhost": "/aura-s3",
+      "name": "notification-delay",
+      "pattern": "^aura\\.s3\\.retry\\.notification$",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "message-ttl": 5000,
+        "dead-letter-exchange": "aura.s3.retry.return",
+        "dead-letter-routing-key": "notification",
+        "dead-letter-strategy": "at-least-once",
+        "overflow": "reject-publish",
+        "delivery-limit": 3,
+        "max-length": 10000,
+        "max-length-bytes": 67108864
+      }
+    },
+    {
+      "vhost": "/aura-s3",
+      "name": "audit-safety",
+      "pattern": "^aura\\.s3\\.analysis\\.audit$",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "dead-letter-exchange": "aura.s3.dead.audit",
+        "dead-letter-routing-key": "audit",
+        "dead-letter-strategy": "at-least-once",
+        "overflow": "reject-publish",
+        "delivery-limit": 3,
+        "max-length": 10000,
+        "max-length-bytes": 67108864
+      }
+    },
+    {
+      "vhost": "/aura-s3",
+      "name": "dead-retain",
+      "pattern": "^aura\\.s3\\.dead\\.",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "overflow": "reject-publish",
+        "max-length": 10000,
+        "max-length-bytes": 67108864,
+        "delivery-limit": -1
+      }
+    }
+  ],
+  "permissions": [
+    {
+      "user": "s3-publisher",
+      "configure": "^$",
+      "write": "^aura\\.s3\\.(jobs|events)$",
+      "read": "^$",
+      "vhost": "/aura-s3"
+    },
+    {
+      "user": "s3-worker",
+      "configure": "^$",
+      "write": "^aura\\.s3\\.(retry|dead)\\.jobs$",
+      "read": "^aura\\.s3\\.analysis\\.jobs$",
+      "vhost": "/aura-s3"
+    },
+    {
+      "user": "s3-billing",
+      "configure": "^$",
+      "write": "^aura\\.s3\\.(events|(retry|dead)\\.billing)$",
+      "read": "^aura\\.s3\\.billing\\.events$",
+      "vhost": "/aura-s3"
+    },
+    {
+      "user": "s3-notification",
+      "configure": "^$",
+      "write": "^aura\\.s3\\.(retry|dead)\\.notification$",
+      "read": "^aura\\.s3\\.notification\\.events$",
+      "vhost": "/aura-s3"
+    },
+    {
+      "user": "s3-audit",
+      "configure": "^$",
+      "write": "^$",
+      "read": "^aura\\.s3\\.analysis\\.audit$",
+      "vhost": "/aura-s3"
+    },
+    {
+      "user": "s3-operator",
+      "configure": "^aura\\.s3\\.",
+      "write": "^aura\\.s3\\.",
+      "read": "^aura\\.s3\\.",
+      "vhost": "/aura-s3"
+    }
+  ],
+  "topic_permissions": [
+    {
+      "user": "s3-billing",
+      "vhost": "/aura-s3",
+      "exchange": "aura.s3.events",
+      "write": "^billing\\.payment\\.success$",
+      "read": ".*"
+    }
+  ]
+}

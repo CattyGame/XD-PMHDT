@@ -14,6 +14,7 @@ import AnalysisResultPage from '../pages/AnalysisResultPage'
 import NotificationInboxPage from '../pages/NotificationInboxPage'
 import CampaignManagementPage from '../pages/CampaignManagementPage'
 import ClinicUploadPage from '../pages/ClinicUploadPage'
+import BillingOrderPage from '../pages/BillingOrderPage'
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
@@ -41,6 +42,7 @@ export default function ApplicationRoutes() {
       <Route path="*" element={<NotFoundPage />} />
       <Route path="/analyses/:analysisId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><NotificationInboxPage /></ProtectedRoute>}/>
+      <Route path="/billing/orders/:orderId" element={<ProtectedRoute><BillingOrderPage /></ProtectedRoute>}/>
       <Route path="/campaigns" element={<ProtectedRoute><CampaignManagementPage /></ProtectedRoute>}/>
     </Routes>
   )

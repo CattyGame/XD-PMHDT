@@ -79,7 +79,7 @@ builder.Services.AddHttpClient("IdentityAuthority", client=>{client.BaseAddress=
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
 builder.Services.AddHttpClient("AnalysisAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Analysis:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
-builder.Services.AddHttpClient("BillingAuthority", client=>{client.BaseAddress=new Uri(builder.Configuration["Services:Billing:BaseUrl"] ?? "http://localhost:5002");client.Timeout=TimeSpan.FromSeconds(5);})
+builder.Services.AddHttpClient("BillingAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Billing:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
 builder.Services.AddSingleton<NotificationAuthorityClient>();
 builder.Services.AddSingleton<INotificationContextResolver,NotificationContextResolver>();

@@ -154,7 +154,7 @@ public sealed class NotificationInboxRepository(
         }
 
         var sql = """
-            SELECT id, event_id, analysis_id, type, title, is_read, created_at, read_at, target_path
+            SELECT id, event_id, analysis_id, type, title, is_read, created_at, read_at, target_path, order_id
             FROM notification.inbox_items
             WHERE account_id = @account_id
               AND (@unread_only = false OR is_read = false)
@@ -179,13 +179,14 @@ public sealed class NotificationInboxRepository(
             items.Add(new InboxItemResponse(
                 NotificationId: reader.GetGuid(0),
                 EventId: reader.GetGuid(1),
-                AnalysisId: reader.GetGuid(2),
+                AnalysisId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
                 Type: reader.GetString(3),
                 Title: reader.GetString(4),
                 IsRead: reader.GetBoolean(5),
                 CreatedAt: reader.GetFieldValue<DateTimeOffset>(6),
                 ReadAt: reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7),
-                TargetPath: reader.GetString(8)
+                TargetPath: reader.GetString(8),
+                OrderId: reader.IsDBNull(9) ? null : reader.GetGuid(9)
             ));
         }
 

@@ -13,7 +13,6 @@ public sealed class OrderService
     private readonly PaymentSignatureService _signatureService;
     private readonly IDatabase _redis;
     private readonly ILogger<OrderService> _logger;
-    private readonly IBillingPaymentEventPublisher? _paymentEventPublisher;
     private readonly string _webhookSecret;
     private readonly string _sandboxGatewayUrl;
 
@@ -22,14 +21,12 @@ public sealed class OrderService
         PaymentSignatureService signatureService,
         IConnectionMultiplexer redisMultiplexer,
         IConfiguration configuration,
-        ILogger<OrderService> logger,
-        IBillingPaymentEventPublisher? paymentEventPublisher = null)
+        ILogger<OrderService> logger)
     {
         _repository = repository;
         _signatureService = signatureService;
         _redis = redisMultiplexer.GetDatabase();
         _logger = logger;
-        _paymentEventPublisher = paymentEventPublisher;
 
         _webhookSecret = configuration["Billing:PaymentWebhookSecret"]
             ?? "aura_billing_sandbox_hmac_secret_2026";
@@ -42,7 +39,8 @@ public sealed class OrderService
         CreateOrderRequest request,
         Guid idempotencyKey,
         BillingRuntimeOptions runtimeOptions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? verifiedPurchaserAccountId = null)
     {
         var tenantId = request.TenantId ?? request.BillingOwner.Id;
         var fingerprint = ComputeOrderFingerprint(request, idempotencyKey);
@@ -80,7 +78,7 @@ public sealed class OrderService
             runtimeOptions.Environment,
             idempotencyKey,
             fingerprint,
-            cancellationToken);
+            cancellationToken, verifiedPurchaserAccountId);
 
         var response = BuildOrderResponse(orderRecord);
         return new OrderOperationResult(OrderOperationStatus.Created, response);
@@ -146,15 +144,7 @@ public sealed class OrderService
             }
 
             // 3. Process payment and update ledger in single ACID transaction
-            var callbackResult = await _repository.ProcessCallbackInTransactionAsync(
-                payload, paymentMethod, cancellationToken);
-
-            if (callbackResult.Success && string.Equals(callbackResult.Status, "COMPLETED", StringComparison.OrdinalIgnoreCase) && !callbackResult.Replayed && _paymentEventPublisher is not null)
-            {
-                await _paymentEventPublisher.PublishPaymentSuccessAsync(payload.OrderId, cancellationToken);
-            }
-
-            return callbackResult;
+            return await _repository.ProcessCallbackInTransactionAsync(payload, paymentMethod, cancellationToken);
         }
         finally
         {

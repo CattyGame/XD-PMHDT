@@ -139,7 +139,8 @@ public sealed class OrderRepository(
         string environment,
         Guid idempotencyKey,
         string fingerprint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? notificationRecipientAccountId = null)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         const string sql = """
@@ -147,12 +148,12 @@ public sealed class OrderRepository(
                 id, tenant_id, billing_owner_type, billing_owner_id, package_id,
                 package_price_version_id, package_name_snapshot, price_amount_snapshot,
                 currency_code_snapshot, credits_snapshot, environment, status,
-                idempotency_key, request_fingerprint, created_at, updated_at
+                idempotency_key, request_fingerprint, created_at, updated_at, notification_recipient_account_id
             ) VALUES (
                 @id, @tenant_id, @owner_type, @owner_id, @package_id,
                 @price_version_id, @name_snapshot, @price_snapshot,
                 @currency_snapshot, @credits_snapshot, @environment, 'PENDING',
-                @idempotency_key, @fingerprint, now(), now()
+                @idempotency_key, @fingerprint, now(), now(), @notification_recipient
             )
             RETURNING created_at, updated_at;
             """;
@@ -171,6 +172,8 @@ public sealed class OrderRepository(
         command.Parameters.AddWithValue("environment", environment);
         command.Parameters.AddWithValue("idempotency_key", idempotencyKey);
         command.Parameters.AddWithValue("fingerprint", fingerprint);
+        command.Parameters.Add("notification_recipient", NpgsqlTypes.NpgsqlDbType.Uuid).Value =
+            (object?)(notificationRecipientAccountId ?? (ownerType == "ACCOUNT" ? ownerId : null)) ?? DBNull.Value;
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
@@ -429,6 +432,18 @@ public sealed class OrderRepository(
             await ledgerCmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        // Commit the notification obligation with the ledger; broker availability is irrelevant here.
+        await using (var eventCmd = new NpgsqlCommand("""
+            INSERT INTO billing.payment_event_outbox(order_id,tenant_id,recipient_account_id,state,last_error)
+            SELECT id,tenant_id,notification_recipient_account_id,
+                CASE WHEN notification_recipient_account_id IS NULL THEN 'HOLD' ELSE 'PENDING' END,
+                CASE WHEN notification_recipient_account_id IS NULL THEN 'LEGACY_CLINIC_PAYER_UNKNOWN' ELSE NULL END
+            FROM billing.orders WHERE id=@order_id ON CONFLICT(order_id) DO NOTHING;
+            """, connection, transaction))
+        {
+            eventCmd.Parameters.AddWithValue("order_id", order.Id);
+            await eventCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
         await transaction.CommitAsync(cancellationToken);
 
         logger.LogInformation(

@@ -80,13 +80,22 @@ public sealed class NotificationDeliveryJobRepository(
         TimeSpan leaseDuration,
         CancellationToken ct)
     {
+        if (batchSize is < 1 or > 100 || leaseDuration < TimeSpan.FromSeconds(5) || leaseDuration > TimeSpan.FromMinutes(5))
+            throw new ArgumentOutOfRangeException(nameof(batchSize));
+        await using (var exhausted = dataSource.CreateCommand("""
+            UPDATE notification.delivery_jobs SET status='DEAD_LETTER', completed_at=now(),
+                lease_token=NULL, lease_expires_at=NULL, last_error='ATTEMPTS_EXHAUSTED_AFTER_CRASH'
+            WHERE attempts>=max_attempts AND
+                ((status='PENDING' AND next_attempt_at<=now()) OR (status='IN_FLIGHT' AND lease_expires_at<now()));
+            """)) await exhausted.ExecuteNonQueryAsync(ct);
         var leaseToken = Guid.NewGuid();
         const string claimSql = """
             WITH candidate_jobs AS (
                 SELECT id
                 FROM notification.delivery_jobs
-                WHERE (status = 'PENDING' AND next_attempt_at <= now())
-                   OR (status = 'IN_FLIGHT' AND lease_expires_at < now())
+                WHERE attempts < max_attempts AND
+                    ((status = 'PENDING' AND next_attempt_at <= now())
+                     OR (status = 'IN_FLIGHT' AND lease_expires_at < now()))
                 ORDER BY next_attempt_at ASC
                 LIMIT @batch_size
                 FOR UPDATE SKIP LOCKED
@@ -139,30 +148,14 @@ public sealed class NotificationDeliveryJobRepository(
                 completed_at = now(),
                 lease_token = NULL,
                 lease_expires_at = NULL
-            WHERE id = @job_id AND lease_token = @lease_token;
+            WHERE id = @job_id AND lease_token = @lease_token
+                AND status = 'IN_FLIGHT' AND lease_expires_at > now();
             """;
 
         await using var connection = await dataSource.OpenConnectionAsync(ct);
         await using var cmd = new NpgsqlCommand(sql, connection);
         cmd.Parameters.AddWithValue("job_id", jobId);
         cmd.Parameters.AddWithValue("lease_token", leaseToken);
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    public async Task CompleteAllForInboxItemAsync(Guid inboxItemId, CancellationToken ct)
-    {
-        const string sql = """
-            UPDATE notification.delivery_jobs
-            SET status = 'COMPLETED',
-                completed_at = now(),
-                lease_token = NULL,
-                lease_expires_at = NULL
-            WHERE inbox_item_id = @inbox_item_id AND status != 'COMPLETED';
-            """;
-
-        await using var connection = await dataSource.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand(sql, connection);
-        cmd.Parameters.AddWithValue("inbox_item_id", inboxItemId);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -189,7 +182,8 @@ public sealed class NotificationDeliveryJobRepository(
                     last_error = @last_error,
                     lease_token = NULL,
                     lease_expires_at = NULL
-                WHERE id = @job_id AND lease_token = @lease_token;
+                WHERE id = @job_id AND lease_token = @lease_token
+                    AND status = 'IN_FLIGHT' AND lease_expires_at > now();
                 """;
 
             await using var connection = await dataSource.OpenConnectionAsync(ct);
@@ -210,7 +204,8 @@ public sealed class NotificationDeliveryJobRepository(
                     completed_at = now(),
                     lease_token = NULL,
                     lease_expires_at = NULL
-                WHERE id = @job_id AND lease_token = @lease_token;
+                WHERE id = @job_id AND lease_token = @lease_token
+                    AND status = 'IN_FLIGHT' AND lease_expires_at > now();
                 """;
 
             await using var connection = await dataSource.OpenConnectionAsync(ct);
@@ -219,155 +214,6 @@ public sealed class NotificationDeliveryJobRepository(
             cmd.Parameters.AddWithValue("job_id", jobId);
             cmd.Parameters.AddWithValue("lease_token", leaseToken);
             await cmd.ExecuteNonQueryAsync(ct);
-        }
-    }
-}
-
-public sealed class NotificationDeliveryWorker(
-    NotificationDeliveryJobRepository jobRepository,
-    DeviceRegistrationRepository deviceRepository,
-    IAccountResolver accountResolver,
-    IFcmClient fcmClient,
-    IConfiguration configuration,
-    ILogger<NotificationDeliveryWorker> logger) : BackgroundService
-{
-    private readonly string _projectId = configuration["Firebase:ProjectId"] ?? "aura-dev";
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        logger.LogInformation("NotificationDeliveryWorker starting durable FCM delivery loop.");
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                var jobs = await jobRepository.ClaimPendingJobsAsync(
-                    batchSize: 20,
-                    leaseDuration: TimeSpan.FromSeconds(30),
-                    stoppingToken);
-
-                if (jobs.Count == 0)
-                {
-                    await Task.Delay(1500, stoppingToken);
-                    continue;
-                }
-
-                logger.LogInformation("Claimed {Count} pending delivery jobs for durable FCM dispatch.", jobs.Count);
-
-                foreach (var job in jobs)
-                {
-                    await ProcessJobAsync(job, stoppingToken);
-                }
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Unhandled error in NotificationDeliveryWorker loop.");
-                await Task.Delay(3000, stoppingToken);
-            }
-        }
-    }
-
-    private async Task ProcessJobAsync(ClaimedDeliveryJob job, CancellationToken ct)
-    {
-        try
-        {
-            // 1. Verify current account active status
-            var firebaseUid = await accountResolver.ResolveFirebaseUidAsync(job.AccountId, ct);
-            if (string.IsNullOrWhiteSpace(firebaseUid))
-            {
-                logger.LogWarning("Account {AccountId} is inactive or suspended. Terminating delivery job {JobId}.",
-                    job.AccountId, job.Id);
-                await jobRepository.FailJobAsync(job.Id, job.LeaseToken, "Account inactive or suspended", isTransient: false, job.Attempts, job.MaxAttempts, ct);
-                return;
-            }
-
-            // 2. Retrieve decrypted device token
-            var token = await deviceRepository.GetTokenAsync(_projectId, firebaseUid, job.DeviceId, ct);
-            if (string.IsNullOrWhiteSpace(token))
-            {
-                logger.LogWarning("Device token for device {DeviceId} not found. Terminating delivery job {JobId}.",
-                    job.DeviceId, job.Id);
-                await jobRepository.FailJobAsync(job.Id, job.LeaseToken, "Device token not found", isTransient: false, job.Attempts, job.MaxAttempts, ct);
-                return;
-            }
-
-            // 3. Dispatch Web Push via FCM client
-            var bodyText = job.Type switch
-            {
-                "ANALYSIS_COMPLETED" => "Kết quả phân tích mắt của bạn đã có! Bấm để xem chi tiết.",
-                "PAYMENT_SUCCESS" => "Giao dịch thanh toán đã được xác nhận. Bấm để xem gói cước.",
-                _ => "Thông báo từ hệ thống AURA."
-            };
-
-            var activeDevice = new ActiveDeviceToken(job.DeviceId, token);
-            var multicastMessage = new FirebaseAdmin.Messaging.MulticastMessage
-            {
-                Tokens = [token],
-                Notification = new FirebaseAdmin.Messaging.Notification
-                {
-                    Title = job.Title,
-                    Body = bodyText
-                },
-                Data = new Dictionary<string, string>
-                {
-                    ["notificationId"] = job.InboxItemId.ToString("D"),
-                    ["targetPath"] = job.TargetPath,
-                    ["url"] = job.TargetPath
-                },
-                Webpush = new FirebaseAdmin.Messaging.WebpushConfig
-                {
-                    Notification = new FirebaseAdmin.Messaging.WebpushNotification
-                    {
-                        Title = job.Title,
-                        Body = bodyText,
-                        Icon = "/favicon.ico",
-                        Tag = $"notification-{job.InboxItemId:D}"
-                    },
-                    FcmOptions = new FirebaseAdmin.Messaging.WebpushFcmOptions
-                    {
-                        Link = job.TargetPath
-                    }
-                }
-            };
-
-            var result = await fcmClient.SendMulticastAsync([activeDevice], multicastMessage, ct);
-
-            if (result.SuccessCount > 0)
-            {
-                logger.LogInformation("Delivery job {JobId} delivered successfully to device {DeviceId}.", job.Id, job.DeviceId);
-                await jobRepository.CompleteJobAsync(job.Id, job.LeaseToken, ct);
-            }
-            else
-            {
-                var unregistered = result.Responses.FirstOrDefault(r => !r.IsSuccess && (r.ErrorCode == "Unregistered" || r.ErrorCode == "InvalidArgument"));
-                if (unregistered is not null)
-                {
-                    logger.LogInformation("Device token for device {DeviceId} is unregistered. Cleaning up and marking job failed.", job.DeviceId);
-                    await deviceRepository.DeleteIfTokenMatchesAsync(_projectId, firebaseUid, job.DeviceId, token, ct);
-                    await jobRepository.FailJobAsync(job.Id, job.LeaseToken, $"FCM Unregistered Token ({unregistered.ErrorCode})", isTransient: false, job.Attempts, job.MaxAttempts, ct);
-                }
-                else
-                {
-                    var firstErr = result.Responses.FirstOrDefault(r => !r.IsSuccess);
-                    var errMessage = firstErr?.ErrorMessage ?? firstErr?.ErrorCode ?? "FCM Dispatch Failure";
-                    logger.LogWarning("Delivery job {JobId} failed transiently: {Error}", job.Id, errMessage);
-                    await jobRepository.FailJobAsync(job.Id, job.LeaseToken, errMessage, isTransient: true, job.Attempts, job.MaxAttempts, ct);
-                }
-            }
-        }
-        catch (HttpRequestException ex)
-        {
-            logger.LogWarning(ex, "Transient HTTP failure during delivery job {JobId}.", job.Id);
-            await jobRepository.FailJobAsync(job.Id, job.LeaseToken, ex.Message, isTransient: true, job.Attempts, job.MaxAttempts, ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unexpected error processing delivery job {JobId}.", job.Id);
-            await jobRepository.FailJobAsync(job.Id, job.LeaseToken, ex.Message, isTransient: true, job.Attempts, job.MaxAttempts, ct);
         }
     }
 }

@@ -51,6 +51,7 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
         ?? throw new InvalidOperationException("Missing Redis connection string.");
 
     var options = ConfigurationOptions.Parse(connectionString);
+    options.Password = builder.Configuration["Redis:Password"] ?? options.Password;
     options.AbortOnConnectFail = false;
     options.ConnectTimeout = 1000;
     options.ConnectRetry = 1;
@@ -86,7 +87,9 @@ builder.Services.AddSingleton<PackageRepository>();
 builder.Services.AddSingleton<PackageCatalogService>();
 builder.Services.AddSingleton<OrderRepository>();
 builder.Services.AddSingleton<PaymentSignatureService>();
-builder.Services.AddSingleton<IBillingPaymentEventPublisher, BillingPaymentEventPublisher>();
+builder.Services.AddSingleton<PaymentNotificationRepository>();
+builder.Services.AddSingleton<IPaymentEventTransport, RabbitPaymentEventTransport>();
+builder.Services.AddHostedService<BillingPaymentEventPublisher>();
 builder.Services.AddSingleton<OrderService>();
 builder.Services.AddSingleton<BillingOwnerAuthorizer>();
 builder.Services.AddSingleton<CreditReservationRepository>();
@@ -265,7 +268,7 @@ app.MapPost("/api/v1/billing/orders", async Task<IResult> (
     request=request with {TenantId=authority.TenantId};
 
     var result = await orderService.CreateOrderAsync(
-        request, idempotencyKey, runtimeOptions, cancellationToken);
+        request, idempotencyKey, runtimeOptions, cancellationToken, authority.AccountId);
 
     if (result.Status == OrderOperationStatus.PackageNotFound)
     {
@@ -322,42 +325,17 @@ app.MapGet("/api/v1/billing/orders/{orderId:guid}", async Task<IResult> (
 .Produces<OrderRecord>(StatusCodes.Status200OK)
 .Produces(StatusCodes.Status404NotFound);
 
-app.MapGet("/internal/v1/billing/orders/{orderId:guid}/recipient", async Task<IResult> (
-    Guid orderId,
-    HttpContext context,
-    ServiceTokenValidator tokenValidator,
-    OrderRepository repository,
-    CancellationToken cancellationToken) =>
+app.MapPost("/internal/v1/billing/notification-context/resolve", async Task<IResult> (
+    PaymentNotificationRequest request, HttpContext context, ServiceTokenValidator tokens,
+    PaymentNotificationRepository events, CancellationToken ct) =>
 {
-    var tokenResult = await tokenValidator.ValidateAsync(
-        context.Request, "billing:read", null, cancellationToken);
-    if (!tokenResult.Succeeded)
-    {
-        return BillingError(context, tokenResult.StatusCode, tokenResult.Code,
-            tokenResult.Message, tokenResult.Retryable);
-    }
-
-    var order = await repository.GetOrderByIdAsync(orderId, cancellationToken);
-    if (order is null)
-    {
-        return BillingError(context, StatusCodes.Status404NotFound, "ERR_NOT_FOUND", "Không tìm thấy đơn hàng.");
-    }
-
-    return Results.Ok(new
-    {
-        eventId = Guid.NewGuid(),
-        orderId = order.Id,
-        tenantId = order.TenantId,
-        recipientAccountId = order.BillingOwnerId,
-        status = order.Status
-    });
-})
-.WithName("GetBillingOrderRecipient")
-.WithTags("Billing Internal")
-.Produces(StatusCodes.Status200OK)
-.Produces(StatusCodes.Status401Unauthorized)
-.Produces(StatusCodes.Status403Forbidden)
-.Produces(StatusCodes.Status404NotFound);
+    var token = await tokens.ValidateAsync(context.Request, "billing:notify", "notification-api", ct);
+    if (!token.Succeeded) return BillingError(context, token.StatusCode, token.Code, token.Message, token.Retryable);
+    if (request.EventId == Guid.Empty || request.OrderId == Guid.Empty || request.TenantId == Guid.Empty)
+        return BillingError(context, 400, "ERR_VALIDATION", "Event, order and tenant identities are required.");
+    var resolved = await events.ResolveAsync(request, ct);
+    return resolved is null ? BillingError(context, 404, "ERR_NOT_FOUND", "Payment event not applicable.") : Results.Ok(resolved);
+}).WithName("ResolvePaymentNotificationContext").WithTags("Billing Internal");
 
 app.MapPost("/api/v1/billing/payments/callback", async Task<IResult> (
     PaymentCallbackPayload payload,
