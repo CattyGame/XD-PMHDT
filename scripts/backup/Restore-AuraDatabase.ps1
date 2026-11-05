@@ -43,10 +43,10 @@ try {
                 if (!$resolved.StartsWith([IO.Path]::GetFullPath($base).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid storage manifest path.' }
             }
             $source = Join-Path $assets $item.path
-            if ((Get-Item -LiteralPath $source).Length -ne $item.length -or (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $item.sha256) { throw 'Asset checksum mismatch.' }
+            if ((Get-Item -Force -LiteralPath $source).Length -ne $item.length -or (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $item.sha256) { throw 'Asset checksum mismatch.' }
             $ancestor = Join-Path $destinationRoot $item.path
             while ($ancestor) {
-                if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Restore target contains a symbolic link.' }
+                if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -Force -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Restore target contains a symbolic link.' }
                 $ancestor = [IO.Path]::GetDirectoryName($ancestor)
             }
         }
@@ -70,10 +70,10 @@ try {
             # Refuse symlink ancestors rather than writing outside the confirmed root.
             $ancestor = [IO.Path]::GetDirectoryName($destination)
             while ($ancestor) {
-                if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Restore target contains a symbolic link.' }
+                if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -Force -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Restore target contains a symbolic link.' }
                 $ancestor = [IO.Path]::GetDirectoryName($ancestor)
             }
-            if ((Test-Path -LiteralPath $destination) -and ((Get-Item -LiteralPath $destination).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Restore target is a symbolic link.' }
+            if ((Test-Path -LiteralPath $destination) -and ((Get-Item -Force -LiteralPath $destination).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Restore target is a symbolic link.' }
             [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
             Copy-Item -LiteralPath (Join-Path $assets $item.path) -Destination $destination -Force
             if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $item.sha256) { throw 'Restored asset checksum mismatch.' }

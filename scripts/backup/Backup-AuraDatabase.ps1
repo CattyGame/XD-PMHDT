@@ -30,7 +30,7 @@ try {
         if (!(Get-Command pg_dump -ErrorAction SilentlyContinue)) { throw 'pg_dump required; pass an explicit Container if using Docker.' }
         Invoke-BackupProcess 'pg_dump' @('-h',$PostgresHost,'-p',"$PostgresPort",'-U',$User,'-d',$Database,'-Fc','-f',$dump)
     }
-    if ((Get-Item -LiteralPath $dump).Length -eq 0) { throw 'Empty database dump.' }
+    if ((Get-Item -Force -LiteralPath $dump).Length -eq 0) { throw 'Empty database dump.' }
     $assets = Join-Path $package 'assets'
     [IO.Directory]::CreateDirectory($assets) | Out-Null
     if ($StorageProvider -eq 'AzureBlob') {
@@ -40,7 +40,7 @@ try {
         if (!$AssetRoot -or !(Test-Path -LiteralPath $AssetRoot -PathType Container)) { throw 'An existing private AssetRoot is required; no simulated inventory.' }
         $sourceRoot = [IO.Path]::GetFullPath($AssetRoot)
         if ($backupRoot.StartsWith($sourceRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or $backupRoot -eq $sourceRoot) { throw 'Backup directory cannot be inside AssetRoot.' }
-        if ((Get-Item -LiteralPath $sourceRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'AssetRoot cannot be a symbolic link.' }
+        if ((Get-Item -Force -LiteralPath $sourceRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'AssetRoot cannot be a symbolic link.' }
         $objects = @(foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -Recurse -Force) {
             if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Asset links are not supported.' }
             if ($file.PSIsContainer) { continue }
