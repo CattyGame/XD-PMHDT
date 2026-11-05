@@ -12,8 +12,9 @@ export default defineConfig(({ mode }) => {
     'VITE_FIREBASE_APP_ID',
   ]
 
+  const configured = required.some(name => env[name]?.trim())
   for (const name of required) {
-    if (!env[name]?.trim()) {
+    if (configured && !env[name]?.trim()) {
       throw new Error(`Thiếu cấu hình Firebase cho worker: ${name}`)
     }
   }

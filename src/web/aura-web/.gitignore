@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Generated for the selected Firebase environment by build:sw.
+/public/firebase-messaging-sw.js

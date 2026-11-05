@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "npm run build:sw -- --mode development && vite",
+    "build": "tsc -b && npm run build:sw && vite build",
+    "build:sw": "vite build --config vite.firebase-sw.config.ts",
     "lint": "oxlint --ignore-pattern public/firebase-messaging-sw.js",
     "preview": "vite preview",
     "test": "vitest run"

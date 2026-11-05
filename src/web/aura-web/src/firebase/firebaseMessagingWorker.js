@@ -41,23 +41,26 @@ self.addEventListener('notificationclick', (event) => {
   )
 })
 
-const app = initializeApp({
+const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
-})
+}
 
-const messaging = getMessaging(app)
+if (Object.values(config).every(value => typeof value === 'string' && value.trim())) {
+  const messaging = getMessaging(initializeApp(config))
 
-onBackgroundMessage(messaging, (payload) => {
-  if (payload.notification) {
-    return
-  }
+  onBackgroundMessage(messaging, (payload) => {
+    if (payload.notification) {
+      return
+    }
 
-  return self.registration.showNotification('AURA - Thông báo mới', {
-    body: 'Bạn có thông báo mới. Mở AURA để xem chi tiết.',
-    tag: 'aura-notification',
+    return self.registration.showNotification('AURA - Thông báo mới', {
+      body: 'Bạn có thông báo mới. Mở AURA để xem chi tiết.',
+      tag: 'aura-notification',
+    })
   })
-})
+
+}
