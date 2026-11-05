@@ -634,4 +634,3 @@ public sealed record StaleReservationRecord(
     Guid WalletId,
     int Units,
     DateTimeOffset UpdatedAt);
-

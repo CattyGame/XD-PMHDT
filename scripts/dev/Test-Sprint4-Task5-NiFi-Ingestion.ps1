@@ -45,7 +45,7 @@ $batchIds = @()
 for ($i = 0; $i -lt $sampleFiles.Count; $i++) {
     $fileName = $sampleFiles[$i]
     $filePath = Join-Path $DatasetPath $fileName
-    
+
     if (-not (Test-Path $filePath)) {
         Write-Host "  [!] Canh bao: Khong tim thay $filePath, bo qua anh nay." -ForegroundColor Yellow
         continue
@@ -54,7 +54,7 @@ for ($i = 0; $i -lt $sampleFiles.Count; $i++) {
     $reqId = [Guid]::NewGuid().ToString("D")
     $eyeSide = if ($fileName.Contains("L")) { "left" } else { "right" }
     $uri = "$GatewayUrl/api/v1/analyses/camera"
-    
+
     try {
         # Su dung curl.exe gui multipart/form-data on dinh tuyet doi
         $rawOutput = & curl.exe -s -X POST $uri `
@@ -63,9 +63,9 @@ for ($i = 0; $i -lt $sampleFiles.Count; $i++) {
             -H "Authorization: Bearer aura-camera-service-token-v1" `
             -F "eyeSide=$eyeSide" `
             -F "file=@$filePath"
-        
+
         $jsonResp = $rawOutput | ConvertFrom-Json
-        
+
         if ($jsonResp.batchId) {
             $ac1SuccessCount++
             $batchIds += $jsonResp.batchId

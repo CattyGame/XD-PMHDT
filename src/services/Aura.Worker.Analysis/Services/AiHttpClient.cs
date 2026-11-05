@@ -112,8 +112,8 @@ public class AiHttpClient : IAiHttpClient
             {
                 IsSuccess = false,
                 IsTransientError = false,
-                ErrorCode = response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden 
-                    ? "ERR_UNAUTHORIZED" 
+                ErrorCode = response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden
+                    ? "ERR_UNAUTHORIZED"
                     : "ERR_VALIDATION",
                 ErrorMessage = $"AI rejected request with HTTP {(int)response.StatusCode}: {responseBody}"
             };

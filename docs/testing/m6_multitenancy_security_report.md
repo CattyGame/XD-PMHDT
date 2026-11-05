@@ -191,4 +191,3 @@ dotnet run --project tests/AURA.Analysis.CampaignChecks/AURA.Analysis.CampaignCh
 ```
 
 Tất cả các lệnh trên phải trả về mã thoát `0` và hiển thị `100% PASS`.
-

@@ -19,7 +19,7 @@ if (-not (Test-Path $ImagePath)) {
     $datasetFolder = "D:\XD-PMHDT\datasets\CHASE_DB1\raw"
     $candidate1 = Join-Path $datasetFolder $ImagePath
     $candidate2 = Join-Path $datasetFolder "$ImagePath.jpg"
-    
+
     if (Test-Path $candidate1) {
         $ImagePath = $candidate1
     } elseif (Test-Path $candidate2) {

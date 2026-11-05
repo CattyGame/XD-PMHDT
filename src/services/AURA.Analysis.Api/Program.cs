@@ -140,8 +140,8 @@ else
                          form.ContainsKey("conflict") ||
                          context.Request.Query.ContainsKey("conflict"));
 
-        var batchId = isConflict 
-            ? "a301d000-0000-4000-8000-000000000001" 
+        var batchId = isConflict
+            ? "a301d000-0000-4000-8000-000000000001"
             : Guid.NewGuid().ToString("D");
         var existingAnalysisId = "bbfcf6f2-dfc0-4812-8c56-a14512342e22";
         var now = DateTimeOffset.UtcNow;
@@ -308,7 +308,7 @@ else
         var fallbackFileName = string.Equals(batchId, "e0f821ef-9471-4e30-921c-50042c9b07ee", StringComparison.OrdinalIgnoreCase)
             ? "Image_02L.jpg"
             : "Image_01L.jpg";
-        
+
         object fallback;
         if (isConflictBatch)
         {
