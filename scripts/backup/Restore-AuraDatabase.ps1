@@ -1,120 +1,91 @@
-# AURA Disaster Recovery Restoration & Integrity Verification Script
-# Task SCRUM-340 (W4-M1-03)
-
+[CmdletBinding()]
 param(
-    [string]$EncryptedBackupFile = "",
-    [string]$PostgresHost = "127.0.0.1",
-    [int]$PostgresPort = 5432,
-    [string]$Database = "aura_dev",
-    [string]$User = "postgres",
-    [string]$Password = "postgres",
-    [string]$EncryptionKey = "AuraMasterSecureKey2026Sprint45!"
+    [Parameter(Mandatory)][string]$EncryptedBackupFile,
+    [Parameter(Mandatory)][string]$Database,
+    [Parameter(Mandatory)][string]$ConfirmTarget,
+    [Parameter(Mandatory)][string]$ConfirmStorageTarget,
+    [string]$PostgresHost = '127.0.0.1', [int]$PostgresPort = 5432,
+    [string]$User = 'postgres', [string]$Password = $env:PGPASSWORD, [string]$Container = '',
+    [string]$AssetRoot = '', [string]$EncryptionKey = $env:AURA_BACKUP_KEY,
+    [int]$MaxRtoSeconds = 1800, [int]$MaxRpoSeconds = 3600
 )
-
-$ErrorActionPreference = "Stop"
-
-Write-Host "====================================================================" -ForegroundColor Cyan
-Write-Host "AURA Task W4-M1-03: Disaster Recovery Drill & Database Restoration" -ForegroundColor Cyan
-Write-Host "====================================================================" -ForegroundColor Cyan
-
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
-
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Backup.Common.ps1')
+$target = if ($Container) { "docker:${Container}/$Database" } else { "tcp:${PostgresHost}:${PostgresPort}/$Database" }
+if ($ConfirmTarget -cne $target -or $Database -in @('postgres','template0','template1')) { throw 'Restore target must be explicitly confirmed.' }
+$archive = [IO.Path]::GetFullPath($EncryptedBackupFile)
+$parent = [IO.Path]::GetDirectoryName($archive)
+$stage = Join-Path $parent ('.stage-' + [Guid]::NewGuid().ToString('N'))
+$keys = Get-BackupKeys $EncryptionKey
+[IO.Directory]::CreateDirectory($stage) | Out-Null
+$remoteDump = '/tmp/aura-restore-' + [Guid]::NewGuid().ToString('N') + '.dump'
+$savedPassword = $env:PGPASSWORD
+$timer = [Diagnostics.Stopwatch]::StartNew()
 try {
-    # Nếu không truyền file cụ thể, tự tìm file mới nhất trong thư mục backups
-    if ([string]::IsNullOrWhiteSpace($EncryptedBackupFile)) {
-        $latestEnc = Get-ChildItem -Path "backups" -Filter "*.dump.enc" -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-
-        if (-not $latestEnc) {
-            throw "Không tìm thấy tệp sao lưu mã hóa nào trong thư mục backups."
+    $zip = Join-Path $stage 'payload.zip'
+    Read-EncryptedBackup $archive $zip $keys
+    $package = Join-Path $stage 'payload'
+    [IO.Compression.ZipFile]::ExtractToDirectory($zip,$package)
+    $manifest = Get-Content -LiteralPath (Join-Path $package 'manifest.json') -Raw | ConvertFrom-Json
+    if ($manifest.formatVersion -ne 1) { throw 'Unsupported manifest version.' }
+    $rpo = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($manifest.startedAt)).TotalSeconds
+    if ($rpo -lt -300 -or $rpo -gt $MaxRpoSeconds) { throw 'Backup age exceeds the requested RPO or has an invalid timestamp.' }
+    $dump = Join-Path $package 'database.dump'
+    if ((Get-FileHash -LiteralPath $dump -Algorithm SHA256).Hash -ne $manifest.dumpSha256) { throw 'Database checksum mismatch.' }
+    $inventory = Get-Content -LiteralPath (Join-Path $package 'assets.manifest.json') -Raw | ConvertFrom-Json
+    $assets = Join-Path $package 'assets'
+    if ($inventory.provider -eq 'Local') {
+        if (!$AssetRoot -or $ConfirmStorageTarget -cne [IO.Path]::GetFullPath($AssetRoot)) { throw 'Local restore storage target must be confirmed.' }
+        $destinationRoot = [IO.Path]::GetFullPath($AssetRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        foreach ($item in $inventory.objects) {
+            foreach ($base in @($assets,$destinationRoot)) {
+                $resolved = [IO.Path]::GetFullPath((Join-Path $base $item.path))
+                if (!$resolved.StartsWith([IO.Path]::GetFullPath($base).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid storage manifest path.' }
+            }
+            $source = Join-Path $assets $item.path
+            if ((Get-Item -LiteralPath $source).Length -ne $item.length -or (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $item.sha256) { throw 'Asset checksum mismatch.' }
+            $ancestor = Join-Path $destinationRoot $item.path
+            while ($ancestor) {
+                if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Restore target contains a symbolic link.' }
+                $ancestor = [IO.Path]::GetDirectoryName($ancestor)
+            }
         }
-        $EncryptedBackupFile = $latestEnc.FullName
-    }
-
-    Write-Host "[1/4] Giải mã bản sao lưu AES-256: $EncryptedBackupFile..." -ForegroundColor Yellow
-    $allBytes = [System.IO.File]::ReadAllBytes($EncryptedBackupFile)
-    $aes = [System.Security.Cryptography.Aes]::Create()
-    $aes.Key = [System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($EncryptionKey))
-
-    # Đọc IV từ 16 bytes đầu
-    $iv = New-Object byte[] 16
-    [System.Buffer]::BlockCopy($allBytes, 0, $iv, 0, 16)
-    $aes.IV = $iv
-
-    $ms = New-Object System.IO.MemoryStream($allBytes, 16, $allBytes.Length - 16)
-    $cs = New-Object System.Security.Cryptography.CryptoStream($ms, $aes.CreateDecryptor(), [System.Security.Cryptography.CryptoStreamMode]::Read)
-    $decryptedStream = New-Object System.IO.MemoryStream
-    $cs.CopyTo($decryptedStream)
-    $cs.Close()
-    $ms.Close()
-
-    $restoredDumpPath = [System.IO.Path]::ChangeExtension($EncryptedBackupFile, ".restored.dump")
-    [System.IO.File]::WriteAllBytes($restoredDumpPath, $decryptedStream.ToArray())
-    Write-Host "  Giải mã thành công -> $restoredDumpPath" -ForegroundColor Green
-
-    Write-Host "[2/4] Kiểm tra tính toàn vẹn mã băm SHA-256..." -ForegroundColor Yellow
-    $actualHash = (Get-FileHash -Path $restoredDumpPath -Algorithm SHA256).Hash
-    $originalDump = $EncryptedBackupFile.Substring(0, $EncryptedBackupFile.Length - 4)
-    $expectedHashFile = "$originalDump.sha256"
-
-    if (Test-Path $expectedHashFile) {
-        $expectedHash = (Get-Content $expectedHashFile).Trim()
-        if ($actualHash -ne $expectedHash) {
-            throw "Mã băm SHA-256 sau giải mã không khớp! Bản sao lưu có nguy cơ bị can thiệp."
-        }
-        Write-Host "  Mã băm SHA-256 khớp tuyệt đối: $actualHash" -ForegroundColor Green
+    } elseif ($inventory.provider -eq 'AzureBlob') {
+        Invoke-BackupProcess 'dotnet' @('run','--project',(Join-Path $PSScriptRoot '../../tools/AURA.PrivateStorage.Backup'),'--','verify',$assets,$ConfirmStorageTarget)
+    } else { throw 'Unknown storage provider.' }
+    $env:PGPASSWORD = $Password
+    $restoreArgs = @('-U',$User,'-d',$Database,'--clean','--if-exists','--exit-on-error','--single-transaction')
+    if ($Container) {
+        Invoke-BackupProcess 'docker' @('cp',$dump,"${Container}:$remoteDump")
+        Invoke-BackupProcess 'docker' (@('exec','--env','PGPASSWORD',$Container,'pg_restore') + $restoreArgs + @($remoteDump))
     } else {
-        Write-Host "  Mã băm giải mã hợp lệ: $actualHash" -ForegroundColor Green
+        if (!(Get-Command pg_restore -ErrorAction SilentlyContinue)) { throw 'pg_restore required; specify Container explicitly for Docker.' }
+        Invoke-BackupProcess 'pg_restore' (@('-h',$PostgresHost,'-p',"$PostgresPort") + $restoreArgs + @($dump))
     }
-
-    Write-Host "[3/4] Thực hiện phục hồi dữ liệu vào PostgreSQL qua pg_restore..." -ForegroundColor Yellow
-    $pgContainer = docker ps --filter "ancestor=postgres:17-alpine" --format "{{.Names}}" | Select-Object -First 1
-    if (-not $pgContainer) {
-        $pgContainer = docker ps --format "{{.Names}}" | Where-Object { $_ -match "postgres|aura.*pg|aura-s3-reporting-postgres" } | Select-Object -First 1
-    }
-
-    if ($pgContainer) {
-        docker cp $restoredDumpPath "$pgContainer`:/tmp/restore.dump"
-        Write-Host "  Chạy pg_restore --clean --if-exists trong container $pgContainer..." -ForegroundColor Green
-        docker exec -e PGPASSWORD=$Password $pgContainer pg_restore -U $User -d $Database --clean --if-exists -v "/tmp/restore.dump"
-        $restoreExit = $LASTEXITCODE
-        docker exec $pgContainer rm "/tmp/restore.dump"
-
-        # pg_restore returns 0 on success, or 1 on non-fatal warnings (e.g. table didn't exist to drop yet)
-        if ($restoreExit -ne 0 -and $restoreExit -ne 1) {
-            throw "pg_restore thất bại với mã lỗi $restoreExit trong container $pgContainer."
-        }
-        Write-Host "  pg_restore hoàn tất thành công trong container $pgContainer (exit code: $restoreExit)." -ForegroundColor Green
-    } elseif (Get-Command "pg_restore" -ErrorAction SilentlyContinue) {
-        Write-Host "  Chạy pg_restore qua CLI cục bộ..." -ForegroundColor Green
-        $env:PGPASSWORD = $Password
-        & pg_restore -h $PostgresHost -p $PostgresPort -U $User -d $Database --clean --if-exists -v $restoredDumpPath
-        $restoreExit = $LASTEXITCODE
-        if ($restoreExit -ne 0 -and $restoreExit -ne 1) {
-            throw "pg_restore cục bộ thất bại với mã lỗi $restoreExit."
-        }
-        Write-Host "  pg_restore cục bộ hoàn tất thành công (exit code: $restoreExit)." -ForegroundColor Green
+    if ($inventory.provider -eq 'AzureBlob') {
+        Invoke-BackupProcess 'dotnet' @('run','--project',(Join-Path $PSScriptRoot '../../tools/AURA.PrivateStorage.Backup'),'--','restore',$assets,$ConfirmStorageTarget)
     } else {
-        throw "LỖI CRITICAL: Không tìm thấy container PostgreSQL đang chạy hoặc công cụ pg_restore để thực hiện phục hồi. Không được mô phỏng giả lập."
+        foreach ($item in $inventory.objects) {
+            $destination = Join-Path $destinationRoot $item.path
+            # Refuse symlink ancestors rather than writing outside the confirmed root.
+            $ancestor = [IO.Path]::GetDirectoryName($destination)
+            while ($ancestor) {
+                if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Restore target contains a symbolic link.' }
+                $ancestor = [IO.Path]::GetDirectoryName($ancestor)
+            }
+            if ((Test-Path -LiteralPath $destination) -and ((Get-Item -LiteralPath $destination).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Restore target is a symbolic link.' }
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $assets $item.path) -Destination $destination -Force
+            if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $item.sha256) { throw 'Restored asset checksum mismatch.' }
+        }
     }
-
-    Write-Host "[4/4] Đo lường chỉ số Phục hồi Thảm họa RPO và RTO..." -ForegroundColor Yellow
-    $sw.Stop()
-    $rtoSeconds = $sw.Elapsed.TotalSeconds
-    $rtoMinutes = [math]::Round($rtoSeconds / 60.0, 2)
-
-    Write-Host "  Thời gian phục hồi thực tế (RTO): $rtoMinutes phút ($rtoSeconds giây)" -ForegroundColor Green
-    Write-Host "  Mục tiêu RTO: <= 30 phút (ĐẠT)" -ForegroundColor Green
-    Write-Host "  Mục tiêu RPO: <= 1 giờ (ĐẠT - sao lưu định kỳ)" -ForegroundColor Green
-
-    # Dọn dẹp tệp dump tạm thời sau khi phục hồi
-    Remove-Item $restoredDumpPath -Force
-
-    Write-Host "====================================================================" -ForegroundColor Cyan
-    Write-Host "KẾT QUẢ: Diễn tập phục hồi thảm họa thành công 100%! RTO < 15 phút." -ForegroundColor Green
-    Write-Host "====================================================================" -ForegroundColor Cyan
-}
-catch {
-    Write-Host "LỖI PHỤC HỒI: $_" -ForegroundColor Red
-    throw
+    $timer.Stop()
+    if ($timer.Elapsed.TotalSeconds -gt $MaxRtoSeconds) { throw 'Restore completed but exceeded the requested RTO.' }
+    Write-Output "RESTORE_COMPLETE: verified DB and $(@($inventory.objects).Count) private assets; RTO=$($timer.Elapsed.TotalSeconds)s; backup age/RPO=$rpo s."
+} finally {
+    if ($Container) { & docker exec $Container rm -f $remoteDump 2>$null | Out-Null }
+    Remove-BackupStaging $stage $parent
+    [Security.Cryptography.CryptographicOperations]::ZeroMemory($keys.Enc)
+    [Security.Cryptography.CryptographicOperations]::ZeroMemory($keys.Mac)
+    $env:PGPASSWORD = $savedPassword
 }
