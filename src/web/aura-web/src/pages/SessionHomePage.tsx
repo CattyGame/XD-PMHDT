@@ -10,6 +10,7 @@ export default function SessionHomePage() {
   if (state.status !== 'ready') return <BackendSessionNotice />
   const { context } = state
   const personalUpload = canUploadPersonal(context)
+  const isClinicOrDoctor = context.roles.includes('CLINIC') || context.roles.includes('DOCTOR')
 
   return (
     <div className="session-home">
@@ -19,6 +20,8 @@ export default function SessionHomePage() {
           <Link to="/" aria-current="page">Trang chủ</Link>
           {personalUpload && <Link to="/upload">Tải ảnh võng mạc</Link>}
           <Link to="/clinic-upload">Tải ảnh phòng khám</Link>
+          <Link to="/clinics/members">Thành viên phòng khám</Link>
+          <Link to="/clinics/patients">Bệnh nhân phòng khám</Link>
           {!context.roles.includes("SYSTEM_ADMIN") && <Link to="/batches">Theo dõi batch</Link>}
           {/* Mở hộp thư thông báo của tài khoản hiện tại */}
           {!context.roles.includes("SYSTEM_ADMIN") && (
@@ -35,6 +38,18 @@ export default function SessionHomePage() {
           <h3>Vai trò của bạn</h3>
           <ul>{context.roles.map((role) => <li key={role}>{ROLE_LABELS[role]}</li>)}</ul>
         </section>
+
+        {isClinicOrDoctor && (
+          <section className="session-action" aria-labelledby="session-clinic-title" style={{ marginTop: '16px' }}>
+            <h2 id="session-clinic-title">Quản lý Phòng khám</h2>
+            <p>Quản lý thành viên bác sĩ/nhân viên và danh bạ bệnh nhân của phòng khám.</p>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <Link className="session-primary-link" to="/clinics/members">Quản lý Thành viên</Link>
+              <Link className="session-primary-link" to="/clinics/patients">Danh bạ Bệnh nhân</Link>
+            </div>
+          </section>
+        )}
+
         {personalUpload ? (
           <section className="session-action" aria-labelledby="session-upload-title">
             <h2 id="session-upload-title">Tải ảnh cho hồ sơ cá nhân</h2>
