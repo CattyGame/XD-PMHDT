@@ -185,7 +185,8 @@ public sealed class NotificationInboxRepository(
                 IsRead: reader.GetBoolean(5),
                 CreatedAt: reader.GetFieldValue<DateTimeOffset>(6),
                 ReadAt: reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7),
-                TargetPath: reader.GetString(8),
+                TargetPath: reader.GetString(3) == "PAYMENT_SUCCESS" && !reader.IsDBNull(9)
+                    ? $"/billing/orders/{reader.GetGuid(9):D}" : reader.GetString(8),
                 OrderId: reader.IsDBNull(9) ? null : reader.GetGuid(9)
             ));
         }

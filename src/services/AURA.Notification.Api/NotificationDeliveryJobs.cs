@@ -109,7 +109,10 @@ public sealed class NotificationDeliveryJobRepository(
             JOIN notification.inbox_items ii ON ii.id = (SELECT inbox_item_id FROM notification.delivery_jobs WHERE id = cj.id)
             WHERE dj.id = cj.id
             RETURNING dj.id, dj.inbox_item_id, dj.account_id, dj.device_id, dj.attempts, dj.max_attempts, dj.lease_token,
-                      ii.type, ii.title, ii.target_path, ii.metadata;
+                      ii.type, ii.title,
+                      CASE WHEN ii.type='PAYMENT_SUCCESS' AND ii.order_id IS NOT NULL
+                           THEN '/billing/orders/' || ii.order_id::text ELSE ii.target_path END,
+                      ii.metadata;
             """;
 
         var jobs = new List<ClaimedDeliveryJob>();

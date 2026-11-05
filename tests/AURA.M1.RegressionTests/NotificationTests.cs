@@ -32,14 +32,18 @@ public class NotificationTests
     public async Task Mixed_payment_analysis_and_batch_inbox_preserves_nullable_resource_identity()
     {
         await using var f=await Fixture.CreateAsync();
+        await f.DeviceAsync("good");
         await f.Consumer.ProcessNotificationEventAsync(f.Event("billing.payment.success"),default);
         await f.Consumer.ProcessNotificationEventAsync(f.Event("analysis.completed"),default);
         await f.Consumer.ProcessNotificationEventAsync(f.Event("batch.completed"),default);
+        await f.Db.SqlAsync("UPDATE notification.inbox_items SET target_path='/billing/orders' WHERE type='PAYMENT_SUCCESS'");
         var page=await f.Inbox.GetInboxAsync(f.Account,20,null,false,default);
         Assert.Equal(3,page.Items.Count);
         var payment=Assert.Single(page.Items,x=>x.Type=="PAYMENT_SUCCESS");
         Assert.Null(payment.AnalysisId);Assert.Equal(f.Order,payment.OrderId);
         Assert.Equal($"/billing/orders/{f.Order:D}",payment.TargetPath);
+        await f.Worker.DispatchPendingAsync(default);
+        Assert.Contains(f.Provider.Messages,m=>m.Data["targetPath"]==$"/billing/orders/{f.Order:D}");
     }
 
     [M1PostgresFact]
