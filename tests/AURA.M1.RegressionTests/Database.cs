@@ -39,7 +39,14 @@ sealed class Database : IAsyncDisposable
         var name="aura_m1_test_"+Guid.NewGuid().ToString("N");
         await using var cmd=cluster.CreateCommand($"CREATE DATABASE {name} TEMPLATE aura_dev;");
         await cmd.ExecuteNonQueryAsync();
-        return new(cluster,name,cs);
+        var database=new Database(cluster,name,cs);
+        try
+        {
+            // Earlier suites leave fixtures in the template; reset only this uniquely owned clone.
+            await database.SqlAsync("TRUNCATE billing.orders, billing.credit_wallets, notification.inbox_items CASCADE;");
+            return database;
+        }
+        catch { await database.DisposeAsync(); throw; }
     }
     public async Task SqlAsync(string sql, params object[] args)
     {
