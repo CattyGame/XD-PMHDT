@@ -70,16 +70,22 @@ public sealed class PostgresWorkerTests
         warnings=new[]{new{code="RISK_UNAVAILABLE",message="Research fixture"}}});
 
     [PostgresFact]
-    public async Task Concurrent_claim_and_stale_fence_protect_terminal_result_annotations_and_outbox()
+    public async Task Twenty_workers_contend_for_one_job_and_stale_fence_protects_terminal_result()
     {
-        var f=await Seed();await using var first=Database();await using var second=Database();
+        var f=await Seed();
+        // Each contender has an independent DbContext, matching separate worker processes.
+        var claims=await Task.WhenAll(Enumerable.Range(0,20).Select(async i =>
+        {
+            await using var contender=Database();
+            var repository=new JobRepository(contender,NullLogger<JobRepository>.Instance);
+            await repository.GetJobAsync(f.Job,default); // Preserve the tracked-entity regression check.
+            return await repository.TryAcquireLeaseAsync(f.Job,$"worker-{i:D2}",TimeSpan.FromMinutes(1),default);
+        }));
+        var old=Assert.Single(claims,l=>l is not null)!;
+        await using var first=Database();
+        await using var second=Database();
         var repoA=new JobRepository(first,NullLogger<JobRepository>.Instance);
         var repoB=new JobRepository(second,NullLogger<JobRepository>.Instance);
-        // Materialize before the SQL claim: catches the old EF tracked-entity/claim-token regression.
-        await repoA.GetJobAsync(f.Job,default);await repoB.GetJobAsync(f.Job,default);
-        var claims=await Task.WhenAll(repoA.TryAcquireLeaseAsync(f.Job,"worker-a",TimeSpan.FromMinutes(1),default),
-            repoB.TryAcquireLeaseAsync(f.Job,"worker-b",TimeSpan.FromMinutes(1),default));
-        var old=Assert.Single(claims,l=>l is not null)!;
         await Execute("UPDATE analysis.jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1;",f.Job);
         var current=await repoB.TryAcquireLeaseAsync(f.Job,"worker-new",TimeSpan.FromMinutes(1),default);
         Assert.NotNull(current);Assert.True(current.FencingToken>old.FencingToken);
