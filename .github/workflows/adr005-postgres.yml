@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main, develop]
   push:
-    branches: [main, develop]
+    branches: [main, develop, codex/m1-sprint4-5-completion, fix/m1-sprint4-5-completion]
   workflow_dispatch:
 
 permissions:
@@ -19,6 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
+      rabbitmq:
+        image: rabbitmq:4-management
+        ports:
+          - 56739:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s --health-timeout 5s --health-retries 30
       postgres:
         image: postgres:17
         env:
@@ -39,9 +46,27 @@ jobs:
       AURA_TEST_ALLOW_DATABASE: aura_dev
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
+      AURA_TEST_RABBITMQ_PASSWORD: guest
+      AURA_TEST_RABBITMQ_PORT: 56739
+      AURA_TEST_AZURITE_CONNECTION: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10039/devstoreaccount1
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Provision isolated M1 broker and private storage fixtures
+        shell: pwsh
+        env:
+          RABBIT_CONTAINER: ${{ job.services.rabbitmq.id }}
+        run: |
+          foreach ($name in @('s3-publisher','s3-worker','s3-billing','s3-notification','s3-audit','s3-operator')) {
+            docker exec $env:RABBIT_CONTAINER rabbitmqctl add_user $name guest
+            if ($LASTEXITCODE -ne 0) { throw 'Test user provisioning failed.' }
+          }
+          ./scripts/dev/Initialize-M1RabbitTopology.ps1 -Container $env:RABBIT_CONTAINER
+          docker exec $env:RABBIT_CONTAINER rabbitmqctl set_permissions -p /aura-s3 guest '.*' '.*' '.*'
+          if ($LASTEXITCODE -ne 0) { throw 'Test operator provisioning failed.' }
+          docker run -d --name aura-m1-test-azurite -p 127.0.0.1:10039:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+          if ($LASTEXITCODE -ne 0) { throw 'Private storage fixture failed.' }
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -102,16 +127,20 @@ jobs:
         shell: bash
         run: python3 scripts/validate_openapi.py 2>&1 | tee "$RUNNER_TEMP/adr005/contracts.log"
 
+      - name: Live harness guardrails and service scope upgrade
+        run: python3 -m unittest discover -s scripts/dev -p test_m1_harnesses.py
+
       - name: Required Analysis, Billing and Worker tests including PostgreSQL
         id: tests
         shell: bash
         run: |
           status=0
-          for component in analysis billing worker; do
+          for component in analysis billing worker m1; do
             case "$component" in
               analysis) project=src/services/AURA.Analysis.Api.Tests/AURA.Analysis.Api.Tests.csproj ;;
               billing) project=src/services/AURA.Billing.Api.Tests/AURA.Billing.Api.Tests.csproj ;;
               worker) project=tests/Aura.Worker.Analysis.Tests/Aura.Worker.Analysis.Tests.csproj ;;
+              m1) project=tests/AURA.M1.RegressionTests/AURA.M1.RegressionTests.csproj ;;
             esac
             mkdir -p "$RUNNER_TEMP/adr005/results/$component"
             dotnet test "$project" --configuration Release --no-build --no-restore \
@@ -122,6 +151,16 @@ jobs:
 
       - name: Reject skipped or missing required TRX results
         run: python3 scripts/release/create_candidate_manifest.py --verify-trx "${{ runner.temp }}/adr005/results"
+
+      - name: Actual encrypted PostgreSQL and private asset recovery
+        shell: pwsh
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: ./scripts/backup/Test-BackupRecovery.ps1 -Container $env:POSTGRES_CONTAINER -User aura_dev
+
+      - name: Custom-password Redis health and actual restart
+        shell: pwsh
+        run: ./scripts/dev/Test-RedisRuntime.ps1
 
       - name: Profile security checks against real PostgreSQL runtime privileges
         id: profile
