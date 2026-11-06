@@ -8,14 +8,11 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.12" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
+  </ItemGroup>
 
-    <Compile Include="../../src/services/AURA.Analysis.Api/Campaign/CampaignModels.cs"
-             Link="CampaignModels.cs" />
-    <Compile Include="../../src/services/AURA.Analysis.Api/Campaign/CampaignRepository.cs"
-             Link="CampaignRepository.cs" />
-    <Compile Include="../../src/services/AURA.Analysis.Api/Campaign/CampaignCsvWriter.cs" Link="CampaignCsvWriter.cs" />
-    <Compile Include="../../src/services/AURA.Analysis.Api/Upload/UploadFailure.cs"
-             Link="UploadFailure.cs" />
+  <ItemGroup>
+    <ProjectReference Include="../../src/services/AURA.Analysis.Api/AURA.Analysis.Api.csproj" />
   </ItemGroup>
 </Project>

@@ -5,7 +5,7 @@ using Npgsql;
 
 namespace AURA.Analysis.Api.Campaign;
 
-public sealed class CampaignRepository(NpgsqlDataSource dataSource)
+public sealed class CampaignRepository(NpgsqlDataSource dataSource) : ICampaignRepository
 {
     public async Task<CampaignResponse> CreateCampaignAsync(Guid tenantId, CreateCampaignRequest request, CancellationToken ct)
     {
