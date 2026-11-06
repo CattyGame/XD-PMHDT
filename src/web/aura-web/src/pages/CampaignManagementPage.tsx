@@ -2,49 +2,36 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
-import './SessionHomePage.css'
+import type { BackendContext } from '../api/backendContext'
+import {
+  getActorClinics,
+  type ClinicInfo,
+} from '../api/clinicManagement'
+import {
+  getCampaigns,
+  createCampaign,
+  linkBatchToCampaign,
+  updateCampaignStatus,
+  getCampaignSummary,
+  getCampaignExportUrl,
+  type CampaignItem,
+  type CampaignSummary,
+  type CampaignStatus,
+} from '../api/campaignManagement'
+import { AnalysisResultError } from '../api/analysisResult'
+import './CampaignManagementPage.css'
 
-export interface CampaignItem {
-  id: string
-  tenantId: string
-  name: string
-  description?: string | null
-  location: string
-  doctorInChargeId?: string | null
-  targetPatientCount: number
-  status: 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CLOSED'
-  startDate: string
-  endDate: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface CampaignSummary {
-  campaignId: string
-  tenantId: string
-  campaignName: string
-  status: string
-  targetPatientCount: number
-  totalBatches: number
-  totalImages: number
-  completedImages: number
-  pendingImages: number
-  failedImages: number
-  completionRatePercent: number
-  normalCases: number
-  suspectedCases: number
-  highRiskCases: number
-  uniquePatients: number
-}
-
-export default function CampaignManagementPage() {
-  const { state } = useBackendSession()
-  const [campaigns, setCampaigns] = useState<CampaignItem[]>([])
-  const [loading, setLoading] = useState<boolean>(false)
+function CampaignManagementContent({ context }: { context: BackendContext }) {
+  const [clinics, setClinics] = useState<readonly ClinicInfo[]>([])
+  const [selectedClinicId, setSelectedClinicId] = useState<string>('')
+  const [campaigns, setCampaigns] = useState<readonly CampaignItem[]>([])
+  const [statusFilter, setStatusFilter] = useState<string>('ALL')
+  const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
+  const [reloadTrigger, setReloadTrigger] = useState<number>(0)
 
-  // Modal State
+  // Create Campaign Modal State
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false)
   const [newName, setNewName] = useState('')
   const [newLocation, setNewLocation] = useState('')
@@ -52,441 +39,534 @@ export default function CampaignManagementPage() {
   const [newTarget, setNewTarget] = useState<number>(100)
   const [newStartDate, setNewStartDate] = useState(new Date().toISOString().slice(0, 10))
   const [newEndDate, setNewEndDate] = useState(new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10))
+  const [submitting, setSubmitting] = useState<boolean>(false)
 
-  // Link Batch Modal
+  // Link Batch Modal State
   const [linkingCampaignId, setLinkingCampaignId] = useState<string | null>(null)
   const [linkBatchId, setLinkBatchId] = useState('')
+  const [linking, setLinking] = useState<boolean>(false)
 
   // Summary State
   const [selectedSummary, setSelectedSummary] = useState<CampaignSummary | null>(null)
+  const [loadingSummary, setLoadingSummary] = useState<boolean>(false)
 
-  const clinicId = 'c1111111-0000-0000-0000-000000000001' // Default clinic demo context
-
+  // 1. Tải danh sách phòng khám của tài khoản
   useEffect(() => {
-    loadCampaigns()
-  }, [])
-
-  async function loadCampaigns() {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch(`/api/v1/campaigns?clinicContextId=${clinicId}`)
-      if (!res.ok) throw new Error('Không thể tải danh sách chiến dịch.')
-      const data = await res.json()
-      setCampaigns(data)
-    } catch (err: any) {
-      setError(err.message || 'Lỗi kết nối.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleCreateCampaign(e: React.FormEvent) {
-    e.preventDefault()
-    setError(null)
-    setSuccessMsg(null)
-
-    try {
-      const res = await fetch(`/api/v1/campaigns?clinicContextId=${clinicId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newName,
-          description: newDesc,
-          location: newLocation,
-          targetPatientCount: Number(newTarget),
-          startDate: new Date(newStartDate).toISOString(),
-          endDate: new Date(newEndDate).toISOString()
-        })
+    const controller = new AbortController()
+    getActorClinics(context, controller.signal)
+      .then((items) => {
+        if (controller.signal.aborted) return
+        setClinics(items)
+        if (items.length > 0) {
+          setSelectedClinicId(items[0].clinicId)
+        }
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setError(
+            err instanceof AnalysisResultError && err.status === 403
+              ? 'Bạn không có quyền truy cập quản lý phòng khám.'
+              : 'Không thể tải danh sách phòng khám.',
+          )
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
       })
 
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => null)
-        throw new Error(errJson?.error?.message || 'Tạo chiến dịch thất bại.')
-      }
+    return () => controller.abort()
+  }, [context])
+
+  // 2. Tải danh sách chiến dịch theo phòng khám đã chọn & bộ lọc
+  useEffect(() => {
+    if (!selectedClinicId) return
+
+    const controller = new AbortController()
+    setLoading(true)
+    setError(null)
+
+    getCampaigns(context, selectedClinicId, controller.signal, statusFilter)
+      .then((data) => {
+        if (!controller.signal.aborted) {
+          setCampaigns(data)
+        }
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setError(
+            err instanceof AnalysisResultError && err.status === 403
+              ? 'Không có quyền xem chiến dịch của phòng khám này.'
+              : 'Lỗi tải danh sách chiến dịch tầm soát.',
+          )
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [context, selectedClinicId, statusFilter, reloadTrigger])
+
+  // Xử lý tạo chiến dịch
+  async function handleCreateCampaign(e: React.FormEvent) {
+    e.preventDefault()
+    if (!selectedClinicId) return
+
+    setError(null)
+    setSuccessMsg(null)
+    setSubmitting(true)
+
+    try {
+      await createCampaign(context, selectedClinicId, {
+        name: newName,
+        description: newDesc,
+        location: newLocation,
+        targetPatientCount: Number(newTarget),
+        startDate: new Date(newStartDate).toISOString(),
+        endDate: new Date(newEndDate).toISOString(),
+      })
 
       setSuccessMsg('Tạo chiến dịch tầm soát thành công!')
       setShowCreateModal(false)
       setNewName('')
       setNewLocation('')
       setNewDesc('')
-      loadCampaigns()
+      setReloadTrigger((v) => v + 1)
     } catch (err: any) {
-      setError(err.message)
+      setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : (err.message || 'Tạo chiến dịch thất bại.'))
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  async function handleUpdateStatus(campaignId: string, status: string) {
+  // Xử lý đổi trạng thái chiến dịch
+  async function handleUpdateStatus(campaignId: string, status: CampaignStatus) {
+    if (!selectedClinicId) return
     setError(null)
     setSuccessMsg(null)
+
     try {
-      const res = await fetch(`/api/v1/campaigns/${campaignId}/status?clinicContextId=${clinicId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status })
-      })
-      if (!res.ok) throw new Error('Cập nhật trạng thái thất bại.')
+      await updateCampaignStatus(context, selectedClinicId, campaignId, status)
       setSuccessMsg(`Đã cập nhật chiến dịch sang trạng thái ${status}.`)
-      loadCampaigns()
+      setReloadTrigger((v) => v + 1)
     } catch (err: any) {
-      setError(err.message)
+      setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : (err.message || 'Cập nhật trạng thái thất bại.'))
     }
   }
 
+  // Xử lý gắn batch vào chiến dịch
   async function handleLinkBatch(e: React.FormEvent) {
     e.preventDefault()
-    if (!linkingCampaignId || !linkBatchId.trim()) return
+    if (!selectedClinicId || !linkingCampaignId || !linkBatchId.trim()) return
 
     setError(null)
     setSuccessMsg(null)
+    setLinking(true)
+
     try {
-      const res = await fetch(`/api/v1/campaigns/${linkingCampaignId}/batches?clinicContextId=${clinicId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batchId: linkBatchId.trim() })
-      })
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => null)
-        throw new Error(errJson?.error?.message || 'Không thể liên kết batch.')
-      }
-
-      setSuccessMsg('Gắn batch ảnh vào chiến dịch thành công!')
+      const res = await linkBatchToCampaign(context, selectedClinicId, linkingCampaignId, linkBatchId.trim())
+      setSuccessMsg(res.message || 'Gắn batch ảnh vào chiến dịch thành công!')
       setLinkingCampaignId(null)
       setLinkBatchId('')
+      setReloadTrigger((v) => v + 1)
     } catch (err: any) {
-      setError(err.message)
+      if (err instanceof AnalysisResultError && err.code === 'ERR_CAMPAIGN_CLOSED') {
+        setError('Chiến dịch đã kết thúc (CLOSED), không cho phép gắn thêm batch ảnh mới.')
+      } else {
+        setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : (err.message || 'Không thể liên kết batch.'))
+      }
+    } finally {
+      setLinking(false)
     }
   }
 
+  // Xử lý xem thống kê
   async function handleViewSummary(campaignId: string) {
+    if (!selectedClinicId) return
     setError(null)
+    setLoadingSummary(true)
+
     try {
-      const res = await fetch(`/api/v1/campaigns/${campaignId}/summary?clinicContextId=${clinicId}`)
-      if (!res.ok) throw new Error('Không thể tải số liệu thống kê chiến dịch.')
-      const data = await res.json()
+      const data = await getCampaignSummary(context, selectedClinicId, campaignId)
       setSelectedSummary(data)
     } catch (err: any) {
-      setError(err.message)
+      setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : (err.message || 'Không thể tải thống kê chiến dịch.'))
+    } finally {
+      setLoadingSummary(false)
     }
   }
 
   function handleExportCsv(campaignId: string) {
-    window.open(`/api/v1/campaigns/${campaignId}/export?clinicContextId=${clinicId}`, '_blank')
+    if (!selectedClinicId) return
+    const url = getCampaignExportUrl(selectedClinicId, campaignId)
+    window.open(url, '_blank')
   }
 
-  if (state.status !== 'ready') return <BackendSessionNotice />
-
   const totalCampaigns = campaigns.length
-  const activeCampaigns = campaigns.filter(c => c.status === 'IN_PROGRESS' || c.status === 'PLANNED').length
-  const closedCampaigns = campaigns.filter(c => c.status === 'CLOSED').length
+  const activeCampaigns = campaigns.filter((c) => c.status === 'IN_PROGRESS' || c.status === 'PLANNED').length
+  const closedCampaigns = campaigns.filter((c) => c.status === 'CLOSED').length
 
   return (
-    <div className="session-home" style={{ maxWidth: 1200, margin: '0 auto', padding: '20px 24px' }}>
-      <header className="session-header" style={{ marginBottom: 24 }}>
-        <Link className="session-brand" to="/">AURA</Link>
-        <nav aria-label="Điều hướng">
+    <div className="campaign-page">
+      <header className="campaign-header">
+        <h1>AURA — Quản Lý Chiến Dịch Tầm Soát</h1>
+        <nav className="campaign-nav" aria-label="Điều hướng chính">
           <Link to="/">Trang chủ</Link>
+          <Link to="/clinics/members">Thành viên</Link>
+          <Link to="/clinics/patients">Bệnh nhân</Link>
+          <Link to="/campaigns" aria-current="page" style={{ fontWeight: 'bold' }}>Chiến dịch</Link>
           <Link to="/batches">Theo dõi batch</Link>
-          <Link to="/campaigns" aria-current="page" style={{ fontWeight: 'bold', color: '#0056b3' }}>Chiến dịch tầm soát</Link>
           <Link to="/notifications">Thông báo</Link>
         </nav>
       </header>
 
-      <main>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 26, color: '#1a202c' }}>Chiến Dịch Tầm Soát Sức Khỏe Mắt</h1>
-            <p style={{ margin: '4px 0 0', color: '#718096' }}>Quản lý các đợt khám lưu động cộng đồng và tầm soát sức khỏe định kỳ doanh nghiệp</p>
-          </div>
+      {/* Thanh chọn phòng khám (Đảm bảo cô lập AC2) */}
+      <section className="campaign-selector-bar">
+        <label htmlFor="clinic-select">Phòng khám:</label>
+        {clinics.length > 0 ? (
+          <select
+            id="clinic-select"
+            value={selectedClinicId}
+            onChange={(e) => setSelectedClinicId(e.target.value)}
+          >
+            {clinics.map((c) => (
+              <option key={c.clinicId} value={c.clinicId}>
+                {c.clinicName} ({c.role})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span style={{ color: '#64748b' }}>Không có phòng khám liên kết</span>
+        )}
+      </section>
+
+      {/* Tiêu đề & Nút Tạo mới */}
+      <div className="campaign-title-bar">
+        <div>
+          <h2>Đợt Khám & Sàng Lọc Mạch Máu Võng Mạc</h2>
+          <p>Quản lý các đợt khám lưu động cộng đồng, tầm soát sức khỏe định kỳ doanh nghiệp và gán batch ảnh chụp</p>
+        </div>
+        {selectedClinicId && (
           <button
             type="button"
+            className="btn-primary"
             onClick={() => setShowCreateModal(true)}
-            style={{
-              padding: '10px 18px',
-              backgroundColor: '#0066cc',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 6,
-              cursor: 'pointer',
-              fontWeight: 600
-            }}
           >
             + Tạo Chiến Dịch Mới
           </button>
+        )}
+      </div>
+
+      {/* Thông báo Alert */}
+      {error && <div className="alert-error" role="alert">{error}</div>}
+      {successMsg && <div className="alert-success" role="status">{successMsg}</div>}
+
+      {/* Thẻ KPI Thống kê */}
+      <div className="campaign-kpi-grid">
+        <div className="kpi-card kpi-card-total">
+          <div className="kpi-label">Tổng chiến dịch</div>
+          <div className="kpi-value">{totalCampaigns}</div>
         </div>
+        <div className="kpi-card kpi-card-active">
+          <div className="kpi-label">Đang triển khai</div>
+          <div className="kpi-value">{activeCampaigns}</div>
+        </div>
+        <div className="kpi-card kpi-card-closed">
+          <div className="kpi-label">Đã đóng / Hoàn tất</div>
+          <div className="kpi-value">{closedCampaigns}</div>
+        </div>
+      </div>
 
-        {/* Thông báo thông tin */}
-        {error && (
-          <div style={{ padding: '12px 16px', background: '#fed7d7', color: '#9b2c2c', borderRadius: 6, marginBottom: 16 }}>
-            {error}
-          </div>
-        )}
-        {successMsg && (
-          <div style={{ padding: '12px 16px', background: '#c6f6d5', color: '#22543d', borderRadius: 6, marginBottom: 16 }}>
-            {successMsg}
-          </div>
-        )}
+      {/* Bộ lọc trạng thái */}
+      <div className="campaign-filter-bar">
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>Trạng thái:</span>
+        {['ALL', 'PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CLOSED'].map((st) => (
+          <button
+            key={st}
+            type="button"
+            className={statusFilter === st ? 'active' : ''}
+            onClick={() => setStatusFilter(st)}
+          >
+            {st === 'ALL' ? 'Tất cả' : st}
+          </button>
+        ))}
+      </div>
 
-        {/* Thẻ KPI Thống kê nhanh */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 24 }}>
-          <div style={{ background: '#fff', padding: 16, borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', borderLeft: '4px solid #3182ce' }}>
-            <span style={{ fontSize: 13, color: '#718096', textTransform: 'uppercase' }}>Tổng chiến dịch</span>
-            <div style={{ fontSize: 28, fontWeight: 'bold', color: '#2d3748', marginTop: 4 }}>{totalCampaigns}</div>
+      {/* Bảng danh sách chiến dịch */}
+      <section className="campaign-table-container">
+        {loading ? (
+          <div style={{ padding: 24, textAlign: 'center', color: '#64748b' }}>Đang tải dữ liệu chiến dịch...</div>
+        ) : campaigns.length === 0 ? (
+          <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+            <p>Chưa có chiến dịch tầm soát nào trong phòng khám này.</p>
           </div>
-          <div style={{ background: '#fff', padding: 16, borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', borderLeft: '4px solid #38a169' }}>
-            <span style={{ fontSize: 13, color: '#718096', textTransform: 'uppercase' }}>Đang triển khai</span>
-            <div style={{ fontSize: 28, fontWeight: 'bold', color: '#38a169', marginTop: 4 }}>{activeCampaigns}</div>
-          </div>
-          <div style={{ background: '#fff', padding: 16, borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', borderLeft: '4px solid #e53e3e' }}>
-            <span style={{ fontSize: 13, color: '#718096', textTransform: 'uppercase' }}>Đã hoàn tất / Đóng</span>
-            <div style={{ fontSize: 28, fontWeight: 'bold', color: '#718096', marginTop: 4 }}>{closedCampaigns}</div>
+        ) : (
+          <table className="campaign-table">
+            <thead>
+              <tr>
+                <th>Tên chiến dịch</th>
+                <th>Địa điểm</th>
+                <th>Chỉ tiêu</th>
+                <th>Thời gian</th>
+                <th>Trạng thái</th>
+                <th style={{ textAlign: 'right' }}>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {campaigns.map((camp) => (
+                <tr key={camp.id}>
+                  <td style={{ fontWeight: 600 }}>{camp.name}</td>
+                  <td style={{ color: '#475569' }}>{camp.location}</td>
+                  <td>{camp.targetPatientCount} người</td>
+                  <td style={{ color: '#64748b', fontSize: 13 }}>
+                    {new Date(camp.startDate).toLocaleDateString('vi-VN')} – {new Date(camp.endDate).toLocaleDateString('vi-VN')}
+                  </td>
+                  <td>
+                    <span className={`campaign-status-badge status-${camp.status}`}>
+                      {camp.status}
+                    </span>
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button
+                      type="button"
+                      className="btn-action btn-action-summary"
+                      onClick={() => handleViewSummary(camp.id)}
+                    >
+                      Thống kê
+                    </button>
+                    {camp.status !== 'CLOSED' && (
+                      <button
+                        type="button"
+                        className="btn-action btn-action-link"
+                        onClick={() => setLinkingCampaignId(camp.id)}
+                      >
+                        Gắn Batch
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn-action btn-action-export"
+                      onClick={() => handleExportCsv(camp.id)}
+                    >
+                      Xuất CSV
+                    </button>
+                    {camp.status !== 'CLOSED' && (
+                      <button
+                        type="button"
+                        className="btn-action btn-action-close"
+                        onClick={() => handleUpdateStatus(camp.id, 'CLOSED')}
+                      >
+                        Đóng
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {/* Modal Xem Thống Kê & Tiến Độ */}
+      {selectedSummary && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ width: 580 }}>
+            <div className="modal-header">
+              <h3>Tiến Độ & Kết Quả Tầm Soát: {selectedSummary.campaignName}</h3>
+              <button type="button" onClick={() => setSelectedSummary(null)}>✕</button>
+            </div>
+
+            {/* Progress Bar */}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
+                <span>Tỷ lệ hoàn thành phân tích:</span>
+                <strong>{selectedSummary.completionRatePercent}% ({selectedSummary.completedImages}/{selectedSummary.totalImages} ảnh)</strong>
+              </div>
+              <div style={{ height: 12, background: '#e2e8f0', borderRadius: 6, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(selectedSummary.completionRatePercent, 100)}%`, height: '100%', background: '#10b981', transition: 'width 0.3s' }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+              <div style={{ background: '#f8fafc', padding: 12, borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                <span style={{ fontSize: 12, color: '#64748b' }}>Tổng số Batch đã nạp</span>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>{selectedSummary.totalBatches}</div>
+              </div>
+              <div style={{ background: '#f8fafc', padding: 12, borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                <span style={{ fontSize: 12, color: '#64748b' }}>Số bệnh nhân thực tế</span>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>{selectedSummary.uniquePatients} / {selectedSummary.targetPatientCount}</div>
+              </div>
+              <div style={{ background: '#f0fdf4', padding: 12, borderRadius: 6, borderLeft: '4px solid #10b981' }}>
+                <span style={{ fontSize: 12, color: '#166534' }}>Ca bình thường (LOW)</span>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#14532d' }}>{selectedSummary.normalCases}</div>
+              </div>
+              <div style={{ background: '#fffbeb', padding: 12, borderRadius: 6, borderLeft: '4px solid #f59e0b' }}>
+                <span style={{ fontSize: 12, color: '#92400e' }}>Nghi ngờ tổn thương</span>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#78350f' }}>{selectedSummary.suspectedCases} ({selectedSummary.highRiskCases} ca nặng)</div>
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => handleExportCsv(selectedSummary.campaignId)}
+              >
+                Tải Báo Cáo CSV
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setSelectedSummary(null)}
+              >
+                Đóng
+              </button>
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Bảng danh sách chiến dịch */}
-        <section style={{ background: '#fff', borderRadius: 8, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-          <h2 style={{ fontSize: 18, marginTop: 0, marginBottom: 16 }}>Danh Sách Đợt Tầm Soát</h2>
-          {loading ? (
-            <p style={{ color: '#718096' }}>Đang tải dữ liệu chiến dịch...</p>
-          ) : campaigns.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 40, color: '#a0aec0' }}>
-              <p>Chưa có chiến dịch tầm soát nào được khởi tạo.</p>
+      {/* Modal Gắn Batch Ảnh */}
+      {linkingCampaignId && (
+        <div className="modal-backdrop">
+          <form className="modal-content" onSubmit={handleLinkBatch}>
+            <div className="modal-header">
+              <h3>Gắn Batch Ảnh Vào Chiến Dịch</h3>
+              <button type="button" onClick={() => setLinkingCampaignId(null)}>✕</button>
             </div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: 14 }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid #edf2f7', color: '#4a5568' }}>
-                    <th style={{ padding: '10px 12px' }}>Tên chiến dịch</th>
-                    <th style={{ padding: '10px 12px' }}>Địa điểm</th>
-                    <th style={{ padding: '10px 12px' }}>Chỉ tiêu</th>
-                    <th style={{ padding: '10px 12px' }}>Thời gian</th>
-                    <th style={{ padding: '10px 12px' }}>Trạng thái</th>
-                    <th style={{ padding: '10px 12px', textAlign: 'right' }}>Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {campaigns.map((camp) => {
-                    const statusColor = camp.status === 'CLOSED'
-                      ? '#718096'
-                      : camp.status === 'IN_PROGRESS'
-                      ? '#3182ce'
-                      : camp.status === 'COMPLETED'
-                      ? '#38a169'
-                      : '#d69e2e'
-
-                    return (
-                      <tr key={camp.id} style={{ borderBottom: '1px solid #edf2f7' }}>
-                        <td style={{ padding: '12px', fontWeight: 600 }}>{camp.name}</td>
-                        <td style={{ padding: '12px', color: '#4a5568' }}>{camp.location}</td>
-                        <td style={{ padding: '12px' }}>{camp.targetPatientCount} người</td>
-                        <td style={{ padding: '12px', color: '#718096', fontSize: 13 }}>
-                          {new Date(camp.startDate).toLocaleDateString('vi-VN')} – {new Date(camp.endDate).toLocaleDateString('vi-VN')}
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <span style={{
-                            padding: '4px 8px',
-                            borderRadius: 12,
-                            fontSize: 12,
-                            fontWeight: 600,
-                            backgroundColor: `${statusColor}20`,
-                            color: statusColor
-                          }}>
-                            {camp.status}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px', textAlign: 'right' }}>
-                          <button
-                            type="button"
-                            onClick={() => handleViewSummary(camp.id)}
-                            style={{ marginRight: 6, padding: '4px 8px', fontSize: 12, cursor: 'pointer', background: '#edf2f7', border: '1px solid #cbd5e0', borderRadius: 4 }}
-                          >
-                            Thống kê
-                          </button>
-                          {camp.status !== 'CLOSED' && (
-                            <button
-                              type="button"
-                              onClick={() => setLinkingCampaignId(camp.id)}
-                              style={{ marginRight: 6, padding: '4px 8px', fontSize: 12, cursor: 'pointer', background: '#ebf8ff', color: '#3182ce', border: '1px solid #bee3f8', borderRadius: 4 }}
-                            >
-                              Gắn Batch
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleExportCsv(camp.id)}
-                            style={{ marginRight: 6, padding: '4px 8px', fontSize: 12, cursor: 'pointer', background: '#f0fff4', color: '#276749', border: '1px solid #c6f6d5', borderRadius: 4 }}
-                          >
-                            Xuất CSV
-                          </button>
-                          {camp.status !== 'CLOSED' && (
-                            <button
-                              type="button"
-                              onClick={() => handleUpdateStatus(camp.id, 'CLOSED')}
-                              style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer', background: '#fff5f5', color: '#c53030', border: '1px solid #fed7d7', borderRadius: 4 }}
-                            >
-                              Đóng
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        {/* Modal Xem Thống Kê & Tiến Độ */}
-        {selectedSummary && (
-          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-            <div style={{ background: '#fff', padding: 24, borderRadius: 8, width: 560, maxWidth: '90%' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <h3 style={{ margin: 0, fontSize: 18 }}>Tiến Độ & Kết Quả Tầm Soát: {selectedSummary.campaignName}</h3>
-                <button type="button" onClick={() => setSelectedSummary(null)} style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer' }}>✕</button>
-              </div>
-
-              {/* Progress Bar */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-                  <span>Tỷ lệ hoàn thành phân tích:</span>
-                  <strong>{selectedSummary.completionRatePercent}% ({selectedSummary.completedImages}/{selectedSummary.totalImages} ảnh)</strong>
-                </div>
-                <div style={{ height: 12, background: '#edf2f7', borderRadius: 6, overflow: 'hidden' }}>
-                  <div style={{ width: `${selectedSummary.completionRatePercent}%`, height: '100%', background: '#38a169', transition: 'width 0.3s' }} />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
-                <div style={{ background: '#f7fafc', padding: 12, borderRadius: 6 }}>
-                  <span style={{ fontSize: 12, color: '#718096' }}>Tổng số Batch đã nạp</span>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{selectedSummary.totalBatches}</div>
-                </div>
-                <div style={{ background: '#f7fafc', padding: 12, borderRadius: 6 }}>
-                  <span style={{ fontSize: 12, color: '#718096' }}>Số bệnh nhân thực tế</span>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{selectedSummary.uniquePatients} / {selectedSummary.targetPatientCount}</div>
-                </div>
-                <div style={{ background: '#f0fff4', padding: 12, borderRadius: 6, borderLeft: '4px solid #38a169' }}>
-                  <span style={{ fontSize: 12, color: '#276749' }}>Ca bình thường (LOW)</span>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: '#22543d' }}>{selectedSummary.normalCases}</div>
-                </div>
-                <div style={{ background: '#fffaf0', padding: 12, borderRadius: 6, borderLeft: '4px solid #dd6b20' }}>
-                  <span style={{ fontSize: 12, color: '#c05621' }}>Nghi ngờ tổn thương</span>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: '#7b341e' }}>{selectedSummary.suspectedCases} ({selectedSummary.highRiskCases} ca nặng)</div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-                <button
-                  type="button"
-                  onClick={() => handleExportCsv(selectedSummary.campaignId)}
-                  style={{ padding: '8px 16px', background: '#38a169', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
-                >
-                  Tải Báo Cáo CSV
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedSummary(null)}
-                  style={{ padding: '8px 16px', background: '#edf2f7', border: 'none', borderRadius: 4, cursor: 'pointer' }}
-                >
-                  Đóng
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Modal Gắn Batch */}
-        {linkingCampaignId && (
-          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-            <form onSubmit={handleLinkBatch} style={{ background: '#fff', padding: 24, borderRadius: 8, width: 440, maxWidth: '90%' }}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>Gắn Batch Ảnh Vào Chiến Dịch</h3>
-              <p style={{ fontSize: 13, color: '#718096', marginBottom: 16 }}>Nhập mã Batch ID đã upload thành công để liên kết vào đợt tầm soát này:</p>
+            <p style={{ fontSize: 13, color: '#64748b', marginBottom: 16 }}>
+              Nhập mã Batch ID đã tiếp nhận thành công để liên kết vào đợt tầm soát này:
+            </p>
+            <div className="form-group">
+              <label htmlFor="batch-id-input">Mã Batch (UUID) *</label>
               <input
+                id="batch-id-input"
                 type="text"
                 placeholder="Ví dụ: b1111111-0000-0000-0000-000000000001"
                 value={linkBatchId}
-                onChange={e => setLinkBatchId(e.target.value)}
+                onChange={(e) => setLinkBatchId(e.target.value)}
                 required
-                style={{ width: '100%', padding: '10px 12px', border: '1px solid #cbd5e0', borderRadius: 4, marginBottom: 16, boxSizing: 'border-box' }}
               />
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-                <button type="button" onClick={() => setLinkingCampaignId(null)} style={{ padding: '8px 14px', background: '#edf2f7', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Hủy</button>
-                <button type="submit" style={{ padding: '8px 16px', background: '#0066cc', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Gắn Batch</button>
-              </div>
-            </form>
-          </div>
-        )}
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setLinkingCampaignId(null)}
+                disabled={linking}
+              >
+                Hủy
+              </button>
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={linking}
+              >
+                {linking ? 'Đang gắn...' : 'Xác nhận Gắn Batch'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
-        {/* Modal Tạo Chiến Dịch Mới */}
-        {showCreateModal && (
-          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-            <form onSubmit={handleCreateCampaign} style={{ background: '#fff', padding: 24, borderRadius: 8, width: 500, maxWidth: '90%' }}>
-              <h3 style={{ marginTop: 0, marginBottom: 16 }}>Khởi Tạo Chiến Dịch Tầm Soát Mới</h3>
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Tên đợt tầm soát *</label>
+      {/* Modal Tạo Chiến Dịch Mới */}
+      {showCreateModal && (
+        <div className="modal-backdrop">
+          <form className="modal-content" onSubmit={handleCreateCampaign}>
+            <div className="modal-header">
+              <h3>Khởi Tạo Chiến Dịch Tầm Soát Mới</h3>
+              <button type="button" onClick={() => setShowCreateModal(false)}>✕</button>
+            </div>
+            <div className="form-group">
+              <label htmlFor="camp-name">Tên đợt tầm soát *</label>
+              <input
+                id="camp-name"
+                type="text"
+                placeholder="Ví dụ: Khám mắt học đường THPT Nguyễn Huệ"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="camp-location">Địa điểm tổ chức *</label>
+              <input
+                id="camp-location"
+                type="text"
+                placeholder="Ví dụ: Hội trường B - Quận 5, TP.HCM"
+                value={newLocation}
+                onChange={(e) => setNewLocation(e.target.value)}
+                required
+              />
+            </div>
+            <div className="form-group-row">
+              <div className="form-group">
+                <label htmlFor="camp-start">Ngày bắt đầu *</label>
                 <input
-                  type="text"
-                  placeholder="Ví dụ: Khám mắt học đường THPT Nguyễn Huệ"
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
+                  id="camp-start"
+                  type="date"
+                  value={newStartDate}
+                  onChange={(e) => setNewStartDate(e.target.value)}
                   required
-                  style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e0', borderRadius: 4, boxSizing: 'border-box' }}
                 />
               </div>
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Địa điểm tổ chức *</label>
+              <div className="form-group">
+                <label htmlFor="camp-end">Ngày kết thúc *</label>
                 <input
-                  type="text"
-                  placeholder="Ví dụ: Hội trường B - Quận 5, TP.HCM"
-                  value={newLocation}
-                  onChange={e => setNewLocation(e.target.value)}
+                  id="camp-end"
+                  type="date"
+                  value={newEndDate}
+                  onChange={(e) => setNewEndDate(e.target.value)}
                   required
-                  style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e0', borderRadius: 4, boxSizing: 'border-box' }}
                 />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Ngày bắt đầu *</label>
-                  <input
-                    type="date"
-                    value={newStartDate}
-                    onChange={e => setNewStartDate(e.target.value)}
-                    required
-                    style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e0', borderRadius: 4, boxSizing: 'border-box' }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Ngày kết thúc *</label>
-                  <input
-                    type="date"
-                    value={newEndDate}
-                    onChange={e => setNewEndDate(e.target.value)}
-                    required
-                    style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e0', borderRadius: 4, boxSizing: 'border-box' }}
-                  />
-                </div>
-              </div>
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Chỉ tiêu số người khám dự kiến</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={newTarget}
-                  onChange={e => setNewTarget(Number(e.target.value))}
-                  style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e0', borderRadius: 4, boxSizing: 'border-box' }}
-                />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-                <button type="button" onClick={() => setShowCreateModal(false)} style={{ padding: '8px 14px', background: '#edf2f7', border: 'none', borderRadius: 4, cursor: 'pointer' }}>Hủy</button>
-                <button type="submit" style={{ padding: '8px 18px', background: '#0066cc', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}>Tạo Mới</button>
-              </div>
-            </form>
-          </div>
-        )}
-      </main>
+            </div>
+            <div className="form-group">
+              <label htmlFor="camp-target">Chỉ tiêu số người khám dự kiến</label>
+              <input
+                id="camp-target"
+                type="number"
+                min="0"
+                value={newTarget}
+                onChange={(e) => setNewTarget(Number(e.target.value))}
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="camp-desc">Mô tả thêm</label>
+              <textarea
+                id="camp-desc"
+                rows={2}
+                placeholder="Thông tin đối tượng khám hoặc ghi chú chuẩn bị..."
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+              />
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowCreateModal(false)}
+                disabled={submitting}
+              >
+                Hủy
+              </button>
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={submitting}
+              >
+                {submitting ? 'Đang tạo...' : 'Tạo Mới'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
+}
+
+export default function CampaignManagementPage() {
+  const { state } = useBackendSession()
+  if (state.status !== 'ready') return <BackendSessionNotice />
+  return <CampaignManagementContent context={state.context} />
 }

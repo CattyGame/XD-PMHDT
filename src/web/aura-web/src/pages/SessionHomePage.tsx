@@ -22,6 +22,7 @@ export default function SessionHomePage() {
           <Link to="/clinic-upload">Tải ảnh phòng khám</Link>
           <Link to="/clinics/members">Thành viên phòng khám</Link>
           <Link to="/clinics/patients">Bệnh nhân phòng khám</Link>
+          <Link to="/campaigns">Chiến dịch tầm soát</Link>
           {!context.roles.includes("SYSTEM_ADMIN") && <Link to="/batches">Theo dõi batch</Link>}
           {/* Mở hộp thư thông báo của tài khoản hiện tại */}
           {!context.roles.includes("SYSTEM_ADMIN") && (
@@ -46,6 +47,7 @@ export default function SessionHomePage() {
             <div style={{ display: 'flex', gap: '12px' }}>
               <Link className="session-primary-link" to="/clinics/members">Quản lý Thành viên</Link>
               <Link className="session-primary-link" to="/clinics/patients">Danh bạ Bệnh nhân</Link>
+              <Link className="session-primary-link" to="/campaigns">Chiến dịch Tầm soát</Link>
             </div>
           </section>
         )}
