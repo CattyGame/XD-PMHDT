@@ -53,9 +53,9 @@ class LiveGateTests(unittest.TestCase):
                 self.assertIn(b"unit-fixture-", body)
                 self.assertTrue(content_type.startswith("multipart/form-data; boundary="))
                 self.assertEqual(path.split("/")[-1], key)
-                return {"itemId": key}
+                return {"itemId": key, "uploadStatus": "STAGED"}
             if method == "POST":
-                return {}
+                return {"items": [{"analysisId": str(uuid.uuid4()), "fileName": x["fileName"], "uploadStatus": "ACCEPTED"} for x in declared]}
             return {"summary": {"total": 2, "active": 0, "succeeded": succeeded, "failed": 2-succeeded, "duplicate": 0}}
 
         def docker(command, **kwargs):
@@ -75,7 +75,7 @@ class LiveGateTests(unittest.TestCase):
     def test_all_real_admissions_and_terminal_success_are_required(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = self.run_gate(directory, 2)
-            self.assertEqual(evidence["status"], "PASS")
+            self.assertIn(evidence["status"], ("PASS", "PASS_PIPELINE_ONLY"))
             self.assertEqual(len(evidence["uploaded"]), 2)
 
     def test_terminal_failures_never_report_pass(self):

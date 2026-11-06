@@ -222,4 +222,3 @@ describe('campaignManagement API Client', () => {
     expect(url).toBe(`/api/v1/campaigns/${campaignId}/export?clinicContextId=${clinicId}`)
   })
 })
-

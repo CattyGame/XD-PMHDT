@@ -48,7 +48,6 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
 
   // Summary State
   const [selectedSummary, setSelectedSummary] = useState<CampaignSummary | null>(null)
-  const [loadingSummary, setLoadingSummary] = useState<boolean>(false)
 
   // 1. Tải danh sách phòng khám của tài khoản
   useEffect(() => {
@@ -184,15 +183,12 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
   async function handleViewSummary(campaignId: string) {
     if (!selectedClinicId) return
     setError(null)
-    setLoadingSummary(true)
 
     try {
       const data = await getCampaignSummary(context, selectedClinicId, campaignId)
       setSelectedSummary(data)
     } catch (err: any) {
       setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : (err.message || 'Không thể tải thống kê chiến dịch.'))
-    } finally {
-      setLoadingSummary(false)
     }
   }
 

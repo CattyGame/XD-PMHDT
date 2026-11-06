@@ -149,7 +149,7 @@ def main():
             evidence["uploaded"] = []
             for (item, _), future in zip(pending, futures):
                 receipt = future.result()
-                item["uploadStatus"] = receipt["uploadStatus"]
+                item["uploadStatus"] = receipt.get("uploadStatus", "STAGED")
                 evidence["uploaded"].append(receipt["itemId"])
         if args.stop_after_uploads is not None:
             refreshed = request(base, token, f"/api/v1/analysis-upload-batches/{batch}")

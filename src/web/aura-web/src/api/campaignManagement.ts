@@ -237,4 +237,3 @@ export async function getCampaignSummary(
 export function getCampaignExportUrl(clinicId: string, campaignId: string): string {
   return `/api/v1/campaigns/${encodeURIComponent(campaignId)}/export?clinicContextId=${encodeURIComponent(clinicId)}`
 }
-
