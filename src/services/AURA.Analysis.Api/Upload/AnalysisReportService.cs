@@ -170,7 +170,10 @@ public sealed class AnalysisReportService(
                         report.ReportId,snapshotSha256,pdfEntry,pdfSha256));
                     sources.Add(new{item.AnalysisId,report.ReportId,snapshotDigest=snapshotSha256});
                 }
-                await using var summary=zip.CreateEntry("summary.csv").Open();await summary.WriteAsync(RenderBatchCsv(status,clock.GetUtcNow(),doctorReviews),ct);
+                await using (var summary = zip.CreateEntry("summary.csv").Open())
+                {
+                    await summary.WriteAsync(RenderBatchCsv(status, clock.GetUtcNow(), doctorReviews), ct);
+                }
                 var manifest=JsonSerializer.SerializeToUtf8Bytes(new
                 {
                     schemaVersion="1.0",
