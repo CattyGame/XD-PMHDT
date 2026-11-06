@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { matchPatientIdInFilename, validateBulkFiles, type InvalidBulkImage } from '../api/bulkUploadUi'
+import { captureBatchPreviews } from '../api/batchLocalPreviews'
+import { validBatchId } from '../api/batchProgress'
+import './BulkUploadPage.css'
 import { Link } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
@@ -9,11 +13,33 @@ import { createClinicItemUploadAttempt, sendItemUploadAttempt, resumeItemUpload,
 import { UploadRequestError, uploadErrorMessage, type UploadAttempt, type UploadReceipt, type EyeSide } from '../api/analysisUpload'
 
 type Selection = { file: File; patientId: string; eyeSide: EyeSide }
+
+/** Giai phong URL khi anh bi xoa hoac component unmount. */
+function FilePreview({ file }: { file: File }) {
+  const attach = useCallback((image: HTMLImageElement | null) => {
+    if (!image || typeof URL.createObjectURL !== 'function') return
+
+    const url = URL.createObjectURL(file)
+    image.src = url
+
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+
+  return (
+    <img
+      ref={attach}
+      className="bulk-image-preview"
+      loading="lazy"
+      alt={`Xem trước ${file.name}`}
+    />
+  )
+}
 function ClinicUploadForm({ context }: { context: BackendContext }) {
   const [clinics, setClinics] = useState<readonly UploadClinic[]>([]), [clinicId, setClinicId] = useState('')
   const [patients, setPatients] = useState<readonly UploadPatient[]>([]), [search, setSearch] = useState('')
   const [patientNames, setPatientNames] = useState<Record<string, string>>({})
   const [selections, setSelections] = useState<Selection[]>([]), [attempt, setAttempt] = useState<UploadAttempt>()
+  const [invalidFiles, setInvalidFiles] = useState<InvalidBulkImage[]>([])
   const [inventory, setInventory] = useState<UploadInventory>(), [receipt, setReceipt] = useState<UploadReceipt>()
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [uncertain, setUncertain] = useState(false)
   const [restoring, setRestoring] = useState(() => new URLSearchParams(window.location.search).has('uploadBatchId'))
@@ -39,6 +65,10 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
         if (!controller.signal.aborted) {
           setPatients(items)
           setPatientNames(previous => ({ ...previous, ...Object.fromEntries(items.map(x => [x.patientId, x.fullName])) }))
+          // Tự nhận diện UUID trong tên file nếu bệnh nhân đã có trong danh sách hợp lệ.
+          setSelections(previous => previous.map(x => x.patientId ? x : {
+            ...x, patientId: matchPatientIdInFilename(x.file.name, items),
+          }))
         }
       }).catch(cause => { if (!controller.signal.aborted) { setPatients([]); setPatientNames({}); setError(analysisErrorMessage(cause instanceof AnalysisResultError ? cause : new AnalysisResultError(0, 'ERR_NETWORK'))) } })
     }, 200)
@@ -60,15 +90,21 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
   const locked = busy || restoring || expired || !!attempt || !!receipt
   function choose(files: File[]) {
     if (locked) return
-    if (files.length < 1 || files.length > 100 || files.some(file => !file.size || file.size > 10 * 1024 * 1024 ||
-      (!['image/png', 'image/jpeg'].includes(file.type) && !/\.(jpe?g|png)$/i.test(file.name)))) {
-      setError('Chọn tối đa 100 ảnh JPG/PNG, mỗi ảnh có dữ liệu và không quá 10 MiB.'); return
+    const result = validateBulkFiles(files)
+    setInvalidFiles([...result.rejected])
+    if (!result.accepted.length) {
+      setSelections([])
+      setError(files.length === 0 ? 'Vui lòng chọn ảnh JPG/PNG.' : 'Không có ảnh hợp lệ để gửi. Hãy kiểm tra danh sách lỗi.')
+      return
     }
-    setError(''); setSelections(files.map(file => ({ file, patientId: '', eyeSide: 'unknown' })))
+    setError('')
+    setSelections(result.accepted.map(file => ({
+      file, patientId: matchPatientIdInFilename(file.name, patients), eyeSide: 'unknown',
+    })))
   }
   async function send() {
     if (busy || receipt || !clinicId) return
-    if (!inventory && (!selections.length || selections.some(x => !x.patientId))) { setError('Chọn bệnh nhân cho từng ảnh trước khi gửi.'); return }
+    if (!inventory && (!selections.length || selections.some(x => !validBatchId(x.patientId)))) { setError('Nhập hoặc chọn mã bệnh nhân UUID hợp lệ cho từng ảnh trước khi gửi.'); return }
     const controller = new AbortController(); active.current = controller; setBusy(true); setError('')
     const onInventory = (value: UploadInventory) => {
       if (controller.signal.aborted) return
@@ -86,7 +122,11 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
         setAttempt(current)
         result = await sendItemUploadAttempt(current, options)
       }
-      if (!controller.signal.aborted) { setReceipt(result); setUncertain(false) }
+      if (!controller.signal.aborted) {
+        setReceipt(result); setUncertain(false)
+        // Xem trước tạm trong chính tab, không ghi ảnh bệnh nhân vào localStorage.
+        void captureBatchPreviews(result.batchId, context.firebaseUid, selections.map(x => x.file))
+      }
     } catch (cause) {
       if (!controller.signal.aborted) {
         const failure = cause instanceof UploadRequestError ? cause : new UploadRequestError(0, 'ERR_NETWORK', 'uncertain', true)
@@ -100,6 +140,12 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
     <h1>Tải ảnh phòng khám</h1>
     <p>Chọn phòng khám và bệnh nhân tương ứng từng ảnh. Máy chủ kiểm tra quyền khi tiếp nhận và xử lý.</p>
     {error && <p role="alert">{error}</p>}
+    {invalidFiles.length > 0 && <div role="alert" aria-label="Ảnh không hợp lệ">
+      <strong>{invalidFiles.length} ảnh bị loại trước khi upload:</strong>
+      <ul className="bulk-validation-list">{invalidFiles.map((item, index) =>
+        <li key={`${item.name}:${index}`}><strong>{item.name}</strong>: {item.reason}</li>)}</ul>
+      {selections.length > 0 && <p>Chỉ {selections.length} ảnh hợp lệ ở dưới sẽ được gửi khi bạn xác nhận.</p>}
+    </div>}
     {expired && <button type="button" onClick={() => {
       const url = new URL(window.location.href); url.searchParams.delete('uploadBatchId')
       window.history.replaceState(window.history.state, '', url)
@@ -107,22 +153,33 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
     }}>Tạo lượt tải mới</button>}
     <label htmlFor="upload-clinic">Phòng khám</label>
     <select id="upload-clinic" disabled={locked || !!inventory} value={clinicId} onChange={event => {
-      setClinicId(event.target.value); setSelections([]); setPatients([]); setPatientNames({}); setSearch(''); setError('')
+      setClinicId(event.target.value); setSelections([]); setInvalidFiles([]); setPatients([]); setPatientNames({}); setSearch(''); setError('')
     }}><option value="">Chọn phòng khám</option>{clinics.map(x => <option key={x.clinicId} value={x.clinicId}>{x.clinicName}</option>)}</select>
     {clinics.length === 0 && <p>Chưa có phòng khám đang hoạt động được cấp quyền cho tài khoản này.</p>}
     {clinicId && <>
       <label htmlFor="upload-patient-search" style={{ display: 'block', marginTop: 16 }}>Tìm bệnh nhân theo tên</label>
       <input id="upload-patient-search" value={search} onChange={event => setSearch(event.target.value)} disabled={locked} />
-      <div style={{ border: '1px dashed #888', padding: 16, marginTop: 16 }} onDragOver={event => event.preventDefault()}
-        onDrop={event => { event.preventDefault(); choose(Array.from(event.dataTransfer.files)) }}>
+      <div className="bulk-upload-drop" style={{ padding: 16, marginTop: 16 }}
+        onDragOver={event => { if (!locked) event.preventDefault() }}
+        onDrop={event => { event.preventDefault(); if (!locked) choose(Array.from(event.dataTransfer.files)) }}>
         <label htmlFor="clinic-images">Chọn ảnh phòng khám</label>
         <input id="clinic-images" type="file" accept="image/png,image/jpeg" multiple disabled={locked || restoring} onChange={event => {
           choose(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ''
         }} />
-        <p>Kéo thả tối đa 100 ảnh, 10 MiB mỗi ảnh.</p>
+        <p>Kéo thả tối đa 100 ảnh JPG/PNG, mỗi ảnh không quá 10 MiB. Ảnh lỗi bị loại tại trình duyệt.</p>
       </div>
-      {!inventory && selections.map((selection, index) => <fieldset key={index} disabled={locked} style={{ margin: '12px 0', display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+      <div className="bulk-select-summary" aria-live="polite">
+        <span>Ảnh hợp lệ đã chọn: <strong>{selections.length}/100</strong></span>
+        <span>Đã gán bệnh nhân: <strong>{selections.filter(x => validBatchId(x.patientId)).length}/{selections.length}</strong></span>
+      </div>
+      {!inventory && selections.map((selection, index) => <fieldset key={index} disabled={locked} className="bulk-image-row" style={{ margin: '12px 0' }}>
         <legend>{selection.file.name}</legend>
+        <FilePreview file={selection.file} />
+        <label>Mã bệnh nhân ảnh{index + 1}
+          <input aria-label={`Mã bệnh nhân ảnh${index + 1}`} value={selection.patientId}
+            placeholder="UUID bệnh nhân đã tồn tại" onChange={event =>
+              setSelections(previous => previous.map((x, i) => i === index ? { ...x, patientId: event.target.value.trim() } : x))} />
+        </label>
         <label>Bệnh nhân ảnh{index + 1}<select value={selection.patientId} onChange={event => setSelections(previous => previous.map((x, i) => i === index ? { ...x, patientId: event.target.value } : x))}>
           <option value="">Chọn bệnh nhân</option>{patients.map(patient => <option key={patient.patientId} value={patient.patientId}>{patient.fullName}</option>)}
           {selection.patientId && !patients.some(x => x.patientId === selection.patientId) && <option value={selection.patientId}>{patientNames[selection.patientId] || 'Bệnh nhân đã chọn'}</option>}
@@ -133,10 +190,13 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
       </fieldset>)}
       {restoring && <p role="status">Đang khôi phục lượt tải trên máy chủ...</p>}
       {inventory && <section aria-label="Tiến độ tải phòng khám">
-        <p>Đã lưu: {inventory.items.filter(x => x.uploadStatus !== 'DECLARED').length}/{inventory.items.length} ảnh.</p>
+        <p>Đã lưu: {inventory.items.filter(x => ['STAGED', 'REJECTED', 'ACCEPTED'].includes(x.uploadStatus)).length}/{inventory.items.length} ảnh.</p>
+        <progress className="bulk-upload-progress" aria-label="Tiến độ lưu ảnh lên máy chủ"
+          max={inventory.items.length} value={inventory.items.filter(x => ['STAGED', 'REJECTED', 'ACCEPTED'].includes(x.uploadStatus)).length} />
         {!attempt && <p>Chọn lại các tệp chưa tải. Nội dung được đối chiếu checksum trước khi tiếp tục.</p>}
       </section>}
-      {!receipt && !expired && <button type="button" disabled={busy || restoring} onClick={() => void send()}>{busy ? 'Đang tải...' : inventory ? 'Tiếp tục lượt tải' : 'Gửi ảnh phòng khám'}</button>}
+      {!receipt && !expired && <button className="bulk-upload-submit" type="button" disabled={busy || restoring || (!inventory && selections.length === 0)}
+        aria-label={inventory ? 'Tiếp tục lượt tải' : 'Gửi ảnh phòng khám'} onClick={() => void send()}>{busy ? 'Đang tải...' : inventory ? 'Tiếp tục lượt tải' : `Gửi ${selections.length} ảnh phòng khám`}</button>}
       {uncertain && <p role="status">Kết quả chưa rõ. Hệ thống sẽ đối chiếu máy chủ trước khi thử lại cùng lượt tải.</p>}
       {receipt && <section><h2>Đã tiếp nhận lượt tải phòng khám</h2><p>{receipt.items.length} ảnh, trạng thái riêng từng ảnh được lưu trên máy chủ.</p>
         <Link to={`/batches/${receipt.batchId}?clinicContextId=${clinicId}`}>Theo dõi tiến trình phòng khám</Link>

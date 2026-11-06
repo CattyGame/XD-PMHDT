@@ -16,3 +16,23 @@
 .batch-item strong { margin-right: 8px; }
 .batch-item p { margin: 9px 0 0; }
 .batch-disclaimer { color: #4c5b63; margin-top: 20px; }
+
+/* SCRUM-356 — resilient, accessible batch dashboard; SCRUM-332 polling remains unchanged. */
+.batch-progress-summary { margin: 22px 0; padding: 16px; border-radius: 10px; background: #eff8f6; }
+.batch-progress-summary progress { width: 100%; height: 22px; display: block; margin: 10px 0; accent-color: #08786a; }
+.batch-progress-summary p { margin-bottom: 0; }
+.batch-table-scroll { overflow-x: auto; max-width: 100%; border: 1px solid #d6e0e1; border-radius: 10px; }
+.batch-detail-table { width: 100%; min-width: 780px; border-collapse: collapse; background: white; }
+.batch-detail-table th { text-align: left; font-size: 0.88rem; background: #ebf4f3; }
+.batch-detail-table th, .batch-detail-table td { padding: 12px; border-bottom: 1px solid #d6e0e1; vertical-align: top; }
+.batch-detail-table code { display: inline-block; max-width: 220px; word-break: break-all; }
+.batch-detail-table td:nth-child(2) { min-width: 170px; }
+.batch-detail-table td:nth-child(3) { min-width: 190px; }
+.batch-thumbnail { display: block; width: 70px; height: 70px; object-fit: contain; border-radius: 7px; border: 1px solid #cdd9d7; }
+.batch-thumbnail-placeholder { display: grid; place-items: center; width: 70px; height: 70px; border: 1px dashed #adbfbf; border-radius: 7px; color: #667778; text-align: center; font-size: 0.7rem; }
+.batch-item-error { color: #a43323; margin-top: 8px; }
+.batch-status { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 0.83rem; font-weight: 700; background: #e7eded; color: #285052; }
+.batch-status--completed { background: #def4e6; color: #12643c; }
+.batch-status--failed, .batch-status--low_quality, .batch-status--rejected, .batch-status--quarantine { background: #fee7e3; color: #a12f22; }
+.batch-status--processing, .batch-status--retry { background: #fff0ca; color: #705000; }
+.batch-reports { margin: 18px 0; display: flex; gap: 12px; flex-wrap: wrap; }
