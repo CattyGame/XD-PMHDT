@@ -66,7 +66,9 @@ public static class AnalysisRuntime
         services.AddTransient<BatchStatusService>();services.AddTransient<FileAccessService>();
         services.AddTransient<AnalysisReportService>();
         services.AddTransient<AnalysisQueryService>();services.AddTransient<InternalResolversService>();
-        services.AddTransient<DoctorReviewService>();services.AddTransient<DoctorWorklistService>();services.AddTransient<AURA.Analysis.Api.Campaign.CampaignRepository>();
+        services.AddTransient<DoctorReviewService>();services.AddTransient<DoctorWorklistService>();
+        services.AddTransient<AURA.Analysis.Api.Campaign.ICampaignRepository, AURA.Analysis.Api.Campaign.CampaignRepository>();
+        services.AddTransient<AURA.Analysis.Api.Campaign.CampaignRepository>();
         return services;
     }
 }

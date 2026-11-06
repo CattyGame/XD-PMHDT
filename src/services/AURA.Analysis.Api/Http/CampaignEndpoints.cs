@@ -13,7 +13,7 @@ public static class CampaignEndpoints
         app.MapPost("/api/v1/campaigns", (HttpContext c, CreateCampaignRequest request) => Handle(c, async () =>
         {
             var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_MANAGE");
-            var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
+            var repo = c.RequestServices.GetRequiredService<ICampaignRepository>();
             var response = await repo.CreateCampaignAsync(tenantId, request, c.RequestAborted);
             return Results.Json(response, UploadJson.Options, statusCode: StatusCodes.Status201Created);
         }));
@@ -22,7 +22,7 @@ public static class CampaignEndpoints
         app.MapGet("/api/v1/campaigns", (HttpContext c, string? status) => Handle(c, async () =>
         {
             var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_READ");
-            var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
+            var repo = c.RequestServices.GetRequiredService<ICampaignRepository>();
             var response = await repo.GetCampaignsAsync(tenantId, status, c.RequestAborted);
             return Results.Json(response, UploadJson.Options);
         }));
@@ -32,7 +32,7 @@ public static class CampaignEndpoints
         {
             var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_READ");
             var campId = ParseGuid(campaignId, "campaignId");
-            var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
+            var repo = c.RequestServices.GetRequiredService<ICampaignRepository>();
             var response = await repo.GetCampaignByIdAsync(tenantId, campId, c.RequestAborted);
             return Results.Json(response, UploadJson.Options);
         }));
@@ -42,7 +42,7 @@ public static class CampaignEndpoints
         {
             var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_MANAGE");
             var campId = ParseGuid(campaignId, "campaignId");
-            var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
+            var repo = c.RequestServices.GetRequiredService<ICampaignRepository>();
             var response = await repo.UpdateCampaignStatusAsync(tenantId, campId, request.Status, c.RequestAborted);
             return Results.Json(response, UploadJson.Options);
         }));
@@ -52,7 +52,7 @@ public static class CampaignEndpoints
         {
             var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_MANAGE");
             var campId = ParseGuid(campaignId, "campaignId");
-            var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
+            var repo = c.RequestServices.GetRequiredService<ICampaignRepository>();
             await repo.LinkBatchAsync(tenantId, campId, request.BatchId, c.RequestAborted);
             return Results.Json(new { message = "Liên kết batch vào chiến dịch tầm soát thành công." }, UploadJson.Options);
         }));
@@ -62,7 +62,7 @@ public static class CampaignEndpoints
         {
             var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_READ");
             var campId = ParseGuid(campaignId, "campaignId");
-            var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
+            var repo = c.RequestServices.GetRequiredService<ICampaignRepository>();
             var response = await repo.GetCampaignSummaryAsync(tenantId, campId, c.RequestAborted);
             return Results.Json(response, UploadJson.Options);
         }));
@@ -72,7 +72,7 @@ public static class CampaignEndpoints
         {
             var tenantId = await ResolveClinicTenantIdAsync(c, "CAMPAIGN_EXPORT");
             var campId = ParseGuid(campaignId, "campaignId");
-            var repo = c.RequestServices.GetRequiredService<CampaignRepository>();
+            var repo = c.RequestServices.GetRequiredService<ICampaignRepository>();
             var csv = await repo.ExportCampaignReportCsvAsync(tenantId, campId, c.RequestAborted);
 
             c.Response.Headers.ContentDisposition = $"attachment; filename=screening_campaign_{campId:D}_summary.csv";
