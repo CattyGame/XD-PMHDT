@@ -10,4 +10,3 @@ public interface ICampaignRepository
     Task<CampaignSummaryResponse> GetCampaignSummaryAsync(Guid tenantId, Guid campaignId, CancellationToken ct);
     Task<string> ExportCampaignReportCsvAsync(Guid tenantId, Guid campaignId, CancellationToken ct);
 }
-

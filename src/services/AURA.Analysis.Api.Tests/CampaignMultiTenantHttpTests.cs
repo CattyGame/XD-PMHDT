@@ -544,4 +544,3 @@ public sealed class CampaignMultiTenantHttpTests
         Assert.Equal("ERR_VALIDATION", json.GetProperty("error").GetProperty("code").GetString());
     }
 }
-
