@@ -41,6 +41,10 @@ public sealed class AnalysisReportService(
     TimeProvider clock)
 {
     private static readonly TimeSpan LinkLifetime = TimeSpan.FromMinutes(15);
+    private static readonly JsonSerializerOptions ManifestJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never
+    };
 
     public async Task<ReportDownloadResponse> CreateAnalysisPdfAsync(Guid requesterId, Guid? clinicId, Guid analysisId,
         string? correlationId, CancellationToken ct)
@@ -183,7 +187,7 @@ public sealed class AnalysisReportService(
                     batchStatus=status.BatchStatus,
                     summary=status.Summary,
                     items=manifestItems
-                },UploadJson.Options);
+                },ManifestJsonOptions);
                 await using(var manifestStream=zip.CreateEntry("manifest.json",CompressionLevel.Fastest).Open())
                     await manifestStream.WriteAsync(manifest,ct);
             }
