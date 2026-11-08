@@ -14,18 +14,11 @@ self.addEventListener('notificationclick', event => {
   const fcm = raw && typeof raw === 'object' ? raw.FCM_MSG : null
   const data = fcm?.data ?? raw
   const path = safeAnalysisPath(data?.targetPath, data?.analysisId) ?? '/notifications'
-  event.waitUntil((async () => {
-    const url = new URL(path, self.location.origin).href
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-    const existing = windows.find(client => {
-      try { return new URL(client.url).origin === self.location.origin } catch { return false }
-    })
-    if (existing) {
-      await existing.navigate(url)
-      return existing.focus()
-    }
-    return self.clients.openWindow(url)
-  })())
+  event.waitUntil(
+  self.clients.openWindow(
+    new URL(path, self.location.origin).href
+  )
+)
 })
 
 const app = initializeApp({
