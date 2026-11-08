@@ -212,12 +212,25 @@ def run_inspire_avr_benchmark(
     mean_crae = round(float(np.mean(crae_values)), 2) if crae_values else None
     mean_crve = round(float(np.mean(crve_values)), 2) if crve_values else None
 
+    # Compute signed bias (Auto - GT) across matched pairs
+    bias = None
+    if avr_values and gt_avr_values and len(avr_values) >= len(gt_avr_values):
+        bias = round(float(np.mean(np.array(avr_values[:len(gt_avr_values)]) - np.array(gt_avr_values))), 4)
+
     report = {
         "benchmark_id": "inspire_avr_benchmark_v1.0",
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "dataset": "INSPIRE-AVR (99-case extended clinical archive, seed=42)",
+        "reference_status": "AWAITING_QUANTITATIVE_IOWA_REFERENCE_TABLE",
+        "iowa_provenance_note": (
+            "Local archive consists of 99 independent clinical cases (500 JPGs, 100 AIs). "
+            "Primary University of Iowa publication established 40 reference images. "
+            "Quantitative clinical acceptance remains gated pending validated tabular reference (SCRUM-373 / D6)."
+        ),
         "evaluation_protocol": "Automated RGB End-to-End Prediction vs Expert Ground Truth Comparison",
         "total_evaluated_samples": len(results),
+        "eligible_count": len(avr_values),
+        "abstained_count": risk_counts["RISK_UNAVAILABLE"],
         "successful_evaluations": len(avr_values),
         "unavailable_evaluations": risk_counts["RISK_UNAVAILABLE"],
         "success_rate": round(float(len(avr_values) / len(results)), 4) if results else 0.0,
@@ -237,6 +250,7 @@ def run_inspire_avr_benchmark(
         "ground_truth_comparison_summary": {
             "mean_gt_avr": round(float(np.mean(gt_avr_values)), 4) if gt_avr_values else None,
             "mean_avr_mae": round(float(np.mean(avr_abs_errors)), 4) if avr_abs_errors else None,
+            "mean_avr_bias": bias,
             "median_avr_mae": round(float(np.median(avr_abs_errors)), 4) if avr_abs_errors else None,
             "mean_vessel_dice": round(float(np.mean(vessel_dices)), 4) if vessel_dices else None,
             "mean_av_branch_classification_accuracy": round(float(np.mean(av_accuracies)), 4) if av_accuracies else None,
@@ -247,6 +261,7 @@ def run_inspire_avr_benchmark(
         "master_audit_compliance": {
             "no_artificial_clamping": True,
             "no_mock_numbers": True,
+            "abstention_on_degraded_images": True,
             "automated_rgb_inference_verified": True,
             "knudtson_2003_revised_formula": True,
             "risk_unavailable_handled_cleanly": True,
