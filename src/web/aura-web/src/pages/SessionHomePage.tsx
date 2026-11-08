@@ -19,6 +19,7 @@ export default function SessionHomePage() {
         <nav aria-label="Điều hướng tài khoản">
           <Link to="/" aria-current="page">Trang chủ</Link>
           {personalUpload && <Link to="/upload">Tải ảnh võng mạc</Link>}
+          {context.roles.includes("DOCTOR") && <Link to="/doctor/workspace">Không gian bác sĩ</Link>}
           <Link to="/clinic-upload">Tải ảnh phòng khám</Link>
           <Link to="/clinics/members">Thành viên phòng khám</Link>
           <Link to="/clinics/patients">Bệnh nhân phòng khám</Link>
