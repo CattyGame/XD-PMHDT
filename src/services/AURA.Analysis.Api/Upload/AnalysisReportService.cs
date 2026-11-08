@@ -20,6 +20,10 @@ public sealed record DoctorReportReview(Guid DoctorId, bool IsApproved, string? 
     public int ReviewVersion { get; init; }
 }
 
+public sealed record BatchArchiveManifestItem(string CaseCode, Guid AnalysisId, string ProcessingStatus,
+    string? ErrorCode, Guid? ResultId, int? ResultVersion, Guid? ReviewId, int? ReviewVersion,
+    Guid? ReportId, string? SnapshotSha256, string? PdfEntry, string? PdfSha256);
+
 public sealed class AnalysisReportOptions
 {
     public string PublicApiBaseUrl { get; set; } = "http://localhost:5000";
@@ -37,6 +41,10 @@ public sealed class AnalysisReportService(
     TimeProvider clock)
 {
     private static readonly TimeSpan LinkLifetime = TimeSpan.FromMinutes(15);
+    private static readonly JsonSerializerOptions ManifestJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never
+    };
 
     public async Task<ReportDownloadResponse> CreateAnalysisPdfAsync(Guid requesterId, Guid? clinicId, Guid analysisId,
         string? correlationId, CancellationToken ct)
@@ -112,7 +120,7 @@ public sealed class AnalysisReportService(
         var reportId = Guid.NewGuid();
         var tenantId = await ReadTenantIdAsync(batchId, ct);
         var sources=new List<object>();var pinned=new List<BatchPublicItem>();
-        var expectedSources=new Dictionary<Guid,(Guid ResultId,Guid? ReviewId)>();
+        var expectedSources=new Dictionary<Guid,(Guid ResultId,int ResultVersion,Guid? ReviewId)>();
         var doctorReviews=new Dictionary<Guid,DoctorReportReview?>();
         foreach(var item in status.Items)
         {
@@ -121,7 +129,7 @@ public sealed class AnalysisReportService(
             if(detail.ProcessingStatus!="COMPLETED" || detail.Result is null)throw new UploadFailure(409,"ERR_INVALID_STATE","Trạng thái ca bệnh đã thay đổi.");
             var review=await ReadReviewAsync(item.AnalysisId,tenantId,detail.Result.ResultId,detail.ReviewVersion,ct);
             sources.Add(new{detail.AnalysisId,detail.Image,detail.Result,review});
-            expectedSources.Add(item.AnalysisId,(detail.Result.ResultId,review?.ReviewId));
+            expectedSources.Add(item.AnalysisId,(detail.Result.ResultId,detail.Result.Version,review?.ReviewId));
             doctorReviews.Add(item.AnalysisId,review);
             pinned.Add(item with{RiskLevel=detail.Result.RiskLevel,ReviewStatus=review is null?"PENDING":review.IsApproved?"REVIEWED":"CORRECTION_REQUIRED"});
         }
@@ -129,23 +137,59 @@ public sealed class AnalysisReportService(
         if(normalized=="zip")
         {
             using var archiveBytes=new MemoryStream();
+            var manifestItems=new List<BatchArchiveManifestItem>();
             using(var zip=new ZipArchive(archiveBytes,ZipArchiveMode.Create,true))
             {
-                foreach(var item in status.Items.Where(i=>i.ProcessingStatus=="COMPLETED").Take(100))
+                for(var itemIndex=0;itemIndex<status.Items.Count;itemIndex++)
                 {
+                    var item=status.Items[itemIndex];
+                    var caseCode=$"CASE-{itemIndex+1:D4}";
+                    if(item.ProcessingStatus!="COMPLETED")
+                    {
+                        manifestItems.Add(new(caseCode,item.AnalysisId,item.ProcessingStatus,item.Error?.Code,
+                            null,null,null,null,null,null,null,null));
+                        continue;
+                    }
                     var report=await CreateAnalysisPdfAsync(requesterId,clinicId,item.AnalysisId,correlationId,ct);
+                    Guid resultId;
+                    Guid? reviewId;
+                    string snapshotSha256;
                     await using(var source=dataSource.CreateCommand("SELECT (snapshot#>>'{result,resultId}')::uuid,(snapshot#>>'{review,reviewId}')::uuid,snapshot_sha256 FROM analysis.report_snapshots WHERE id=$1"))
                     {
                         source.Parameters.AddWithValue(report.ReportId);await using var reader=await source.ExecuteReaderAsync(ct);
                         var expected=expectedSources[item.AnalysisId];
                         if(!await reader.ReadAsync(ct) || reader.GetGuid(0)!=expected.ResultId || (reader.IsDBNull(1)?(Guid?)null:reader.GetGuid(1))!=expected.ReviewId)
                             throw new UploadFailure(409,"ERR_INVALID_STATE","Nguồn báo cáo thay đổi trong lúc xuất. Hãy tạo snapshot mới.");
-                        sources.Add(new{item.AnalysisId,report.ReportId,snapshotDigest=reader.GetString(2)});
+                        resultId=reader.GetGuid(0);
+                        reviewId=reader.IsDBNull(1)?null:reader.GetGuid(1);
+                        snapshotSha256=reader.GetString(2);
                     }
                     await using var input=await ReadDownloadAsync(requesterId,clinicId,report.ReportId,correlationId,ct);
-                    await using var output=zip.CreateEntry($"case-{item.AnalysisId:D}.pdf",CompressionLevel.Fastest).Open();await input.CopyToAsync(output,ct);
+                    var pdfEntry=$"case-{item.AnalysisId:D}.pdf";
+                    await using var output=zip.CreateEntry(pdfEntry,CompressionLevel.Fastest).Open();
+                    var pdfSha256=await CopyAndHashAsync(input,output,ct);
+                    var sourceReview=doctorReviews.GetValueOrDefault(item.AnalysisId);
+                    manifestItems.Add(new(caseCode,item.AnalysisId,item.ProcessingStatus,item.Error?.Code,
+                        resultId,expectedSources[item.AnalysisId].ResultVersion,reviewId,sourceReview?.ReviewVersion,
+                        report.ReportId,snapshotSha256,pdfEntry,pdfSha256));
+                    sources.Add(new{item.AnalysisId,report.ReportId,snapshotDigest=snapshotSha256});
                 }
-                await using var summary=zip.CreateEntry("summary.csv").Open();await summary.WriteAsync(RenderBatchCsv(status,clock.GetUtcNow(),doctorReviews),ct);
+                await using (var summary = zip.CreateEntry("summary.csv").Open())
+                {
+                    await summary.WriteAsync(RenderBatchCsv(status, clock.GetUtcNow(), doctorReviews), ct);
+                }
+                var manifest=JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    schemaVersion="1.0",
+                    batchId,
+                    reportId,
+                    generatedAtUtc=clock.GetUtcNow(),
+                    batchStatus=status.BatchStatus,
+                    summary=status.Summary,
+                    items=manifestItems
+                },ManifestJsonOptions);
+                await using(var manifestStream=zip.CreateEntry("manifest.json",CompressionLevel.Fastest).Open())
+                    await manifestStream.WriteAsync(manifest,ct);
             }
             bytes=archiveBytes.ToArray();
         }
@@ -212,6 +256,19 @@ public sealed class AnalysisReportService(
         catch { throw; } // An ambiguous DB acknowledgement must never delete a possibly referenced private report.
     }
     private static string Hash(byte[] value)=>Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
+    private static async Task<string> CopyAndHashAsync(Stream input,Stream output,CancellationToken ct)
+    {
+        using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer=new byte[64*1024];
+        while(true)
+        {
+            var count=await input.ReadAsync(buffer,ct);
+            if(count==0)break;
+            hash.AppendData(buffer,0,count);
+            await output.WriteAsync(buffer.AsMemory(0,count),ct);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
     public async Task<Stream> ReadDownloadAsync(Guid requesterId,Guid? clinicId,Guid reportId,string? correlation,CancellationToken ct)
     {
         await using var command=dataSource.CreateCommand("SELECT tenant_id,batch_id,analysis_id,requester_id,clinic_id,object_key,expires_at FROM analysis.report_snapshots WHERE id=$1");

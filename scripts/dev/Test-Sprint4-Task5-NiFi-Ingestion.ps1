@@ -13,7 +13,6 @@ param(
 if ([string]::IsNullOrWhiteSpace($DatasetPath)) {
     $DatasetPath = Join-Path (Resolve-Path "$PSScriptRoot\..\..").Path "datasets\CHASE_DB1\raw"
 }
-)
 
 $ErrorActionPreference = "Stop"
 

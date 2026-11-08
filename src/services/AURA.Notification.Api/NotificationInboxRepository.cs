@@ -11,9 +11,9 @@ public sealed class NotificationInboxRepository(
     {
         const string sql = """
             INSERT INTO notification.inbox_items
-                (account_id, tenant_id, event_id, analysis_id, type, title, is_read, created_at, target_path, metadata)
+                (account_id, tenant_id, event_id, analysis_id, type, title, is_read, created_at, target_path, metadata, order_id)
             VALUES
-                (@account_id, @tenant_id, @event_id, @analysis_id, @type, @title, false, now(), @target_path, @metadata::jsonb)
+                (@account_id, @tenant_id, @event_id, @analysis_id, @type, @title, false, now(), @target_path, @metadata::jsonb, @order_id)
             ON CONFLICT (account_id, event_id) DO NOTHING
             RETURNING id, created_at;
             """;
@@ -24,11 +24,12 @@ public sealed class NotificationInboxRepository(
         cmd.Parameters.AddWithValue("account_id", command.AccountId);
         cmd.Parameters.AddWithValue("tenant_id", command.TenantId);
         cmd.Parameters.AddWithValue("event_id", command.EventId);
-        cmd.Parameters.AddWithValue("analysis_id", command.AnalysisId);
+        cmd.Parameters.AddWithValue("analysis_id", (object?)command.AnalysisId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("type", command.Type);
         cmd.Parameters.AddWithValue("title", command.Title);
         cmd.Parameters.AddWithValue("target_path", command.TargetPath);
         cmd.Parameters.AddWithValue("metadata", command.Metadata ?? "{}");
+        cmd.Parameters.AddWithValue("order_id", (object?)command.OrderId ?? DBNull.Value);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
@@ -58,6 +59,81 @@ public sealed class NotificationInboxRepository(
         return new SaveInboxResult(SaveInboxOutcome.Deduplicated, Guid.Empty, DateTimeOffset.UtcNow);
     }
 
+    public async Task<SaveInboxResult> SaveWithDeliveryJobsAsync(
+        SaveInboxItemCommand command,
+        IReadOnlyList<(Guid DeviceId, byte[] TokenHash)> devices,
+        NotificationDeliveryJobRepository deliveryJobRepo,
+        CancellationToken ct)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+
+        const string sql = """
+            INSERT INTO notification.inbox_items
+                (account_id, tenant_id, event_id, analysis_id, type, title, is_read, created_at, target_path, metadata, order_id)
+            VALUES
+                (@account_id, @tenant_id, @event_id, @analysis_id, @type, @title, false, now(), @target_path, @metadata::jsonb, @order_id)
+            ON CONFLICT (account_id, event_id) DO NOTHING
+            RETURNING id, created_at;
+            """;
+
+        Guid notificationId;
+        DateTimeOffset createdAt;
+        SaveInboxOutcome outcome;
+
+        await using (var cmd = new NpgsqlCommand(sql, connection, transaction))
+        {
+            cmd.Parameters.AddWithValue("account_id", command.AccountId);
+            cmd.Parameters.AddWithValue("tenant_id", command.TenantId);
+            cmd.Parameters.AddWithValue("event_id", command.EventId);
+            cmd.Parameters.AddWithValue("analysis_id", (object?)command.AnalysisId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("type", command.Type);
+            cmd.Parameters.AddWithValue("title", command.Title);
+            cmd.Parameters.AddWithValue("target_path", command.TargetPath);
+            cmd.Parameters.AddWithValue("metadata", command.Metadata ?? "{}");
+            cmd.Parameters.AddWithValue("order_id", (object?)command.OrderId ?? DBNull.Value);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                notificationId = reader.GetGuid(0);
+                createdAt = reader.GetFieldValue<DateTimeOffset>(1);
+                outcome = SaveInboxOutcome.Created;
+            }
+            else
+            {
+                outcome = SaveInboxOutcome.Deduplicated;
+                notificationId = Guid.Empty;
+                createdAt = DateTimeOffset.UtcNow;
+            }
+        }
+
+        if (outcome == SaveInboxOutcome.Deduplicated)
+        {
+            const string lookupSql = "SELECT id, created_at FROM notification.inbox_items WHERE account_id = @account_id AND event_id = @event_id;";
+            await using var lookupCmd = new NpgsqlCommand(lookupSql, connection, transaction);
+            lookupCmd.Parameters.AddWithValue("account_id", command.AccountId);
+            lookupCmd.Parameters.AddWithValue("event_id", command.EventId);
+            await using var lookupReader = await lookupCmd.ExecuteReaderAsync(ct);
+            if (await lookupReader.ReadAsync(ct))
+            {
+                notificationId = lookupReader.GetGuid(0);
+                createdAt = lookupReader.GetFieldValue<DateTimeOffset>(1);
+            }
+        }
+        else
+        {
+            // Atomically enqueue delivery jobs before transaction commit (SCRUM-364)
+            if (devices.Count > 0)
+            {
+                await deliveryJobRepo.EnqueueDeliveryJobsAsync(connection, transaction, notificationId, command.AccountId, devices, ct);
+            }
+        }
+
+        await transaction.CommitAsync(ct);
+        return new SaveInboxResult(outcome, notificationId, createdAt);
+    }
+
     public async Task<InboxListResponse> GetInboxAsync(
         Guid accountId,
         int limit,
@@ -78,7 +154,7 @@ public sealed class NotificationInboxRepository(
         }
 
         var sql = """
-            SELECT id, event_id, analysis_id, type, title, is_read, created_at, read_at, target_path
+            SELECT id, event_id, analysis_id, type, title, is_read, created_at, read_at, target_path, order_id
             FROM notification.inbox_items
             WHERE account_id = @account_id
               AND (@unread_only = false OR is_read = false)
@@ -103,13 +179,15 @@ public sealed class NotificationInboxRepository(
             items.Add(new InboxItemResponse(
                 NotificationId: reader.GetGuid(0),
                 EventId: reader.GetGuid(1),
-                AnalysisId: reader.GetGuid(2),
+                AnalysisId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
                 Type: reader.GetString(3),
                 Title: reader.GetString(4),
                 IsRead: reader.GetBoolean(5),
                 CreatedAt: reader.GetFieldValue<DateTimeOffset>(6),
                 ReadAt: reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7),
-                TargetPath: reader.GetString(8)
+                TargetPath: reader.GetString(3) == "PAYMENT_SUCCESS" && !reader.IsDBNull(9)
+                    ? $"/billing/orders/{reader.GetGuid(9):D}" : reader.GetString(8),
+                OrderId: reader.IsDBNull(9) ? null : reader.GetGuid(9)
             ));
         }
 

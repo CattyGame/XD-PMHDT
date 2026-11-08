@@ -17,7 +17,6 @@ public sealed class DoctorReviewTests
         var tenant = Guid.NewGuid();
         var patient = Guid.NewGuid();
         var owner = Guid.NewGuid();
-        var doctor = Guid.NewGuid();
         var requestId = Guid.NewGuid();
         var analysisId = Guid.NewGuid();
         var jobId = Guid.NewGuid();
@@ -25,13 +24,17 @@ public sealed class DoctorReviewTests
         await SeedCompletedAnalysis(dataSource, tenant, patient, owner, requestId, analysisId, jobId, resultId);
 
         var repository = new PostgresDoctorReviewRepository(dataSource);
+        var worklist = new PostgresAnalysisQueryRepository(dataSource);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var worklists = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ =>
+            worklist.ListDoctorWorklistAsync(tenant, patient, timeout.Token)));
+        Assert.All(worklists, rows => Assert.Contains(rows, row => row.AnalysisId == analysisId));
         var attempts = Enumerable.Range(0, 20).Select(i => Task.Run(async () =>
         {
             try
             {
                 var response = await repository.SubmitAsync(new DoctorReviewCommand(analysisId, tenant, patient,
-                    doctor, 0, true, null, null, $"concurrent review {i}", null, $"scrum345-{requestId:N}"), timeout.Token);
+                    Guid.NewGuid(), 0, true, null, null, $"concurrent review {i}", null, $"scrum345-{requestId:N}"), timeout.Token);
                 return (Success: true, Error: (string?)null, Version: response.Version);
             }
             catch (UploadFailure error) when (error.Status == 409)

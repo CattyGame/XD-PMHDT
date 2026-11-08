@@ -13,8 +13,11 @@ import AppRouter from './AppRouter'
 import AnalysisResultPage from '../pages/AnalysisResultPage'
 import NotificationInboxPage from '../pages/NotificationInboxPage'
 import CampaignManagementPage from '../pages/CampaignManagementPage'
-import DoctorWorkspacePage from '../pages/doctor/DoctorWorkspacePage'
 import ClinicUploadPage from '../pages/ClinicUploadPage'
+import DoctorWorkspacePage from '../pages/doctor/DoctorWorkspacePage'
+import ClinicMemberPage from '../pages/ClinicMemberPage'
+import ClinicPatientPage from '../pages/ClinicPatientPage'
+import BillingOrderPage from '../pages/BillingOrderPage'
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
@@ -36,12 +39,15 @@ export default function ApplicationRoutes() {
       <Route path="/demo/*" element={<ProtectedRoute><DemoScope><App /></DemoScope></ProtectedRoute>} />
       <Route path="/upload" element={<ProtectedRoute><UploadPage /></ProtectedRoute>} />
       <Route path="/clinic-upload" element={<ProtectedRoute><ClinicUploadPage /></ProtectedRoute>} />
+      <Route path="/clinics/members" element={<ProtectedRoute><ClinicMemberPage /></ProtectedRoute>} />
+      <Route path="/clinics/patients" element={<ProtectedRoute><ClinicPatientPage /></ProtectedRoute>} />
       <Route path="/batches" element={<ProtectedRoute><BatchProgressPage /></ProtectedRoute>} />
       <Route path="/batches/:batchId" element={<ProtectedRoute><BatchProgressPage /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute><SessionHomePage /></ProtectedRoute>} />
       <Route path="*" element={<NotFoundPage />} />
       <Route path="/analyses/:analysisId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><NotificationInboxPage /></ProtectedRoute>}/>
+      <Route path="/billing/orders/:orderId" element={<ProtectedRoute><BillingOrderPage /></ProtectedRoute>}/>
       <Route path="/doctor/workspace" element={<ProtectedRoute><DoctorWorkspacePage /></ProtectedRoute>} />
       <Route path="/campaigns" element={<ProtectedRoute><CampaignManagementPage /></ProtectedRoute>}/>
     </Routes>

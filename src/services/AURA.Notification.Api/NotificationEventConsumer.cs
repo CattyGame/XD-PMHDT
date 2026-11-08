@@ -28,37 +28,20 @@ public sealed class RabbitMqConsumerOptions
     public bool AutoStart { get; set; } = false;
 }
 
-public sealed record NotificationDispatchMetrics(
-    Guid EventId,
-    Guid AnalysisId,
-    DateTimeOffset ReceivedAt,
-    DateTimeOffset FcmDispatchedAt,
-    long FcmLatencyMs,
-    long TotalPipelineMs,
-    int DevicesTargeted,
-    int SuccessCount,
-    int FailureCount,
-    int CleanedTokensCount);
-
 public sealed class NotificationEventConsumer(
     IOptions<RabbitMqConsumerOptions> options,
     NotificationInboxRepository inboxRepository,
     DeviceRegistrationRepository deviceRepository,
     IAccountResolver accountResolver,
-    FirebaseApp firebaseApp,
     IConfiguration configuration,
     ILogger<NotificationEventConsumer> logger,
-    IFcmClient? fcmClient = null,
-    INotificationContextResolver? contextResolver = null) : BackgroundService
+    INotificationContextResolver? contextResolver = null,
+    NotificationDeliveryJobRepository? deliveryJobRepository = null) : BackgroundService
 {
     private readonly RabbitMqConsumerOptions _options = options.Value;
-    private readonly IFcmClient _fcmClient = fcmClient ?? new FirebaseAdminFcmClient(
-        firebaseApp,
-        NullLogger<FirebaseAdminFcmClient>.Instance);
     private IConnection? _connection;
     private IModel? _channel;
 
-    public NotificationDispatchMetrics? LastDispatchMetrics { get; private set; }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -140,6 +123,11 @@ public sealed class NotificationEventConsumer(
                 _channel?.BasicNack(deliveryTag, false, true);
             }
         }
+        catch (NotificationContextRejectedException)
+        {
+            logger.LogWarning("Rejected notification authority context; moving event to dead letter.");
+            _channel?.BasicNack(deliveryTag, false, false);
+        }
         catch (JsonException ex)
         {
             logger.LogWarning(ex,"Malformed notification JSON rejected to dead-letter queue.");
@@ -154,77 +142,104 @@ public sealed class NotificationEventConsumer(
 
     public async Task<bool> ProcessNotificationEventAsync(string json, CancellationToken cancellationToken)
     {
-        var receiveTimestamp = DateTimeOffset.UtcNow;
-        var pipelineStopwatch = Stopwatch.StartNew();
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        if (!root.TryGetProperty("eventId", out var eventIdProp) || !eventIdProp.TryGetGuid(out var eventId) ||
-            !root.TryGetProperty("analysisId", out var analysisIdProp) || !analysisIdProp.TryGetGuid(out var analysisId) ||
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("eventId", out var eventIdProp) || eventIdProp.ValueKind != JsonValueKind.String || !eventIdProp.TryGetGuid(out var eventId) || eventId == Guid.Empty ||
             !root.TryGetProperty("eventType", out var eventTypeProp) || !root.TryGetProperty("tenantId", out var tenantIdProp) ||
-            !tenantIdProp.TryGetGuid(out var tenantId))
+            eventTypeProp.ValueKind != JsonValueKind.String || tenantIdProp.ValueKind != JsonValueKind.String ||
+            !tenantIdProp.TryGetGuid(out var tenantId) || tenantId == Guid.Empty)
         {
-            logger.LogWarning("Discarding malformed notification event envelope.");
-            return true;
+            throw new NotificationContextRejectedException();
         }
 
         var eventType = eventTypeProp.GetString();
-        if (eventType is not ("analysis.completed" or "analysis.failed" or "batch.completed" ))
+        if (eventType is not ("analysis.completed" or "analysis.failed" or "batch.completed" or "billing.payment.success"))
         {
             logger.LogInformation("Ignoring non-terminal event type {EventType}", eventType);
             return true;
         }
 
-        if(contextResolver is null)throw new InvalidOperationException("Notification authority is required.");
-        var authority=await contextResolver.ResolveAsync(eventId,analysisId,tenantId,cancellationToken);
-        if(authority.EventId!=eventId || authority.AnalysisId!=analysisId || authority.TenantId!=tenantId || !authority.Applicable ||
-            (eventType=="batch.completed" ? authority.ProcessingStatus is not ("COMPLETED" or "PARTIAL_FAILED" or "FAILED")
-                :eventType=="analysis.failed"?authority.ProcessingStatus is not ("FAILED" or "LOW_QUALITY" or "REJECTED")
-                :authority.ProcessingStatus!="COMPLETED"))
-            throw new HttpRequestException("Terminal notification authority unavailable or state not applicable.");
-        var recipients=authority.RecipientAccountIds.Where(x=>x!=Guid.Empty).Distinct().ToList();
-        if(recipients.Count==0)throw new HttpRequestException("No authoritative recipients; retry required.");
+        Guid? analysisId = null;
+        Guid? orderId = null;
+        List<Guid> recipients;
+        string inboxType;
+        string title;
+        string targetPath;
 
-        var inboxType = eventType switch
+        if (eventType == "billing.payment.success")
         {
-            "analysis.completed" or "batch.completed" => "ANALYSIS_COMPLETED",
-            "billing.payment.success" => "PAYMENT_SUCCESS",
-            _ => "ANALYSIS_FAILED"
-        };
+            if (!root.TryGetProperty("schemaVersion", out var schema) || schema.ValueKind != JsonValueKind.String || schema.GetString() != "1.0" ||
+                !root.TryGetProperty("orderId", out var orderIdProp) || orderIdProp.ValueKind != JsonValueKind.String ||
+                !orderIdProp.TryGetGuid(out var parsedOrderId) || parsedOrderId == Guid.Empty)
+            {
+                throw new NotificationContextRejectedException();
+            }
+            orderId = parsedOrderId;
 
-        // SRS §7.5: Title and body must be neutral, strictly free from patient personal data and clinical diagnosis
-        var title = eventType switch
+            if (contextResolver is null) throw new InvalidOperationException("Notification authority is required.");
+            var paymentAuth = await contextResolver.ResolvePaymentAsync(eventId, parsedOrderId, tenantId, cancellationToken);
+            if (paymentAuth.EventId != eventId || paymentAuth.OrderId != parsedOrderId || paymentAuth.TenantId != tenantId ||
+                paymentAuth.RecipientAccountId == Guid.Empty || paymentAuth.Status != "COMPLETED")
+                throw new NotificationContextRejectedException();
+
+            recipients = [paymentAuth.RecipientAccountId];
+            inboxType = "PAYMENT_SUCCESS";
+            title = "Thanh toán thành công";
+            targetPath = $"/billing/orders/{parsedOrderId:D}";
+        }
+        else
         {
-            "analysis.completed" => "Phân tích ảnh đáy mắt hoàn tất",
-            "batch.completed" => "Đợt xử lý ảnh đã kết thúc",
-            "billing.payment.success" => "Thanh toán thành công",
-            _ => "Phân tích ảnh đáy mắt không thành công"
-        };
-        var bodyText = eventType switch
-        {
-            "analysis.completed" => "Kết quả phân tích mắt của bạn đã có! Bấm để xem chi tiết.",
-            "batch.completed" => "Trạng thái đợt xử lý đã được cập nhật. Bấm để xem chi tiết.",
-            "billing.payment.success" => "Giao dịch thanh toán đã được xác nhận. Bấm để xem gói cước.",
-            _ => "Không thể phân tích ảnh đáy mắt do chất lượng ảnh không đạt tiêu chuẩn."
-        };
-        var targetPath = eventType == "billing.payment.success"
-            ? "/billing/packages"
-            : eventType=="batch.completed"?$"/batches/{analysisId:D}":$"/analyses/{analysisId:D}";
+            if (!root.TryGetProperty("analysisId", out var analysisIdProp) || !analysisIdProp.TryGetGuid(out var parsedAnalysisId))
+            {
+                logger.LogWarning("Discarding analysis/batch event without valid analysisId.");
+                return true;
+            }
+            analysisId = parsedAnalysisId;
+
+            if (contextResolver is null) throw new InvalidOperationException("Notification authority is required.");
+            var authority = await contextResolver.ResolveAsync(eventId, parsedAnalysisId, tenantId, cancellationToken);
+            if (authority.EventId != eventId || authority.AnalysisId != parsedAnalysisId || authority.TenantId != tenantId || !authority.Applicable ||
+                (eventType == "batch.completed" ? authority.ProcessingStatus is not ("COMPLETED" or "PARTIAL_FAILED" or "FAILED")
+                    : eventType == "analysis.failed" ? authority.ProcessingStatus is not ("FAILED" or "LOW_QUALITY" or "REJECTED")
+                    : authority.ProcessingStatus != "COMPLETED"))
+                throw new HttpRequestException("Terminal notification authority unavailable or state not applicable.");
+
+            recipients = authority.RecipientAccountIds.Where(x => x != Guid.Empty).Distinct().ToList();
+            if (recipients.Count == 0) throw new HttpRequestException("No authoritative recipients; retry required.");
+
+            inboxType = eventType switch
+            {
+                "analysis.completed" or "batch.completed" => "ANALYSIS_COMPLETED",
+                _ => "ANALYSIS_FAILED"
+            };
+
+            // SRS §7.5: Title and body must be neutral, strictly free from patient personal data and clinical diagnosis
+            title = eventType switch
+            {
+                "analysis.completed" => "Phân tích ảnh đáy mắt hoàn tất",
+                "batch.completed" => "Đợt xử lý ảnh đã kết thúc",
+                _ => "Phân tích ảnh đáy mắt không thành công"
+            };
+            targetPath = eventType == "batch.completed" ? $"/batches/{parsedAnalysisId:D}" : $"/analyses/{parsedAnalysisId:D}";
+        }
 
         int totalDevicesTargeted = 0;
-        int totalSuccess = 0;
-        int totalFailed = 0;
-        int totalCleaned = 0;
-        long maxFcmLatencyMs = 0;
+        var projectId = configuration["Firebase:ProjectId"] ?? "aura-dev-97716";
 
         // Resolve current Identity authority before any writes: dependency failures must requeue.
-        var activeRecipients=new List<Guid>();
-        foreach(var recipient in recipients)
-            if(!string.IsNullOrWhiteSpace(await accountResolver.ResolveFirebaseUidAsync(recipient,cancellationToken)))activeRecipients.Add(recipient);
+        var activeRecipients = new List<Guid>();
+        foreach (var recipient in recipients)
+        {
+            if (!string.IsNullOrWhiteSpace(await accountResolver.ResolveFirebaseUidAsync(recipient, cancellationToken)))
+                activeRecipients.Add(recipient);
+        }
+
         foreach (var recipientId in activeRecipients)
         {
-            // 1. Persist Before ACK: Save to durable PostgreSQL inbox
+            // 1. Persist Before ACK: Save to durable PostgreSQL inbox & delivery jobs (SCRUM-364)
             var command = new SaveInboxItemCommand(
                 AccountId: recipientId,
                 TenantId: tenantId,
@@ -233,185 +248,25 @@ public sealed class NotificationEventConsumer(
                 Type: inboxType,
                 Title: title,
                 TargetPath: targetPath,
-                Metadata: json
+                Metadata: json,
+                OrderId: orderId
             );
 
-            var saveResult = await inboxRepository.SaveAsync(command, cancellationToken);
-            logger.LogInformation(
-                "Notification inbox outcome for Account {AccountId}, Event {EventId}: {Outcome}",
-                recipientId, eventId, saveResult.Outcome);
+            var firebaseUid = await accountResolver.ResolveFirebaseUidAsync(recipientId, cancellationToken);
+            var devices = !string.IsNullOrWhiteSpace(firebaseUid)
+                ? await deviceRepository.GetTokensForUserAsync(projectId, firebaseUid, cancellationToken)
+                : new List<ActiveDeviceToken>();
 
-            // 2. Dispatch FCM Web Push via Multicast (< 200ms) with auto-cleanup
-            var fcmStopwatch = Stopwatch.StartNew();
-            var dispatchResult = await SendWebPushNotificationAsync(
-                recipientId,
-                analysisId,
-                title,
-                bodyText,
-                targetPath,
-                cancellationToken);
-            fcmStopwatch.Stop();
-
-            if (fcmStopwatch.ElapsedMilliseconds > maxFcmLatencyMs)
-            {
-                maxFcmLatencyMs = fcmStopwatch.ElapsedMilliseconds;
-            }
-
-            totalDevicesTargeted += dispatchResult.DevicesTargeted;
-            totalSuccess += dispatchResult.SuccessCount;
-            totalFailed += dispatchResult.FailureCount;
-            totalCleaned += dispatchResult.CleanedTokensCount;
+            if (deliveryJobRepository is null)
+                throw new InvalidOperationException("Durable notification delivery repository is required.");
+            var deviceHashes = devices.Select(d => (d.DeviceId,
+                System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(d.Token)))).ToList();
+            var saved = await inboxRepository.SaveWithDeliveryJobsAsync(command, deviceHashes, deliveryJobRepository, cancellationToken);
+            if (saved.Outcome == SaveInboxOutcome.Created) totalDevicesTargeted += devices.Count;
         }
 
-        pipelineStopwatch.Stop();
-
-        // 3. Record Master Audit 3 Timestamps & Metrics
-        LastDispatchMetrics = new NotificationDispatchMetrics(
-            EventId: eventId,
-            AnalysisId: analysisId,
-            ReceivedAt: receiveTimestamp,
-            FcmDispatchedAt: DateTimeOffset.UtcNow,
-            FcmLatencyMs: maxFcmLatencyMs,
-            TotalPipelineMs: pipelineStopwatch.ElapsedMilliseconds,
-            DevicesTargeted: totalDevicesTargeted,
-            SuccessCount: totalSuccess,
-            FailureCount: totalFailed,
-            CleanedTokensCount: totalCleaned
-        );
-
-        logger.LogInformation(
-            "NOTIFICATION_METRICS [SCRUM-364] EventId={EventId} AnalysisId={AnalysisId} Recipients={Recipients} DevicesTargeted={DevicesTargeted} FcmLatencyMs={FcmLatencyMs} TotalPipelineMs={TotalPipelineMs} CleanedTokens={Cleaned} Status=SUCCESS",
-            eventId, analysisId, recipients.Count, totalDevicesTargeted, maxFcmLatencyMs, pipelineStopwatch.ElapsedMilliseconds, totalCleaned);
-
+        logger.LogInformation("Notification event {EventId} persisted before ACK; {Devices} device jobs admitted.", eventId, totalDevicesTargeted);
         return true;
-    }
-
-    private sealed record FcmDispatchInternalResult(
-        int DevicesTargeted,
-        int SuccessCount,
-        int FailureCount,
-        int CleanedTokensCount);
-
-    private async Task<FcmDispatchInternalResult> SendWebPushNotificationAsync(
-        Guid recipientId,
-        Guid analysisId,
-        string title,
-        string bodyText,
-        string targetPath,
-        CancellationToken ct)
-    {
-        int targeted = 0;
-        int success = 0;
-        int failed = 0;
-        int cleaned = 0;
-
-        try
-        {
-            var projectId = configuration["Firebase:ProjectId"] ?? "aura-dev-97716";
-            var firebaseUid = await accountResolver.ResolveFirebaseUidAsync(recipientId, ct);
-            if (string.IsNullOrWhiteSpace(firebaseUid))
-            {
-                logger.LogDebug("No Firebase UID found for recipient Account {AccountId}", recipientId);
-                return new FcmDispatchInternalResult(0, 0, 0, 0);
-            }
-
-            var devices = await deviceRepository.GetTokensForUserAsync(projectId, firebaseUid, ct);
-            if (devices.Count == 0)
-            {
-                logger.LogDebug("No active device registrations found for Firebase UID {Uid}", firebaseUid);
-                return new FcmDispatchInternalResult(0, 0, 0, 0);
-            }
-
-            targeted = devices.Count;
-
-            var multicastMessage = new MulticastMessage
-            {
-                Tokens = devices.Select(d => d.Token).ToList(),
-                Notification = new FirebaseAdmin.Messaging.Notification
-                {
-                    Title = title,
-                    Body = bodyText
-                },
-                Data = new Dictionary<string, string>
-                {
-                    ["kind"] = "analysis-completed",
-                    ["analysisId"] = analysisId.ToString("D"),
-                    ["targetPath"] = targetPath,
-                    ["url"] = targetPath
-                },
-                Webpush = new WebpushConfig
-                {
-                    Notification = new WebpushNotification
-                    {
-                        Title = title,
-                        Body = bodyText,
-                        Icon = "/favicon.ico",
-                        Tag = $"analysis-{analysisId:D}"
-                    },
-                    FcmOptions = new WebpushFcmOptions
-                    {
-                        Link = targetPath
-                    }
-                }
-            };
-
-            FcmMulticastResult multicastResult;
-            try
-            {
-                multicastResult = await _fcmClient.SendMulticastAsync(devices, multicastMessage, ct);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "FCM Multicast delivery attempt failed for User {Uid}. Retrying with bounded backoff...", firebaseUid);
-                await Task.Delay(50, ct);
-                multicastResult = await _fcmClient.SendMulticastAsync(devices, multicastMessage, ct);
-            }
-
-            success = multicastResult.SuccessCount;
-            failed = multicastResult.FailureCount;
-
-            // AC2: Inspect per-device responses and auto-cleanup unregistered or invalid tokens
-            foreach (var outcome in multicastResult.Responses)
-            {
-                if (outcome.IsSuccess)
-                {
-                    logger.LogInformation(
-                        "FCM Push delivered successfully to Device {DeviceId} (User {Uid}): MessageId={MessageId}",
-                        outcome.DeviceId, firebaseUid, outcome.MessageId);
-                }
-                else
-                {
-                    logger.LogWarning(
-                        "FCM Push failed for Device {DeviceId} (User {Uid}). Error: {Code}, Message: {Msg}",
-                        outcome.DeviceId, firebaseUid, outcome.ErrorCode, outcome.ErrorMessage);
-
-                    if (outcome.ErrorCode is "Unregistered" or "InvalidArgument" or "UNREGISTERED" or "INVALID_ARGUMENT")
-                    {
-                        logger.LogInformation("Auto-cleaning expired FCM token for Device {DeviceId} (Code: {Code})", outcome.DeviceId, outcome.ErrorCode);
-                        try
-                        {
-                            await deviceRepository.DeleteIfTokenMatchesAsync(
-                                projectId,
-                                firebaseUid,
-                                outcome.DeviceId,
-                                outcome.DeviceToken,
-                                ct);
-                            cleaned++;
-                        }
-                        catch (Exception cleanupEx)
-                        {
-                            logger.LogWarning(cleanupEx, "Failed to delete expired token for Device {DeviceId}", outcome.DeviceId);
-                        }
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to dispatch FCM push for recipient Account {AccountId}", recipientId);
-        }
-
-        return new FcmDispatchInternalResult(targeted, success, failed, cleaned);
     }
 
     private void Cleanup()

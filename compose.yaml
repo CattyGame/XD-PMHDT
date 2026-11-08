@@ -23,13 +23,16 @@ services:
 
   redis:
     image: redis:7.4-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD}"]
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - redis_data:/data
     networks:
       - aura_network
+    environment:
+      REDISCLI_AUTH: "${REDIS_PASSWORD:?Set REDIS_PASSWORD}"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -151,6 +154,8 @@ services:
         Password="${BILLING_DB_PASSWORD:?Set BILLING_DB_PASSWORD}";
         Timeout=5;Command Timeout=5
       ConnectionStrings__Redis: "redis:6379"
+      Redis__Password: "${REDIS_PASSWORD:?Set REDIS_PASSWORD}"
+      BillingPaymentEvents__Enabled: "${BILLING_PAYMENT_EVENTS_ENABLED:-false}"
       Cache__PackageCatalogKey: "aura:local:billing:poc:packages:v1"
       Cache__PackageCatalogTtlSeconds: "60"
       Services__Identity__BaseUrl: "http://identity-api:8080"

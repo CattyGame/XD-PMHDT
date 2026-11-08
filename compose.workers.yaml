@@ -21,7 +21,8 @@ services:
       RABBITMQ_PREFETCH_COUNT: ${WORKER_PREFETCH_COUNT:-2}
       RabbitMq__RequestedHeartbeat: 60
       RABBITMQ_HEARTBEAT_SECONDS: 60
-      ConnectionStrings__Redis: redis:6379
+      ConnectionStrings__Redis: "redis:6379"
+      Redis__Password: "${REDIS_PASSWORD:?Set REDIS_PASSWORD}"
       ConnectionStrings__Postgres: >-
         Host=postgres;Port=5432;Database=${POSTGRES_DB:-aura_dev};Username=aura_analysis_app;
         Password="${ANALYSIS_DB_PASSWORD:?Set ANALYSIS_DB_PASSWORD in .env}";

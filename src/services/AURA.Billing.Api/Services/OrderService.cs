@@ -39,7 +39,8 @@ public sealed class OrderService
         CreateOrderRequest request,
         Guid idempotencyKey,
         BillingRuntimeOptions runtimeOptions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? verifiedPurchaserAccountId = null)
     {
         var tenantId = request.TenantId ?? request.BillingOwner.Id;
         var fingerprint = ComputeOrderFingerprint(request, idempotencyKey);
@@ -77,7 +78,7 @@ public sealed class OrderService
             runtimeOptions.Environment,
             idempotencyKey,
             fingerprint,
-            cancellationToken);
+            cancellationToken, verifiedPurchaserAccountId);
 
         var response = BuildOrderResponse(orderRecord);
         return new OrderOperationResult(OrderOperationStatus.Created, response);
@@ -143,8 +144,7 @@ public sealed class OrderService
             }
 
             // 3. Process payment and update ledger in single ACID transaction
-            return await _repository.ProcessCallbackInTransactionAsync(
-                payload, paymentMethod, cancellationToken);
+            return await _repository.ProcessCallbackInTransactionAsync(payload, paymentMethod, cancellationToken);
         }
         finally
         {

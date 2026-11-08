@@ -7,13 +7,14 @@ namespace AURA.Notification.Api;
 public sealed record InboxItemResponse(
     [property: JsonPropertyName("notificationId")] Guid NotificationId,
     [property: JsonPropertyName("eventId")] Guid EventId,
-    [property: JsonPropertyName("analysisId")] Guid AnalysisId,
+    [property: JsonPropertyName("analysisId")] Guid? AnalysisId,
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("isRead")] bool IsRead,
     [property: JsonPropertyName("createdAt")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("readAt")] DateTimeOffset? ReadAt,
-    [property: JsonPropertyName("targetPath")] string TargetPath);
+    [property: JsonPropertyName("targetPath")] string TargetPath,
+    [property: JsonPropertyName("orderId")] Guid? OrderId = null);
 
 public sealed record InboxListResponse(
     [property: JsonPropertyName("items")] IReadOnlyList<InboxItemResponse> Items,
@@ -26,11 +27,12 @@ public sealed record SaveInboxItemCommand(
     Guid AccountId,
     Guid TenantId,
     Guid EventId,
-    Guid AnalysisId,
+    Guid? AnalysisId,
     string Type,
     string Title,
     string TargetPath,
-    string? Metadata = null);
+    string? Metadata = null,
+    Guid? OrderId = null);
 
 public enum SaveInboxOutcome
 {

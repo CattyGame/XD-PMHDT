@@ -15,6 +15,11 @@ public sealed class ReportSnapshotPostgresTests
         public Task<AnalysisIdentity?> FindIdentityAsync(Guid id,CancellationToken ct)=>Task.FromResult<AnalysisIdentity?>(id==identity.AnalysisId?identity:null);
         public Task<AnalysisDetailResponse?> ReadAsync(AnalysisIdentity id,string? correlation,CancellationToken ct)=>Task.FromResult<AnalysisDetailResponse?>(detail);
     }
+    private sealed class FixedBatchRepository(BatchIdentity identity,BatchStatusSnapshot snapshot):IBatchStatusRepository
+    {
+        public Task<BatchIdentity?> FindIdentityAsync(Guid id,CancellationToken ct)=>Task.FromResult<BatchIdentity?>(id==identity.BatchId?identity:null);
+        public Task<BatchStatusSnapshot?> ReadAsync(BatchIdentity requested,CancellationToken ct)=>Task.FromResult<BatchStatusSnapshot?>(requested==identity?snapshot:null);
+    }
     [PostgresFact]
     public async Task Persisted_snapshot_pins_result_review_assets_and_rechecks_auth_and_expiry()
     {
@@ -73,6 +78,45 @@ public sealed class ReportSnapshotPostgresTests
         var download=await reports.ReadDownloadContentAsync(actor,null,exported.ReportId,null,default);
         Assert.Equal("application/pdf",download.ContentType);
         await using(var stream=download.Stream)Assert.Equal('%',stream.ReadByte());
+
+        var batchIdentity=new BatchIdentity(batch,tenant,patient,actor);
+        var batchSnapshot=new BatchStatusSnapshot(batch,DateTime.SpecifyKind(DateTime.UtcNow,DateTimeKind.Utc),
+            [new(image,"case.png","COMPLETED","REVIEWED",new(job2,"SUCCEEDED",1,2),false,null,"MODERATE"),
+             new(Guid.NewGuid(),"failed.png","FAILED","NOT_REQUIRED",new(Guid.NewGuid(),"DEAD_LETTER",0,1),false,"ERR_AI_FAILED",null)]);
+        var batchStatus=new BatchStatusService(new FixedBatchRepository(batchIdentity,batchSnapshot),access);
+        var batchReports=new AnalysisReportService(analyses,batchStatus,files,storage,new(),new(),db,clock);
+        var zipExport=await batchReports.CreateBatchReportAsync(actor,null,batch,"zip","zip-manifest-regression",default);
+        var zipContent=await batchReports.ReadDownloadContentAsync(actor,null,zipExport.ReportId,"zip-manifest-regression",default);
+        Assert.Equal("application/zip",zipContent.ContentType);
+        await using(var zipStream=zipContent.Stream)
+        using(var archive=new System.IO.Compression.ZipArchive(zipStream,System.IO.Compression.ZipArchiveMode.Read))
+        {
+            var manifestEntry=Assert.Single(archive.Entries,x=>x.FullName=="manifest.json");
+            Assert.Contains(archive.Entries,x=>x.FullName=="summary.csv");
+            var pdfEntry=Assert.Single(archive.Entries,x=>x.FullName==$"case-{image:D}.pdf");
+            using var manifestStream=manifestEntry.Open();using var manifest=await JsonDocument.ParseAsync(manifestStream);
+            var manifestItems=manifest.RootElement.GetProperty("items").EnumerateArray().ToArray();
+            Assert.Equal(2,manifestItems.Length);
+            var manifestItem=manifestItems[0];
+            Assert.Equal(batch,manifest.RootElement.GetProperty("batchId").GetGuid());
+            Assert.Equal(zipExport.ReportId,manifest.RootElement.GetProperty("reportId").GetGuid());
+            Assert.Equal(image,manifestItem.GetProperty("analysisId").GetGuid());
+            Assert.Equal(result1,manifestItem.GetProperty("resultId").GetGuid());
+            Assert.Equal(1,manifestItem.GetProperty("resultVersion").GetInt32());
+            Assert.Equal(review1,manifestItem.GetProperty("reviewId").GetGuid());
+            Assert.Equal(1,manifestItem.GetProperty("reviewVersion").GetInt32());
+            var itemReportId=manifestItem.GetProperty("reportId").GetGuid();
+            var pdfDigest=manifestItem.GetProperty("pdfSha256").GetString();
+            await using var pdfStream=pdfEntry.Open();using var pdfBytes=new MemoryStream();await pdfStream.CopyToAsync(pdfBytes);
+            Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(pdfBytes.ToArray())).ToLowerInvariant(),pdfDigest);
+            await using var manifestSnapshot=db.CreateCommand("SELECT snapshot_sha256 FROM analysis.report_snapshots WHERE id=$1");
+            manifestSnapshot.Parameters.AddWithValue(itemReportId);
+            Assert.Equal((string?)await manifestSnapshot.ExecuteScalarAsync(),manifestItem.GetProperty("snapshotSha256").GetString());
+            Assert.Equal("FAILED",manifestItems[1].GetProperty("processingStatus").GetString());
+            Assert.Equal("ERR_AI_FAILED",manifestItems[1].GetProperty("errorCode").GetString());
+            Assert.Equal(JsonValueKind.Null,manifestItems[1].GetProperty("resultId").ValueKind);
+            Assert.Equal(JsonValueKind.Null,manifestItems[1].GetProperty("pdfEntry").ValueKind);
+        }
         access.Allowed=false;
         Assert.Equal(404,(await Assert.ThrowsAsync<UploadFailure>(()=>reports.ReadDownloadAsync(actor,null,exported.ReportId,null,default))).Status);
         access.Allowed=true;clock.Now=clock.Now.AddMinutes(16);

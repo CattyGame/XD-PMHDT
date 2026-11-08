@@ -26,33 +26,41 @@ self.addEventListener('notificationclick', (event) => {
       const existing = windows.find(
         (client) => new URL(client.url).origin === self.location.origin,
       )
+      const data = event.notification.data?.FCM_MSG?.data ?? event.notification.data ?? {}
+      const candidate = data.targetPath ?? '/notifications'
+      const allowed = /^\/(?:analyses|batches|billing\/orders)\/[0-9a-f-]{36}$/i.test(candidate)
+      const target = new URL(allowed ? candidate : '/notifications', self.location.origin).href
 
       if (existing) {
+        await existing.navigate(target)
         return existing.focus()
       }
 
-      return self.clients.openWindow('/')
+      return self.clients.openWindow(target)
     })(),
   )
 })
 
-const app = initializeApp({
+const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
-})
+}
 
-const messaging = getMessaging(app)
+if (Object.values(config).every(value => typeof value === 'string' && value.trim())) {
+  const messaging = getMessaging(initializeApp(config))
 
-onBackgroundMessage(messaging, (payload) => {
-  if (payload.notification) {
-    return
-  }
+  onBackgroundMessage(messaging, (payload) => {
+    if (payload.notification) {
+      return
+    }
 
-  return self.registration.showNotification('AURA - Thông báo mới', {
-    body: 'Bạn có thông báo mới. Mở AURA để xem chi tiết.',
-    tag: 'aura-notification',
+    return self.registration.showNotification('AURA - Thông báo mới', {
+      body: 'Bạn có thông báo mới. Mở AURA để xem chi tiết.',
+      tag: 'aura-notification',
+    })
   })
-})
+
+}

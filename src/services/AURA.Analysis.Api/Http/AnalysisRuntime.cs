@@ -45,7 +45,11 @@ public static class AnalysisRuntime
         services.AddSingleton(reportOptions);
         services.AddSingleton(new AnalysisUploadGate(capacity));services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton(_=>NpgsqlDataSource.Create(db.ConnectionString));
-        services.AddSingleton<IConnectionMultiplexer>(_=>ConnectionMultiplexer.Connect(redisConnection));
+        services.AddSingleton<IConnectionMultiplexer>(_ => {
+            var options = ConfigurationOptions.Parse(redisConnection);
+            options.Password = configuration["Redis:Password"] ?? options.Password;
+            return ConnectionMultiplexer.Connect(options);
+        });
         services.AddSingleton<IBatchRedisProgressService,BatchRedisProgressService>();
         services.AddAnalysisServiceClients(configuration);services.AddAnalysisPrivateStorage(configuration,environment);
         services.AddTransient<IUploadRepository,PostgresUploadRepository>();services.AddTransient<IUploadRecoveryJournal,PostgresUploadRecoveryRepository>();
@@ -62,7 +66,9 @@ public static class AnalysisRuntime
         services.AddTransient<BatchStatusService>();services.AddTransient<FileAccessService>();
         services.AddTransient<AnalysisReportService>();
         services.AddTransient<AnalysisQueryService>();services.AddTransient<InternalResolversService>();
-        services.AddTransient<DoctorReviewService>();services.AddTransient<DoctorWorklistService>();services.AddTransient<AURA.Analysis.Api.Campaign.CampaignRepository>();
+        services.AddTransient<DoctorReviewService>();services.AddTransient<DoctorWorklistService>();
+        services.AddTransient<AURA.Analysis.Api.Campaign.ICampaignRepository, AURA.Analysis.Api.Campaign.CampaignRepository>();
+        services.AddTransient<AURA.Analysis.Api.Campaign.CampaignRepository>();
         return services;
     }
 }

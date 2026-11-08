@@ -51,6 +51,7 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
         ?? throw new InvalidOperationException("Missing Redis connection string.");
 
     var options = ConfigurationOptions.Parse(connectionString);
+    options.Password = builder.Configuration["Redis:Password"] ?? options.Password;
     options.AbortOnConnectFail = false;
     options.ConnectTimeout = 1000;
     options.ConnectRetry = 1;
@@ -86,6 +87,9 @@ builder.Services.AddSingleton<PackageRepository>();
 builder.Services.AddSingleton<PackageCatalogService>();
 builder.Services.AddSingleton<OrderRepository>();
 builder.Services.AddSingleton<PaymentSignatureService>();
+builder.Services.AddSingleton<PaymentNotificationRepository>();
+builder.Services.AddSingleton<IPaymentEventTransport, RabbitPaymentEventTransport>();
+builder.Services.AddHostedService<BillingPaymentEventPublisher>();
 builder.Services.AddSingleton<OrderService>();
 builder.Services.AddSingleton<BillingOwnerAuthorizer>();
 builder.Services.AddSingleton<CreditReservationRepository>();
@@ -139,6 +143,8 @@ app.Use(async (context, next) =>
     await next();
 });
 
+app.UseAuraPrometheusMetrics();
+
 app.UseSwagger();
 app.UseSwaggerUI();
 
@@ -176,6 +182,7 @@ await app.Services.GetRequiredService<CreditReservationRepository>()
     .VerifyDatabaseAsync(CancellationToken.None);
 
 app.MapHealthChecks("/health");
+app.MapAuraMetrics();
 
 // Public package catalog remains anonymous and continues to read the legacy PoC catalog.
 app.MapGet("/api/v1/billing/packages", async (
@@ -261,7 +268,7 @@ app.MapPost("/api/v1/billing/orders", async Task<IResult> (
     request=request with {TenantId=authority.TenantId};
 
     var result = await orderService.CreateOrderAsync(
-        request, idempotencyKey, runtimeOptions, cancellationToken);
+        request, idempotencyKey, runtimeOptions, cancellationToken, authority.AccountId);
 
     if (result.Status == OrderOperationStatus.PackageNotFound)
     {
@@ -317,6 +324,18 @@ app.MapGet("/api/v1/billing/orders/{orderId:guid}", async Task<IResult> (
 .WithTags("Billing Orders")
 .Produces<OrderRecord>(StatusCodes.Status200OK)
 .Produces(StatusCodes.Status404NotFound);
+
+app.MapPost("/internal/v1/billing/notification-context/resolve", async Task<IResult> (
+    PaymentNotificationRequest request, HttpContext context, ServiceTokenValidator tokens,
+    PaymentNotificationRepository events, CancellationToken ct) =>
+{
+    var token = await tokens.ValidateAsync(context.Request, "billing:notify", "notification-api", ct);
+    if (!token.Succeeded) return BillingError(context, token.StatusCode, token.Code, token.Message, token.Retryable);
+    if (request.EventId == Guid.Empty || request.OrderId == Guid.Empty || request.TenantId == Guid.Empty)
+        return BillingError(context, 400, "ERR_VALIDATION", "Event, order and tenant identities are required.");
+    var resolved = await events.ResolveAsync(request, ct);
+    return resolved is null ? BillingError(context, 404, "ERR_NOT_FOUND", "Payment event not applicable.") : Results.Ok(resolved);
+}).WithName("ResolvePaymentNotificationContext").WithTags("Billing Internal");
 
 app.MapPost("/api/v1/billing/payments/callback", async Task<IResult> (
     PaymentCallbackPayload payload,
@@ -761,7 +780,5 @@ app.MapPost("/internal/v1/billing/reconcile-stale", async Task<IResult> (
 .WithName("TriggerStaleReconciliation")
 .WithTags("Billing Internal")
 .Produces<ReconciliationReport>(StatusCodes.Status200OK);
-
-app.UseAuraPrometheusMetrics();
 
 app.Run();

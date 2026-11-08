@@ -26,6 +26,7 @@ function asInboxError(cause: unknown): InboxError {
 const notificationLabels: Record<InboxNotification['type'], string> = {
   ANALYSIS_COMPLETED: 'Phân tích hoàn tất',
   ANALYSIS_FAILED: 'Phân tích thất bại',
+  PAYMENT_SUCCESS: 'Thanh toán thành công',
 }
 
 /** Mỗi phiên có state riêng; không giữ thông báo khi đổi tài khoản. */

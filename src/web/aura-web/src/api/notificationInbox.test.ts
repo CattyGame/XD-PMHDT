@@ -44,6 +44,16 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('SCRUM-333 — Notification Inbox client', () => {
+  it('accepts canonical payment links and rejects mixed or foreign identities', () => {
+    const payment = { ...notification, analysisId: null, orderId: analysisId,
+      type: 'PAYMENT_SUCCESS', targetPath: `/billing/orders/${analysisId}` }
+    expect(parseInboxPage({ items: [payment], nextCursor: null }).items[0]).toMatchObject(payment)
+    for (const invalid of [
+      { ...payment, analysisId }, { ...payment, orderId: null },
+      { ...payment, targetPath: `/billing/orders/${eventId}` },
+      { ...payment, targetPath: `https://evil.example/billing/orders/${analysisId}` },
+    ]) expect(() => parseInboxPage({ items: [invalid], nextCursor: null })).toThrow(InboxError)
+  })
   it('lists only the current account inbox with bearer, without an account selector', async () => {
     const data = await getInboxPage(context, { limit: 20, unreadOnly: true })
     expect(data.items[0]).toMatchObject({ notificationId, isRead: false,
