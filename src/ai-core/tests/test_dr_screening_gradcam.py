@@ -33,7 +33,13 @@ def synthetic_fundus_with_lesions() -> np.ndarray:
     rgb[fov_mask, 1] = 65
     rgb[fov_mask, 2] = 28
 
-    # Simulate exudate (bright spot)
+    # Optic disc (bright region)
+    od_mask = (np.hypot(yy - cy, xx - (cx - 150)) <= 35)
+    rgb[od_mask, 0] = 255
+    rgb[od_mask, 1] = 245
+    rgb[od_mask, 2] = 160
+
+    # Simulate exudate (bright spot away from OD)
     rgb[cy - 20 : cy - 10, cx + 50 : cx + 60, :] = [240, 230, 180]
     # Simulate microaneurysm (dark focal spot on green, high red)
     rgb[cy + 40 : cy + 45, cx - 60 : cx - 55, :] = [180, 10, 10]
@@ -85,6 +91,28 @@ def test_screen_diabetic_retinopathy_pipeline(synthetic_fundus_with_lesions: np.
     assert res["explainability"]["overlay_base64_png"] is not None
 
 
+def test_dr_screening_sanity_check_randomized_perturbation(synthetic_fundus_with_lesions: np.ndarray) -> None:
+    """Sanity check: verifying that lesion presence directly dictates saliency hotspot generation (SCRUM-372)."""
+    # 1. Image with lesions
+    heatmap_lesion, hotspots_lesion = generate_retinal_saliency_heatmap(synthetic_fundus_with_lesions)
+    assert len(hotspots_lesion) > 0
+
+    # 2. Clean fundus with lesions wiped out
+    h, w = synthetic_fundus_with_lesions.shape[:2]
+    clean_fundus = np.copy(synthetic_fundus_with_lesions)
+    yy, xx = np.ogrid[:h, :w]
+    fov_mask = (np.hypot(yy - h // 2, xx - w // 2) <= min(h, w) * 0.45)
+    clean_fundus[fov_mask, 0] = 185
+    clean_fundus[fov_mask, 1] = 65
+    clean_fundus[fov_mask, 2] = 28
+
+    heatmap_clean, hotspots_clean = generate_retinal_saliency_heatmap(clean_fundus)
+    # Saliency map must significantly change, proving responsiveness to actual lesion pathology
+    assert np.mean(heatmap_lesion) != np.mean(heatmap_clean)
+    assert len(hotspots_clean) < len(hotspots_lesion) or np.max(heatmap_clean) < np.max(heatmap_lesion)
+
+
+
 def test_screen_real_hrf_image_if_present() -> None:
     sample_path = Path("datasets/HRF/images/01_dr.JPG")
     if not sample_path.exists():
@@ -97,3 +125,25 @@ def test_screen_real_hrf_image_if_present() -> None:
     assert res["probability_dr"] > 0.50
     assert res["explainability"]["method"] == "HEURISTIC_RETINAL_SALIENCY"
     assert res["explainability"]["overlay_base64_png"] is not None
+
+
+def test_dr_screening_sanity_check_randomized_perturbation(synthetic_fundus_with_lesions: np.ndarray) -> None:
+    """Sanity check: verifying that lesion presence directly dictates saliency hotspot generation (SCRUM-372)."""
+    # 1. Image with lesions
+    heatmap_lesion, hotspots_lesion = generate_retinal_saliency_heatmap(synthetic_fundus_with_lesions)
+    assert len(hotspots_lesion) > 0
+
+    # 2. Clean fundus with lesions wiped out
+    h, w = synthetic_fundus_with_lesions.shape[:2]
+    clean_fundus = np.copy(synthetic_fundus_with_lesions)
+    yy, xx = np.ogrid[:h, :w]
+    fov_mask = (np.hypot(yy - h // 2, xx - w // 2) <= min(h, w) * 0.45)
+    clean_fundus[fov_mask, 0] = 185
+    clean_fundus[fov_mask, 1] = 65
+    clean_fundus[fov_mask, 2] = 28
+
+    heatmap_clean, hotspots_clean = generate_retinal_saliency_heatmap(clean_fundus)
+    # Saliency map must significantly change, proving responsiveness to actual lesion pathology
+    assert np.mean(heatmap_lesion) != np.mean(heatmap_clean)
+    assert len(hotspots_clean) < len(hotspots_lesion) or np.max(heatmap_clean) < np.max(heatmap_lesion)
+

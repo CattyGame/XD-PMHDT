@@ -28,6 +28,7 @@ from scipy.ndimage import (
 
 DEFAULT_WEIGHTS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "dr_screening_weights.json"
 DISCLAIMER_TEXT = (
+    "Phân loại nhị phân nguy cơ bệnh võng mạc đái tháo đường (DR Suspected vs Normal) dựa trên tập dữ liệu HRF. "
     "DISCLAIMER: Binary Diabetic Retinopathy screening tool (Referable DR vs Low Risk). "
     "NOT an ICDR 5-stage clinical diagnosis. HRF dataset lacks multi-stage ground truth. "
     "Clinical diagnosis must be confirmed by an ophthalmologist."
