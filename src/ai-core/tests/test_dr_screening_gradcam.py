@@ -112,7 +112,6 @@ def test_dr_screening_sanity_check_randomized_perturbation(synthetic_fundus_with
     assert len(hotspots_clean) < len(hotspots_lesion) or np.max(heatmap_clean) < np.max(heatmap_lesion)
 
 
-
 def test_screen_real_hrf_image_if_present() -> None:
     sample_path = Path("datasets/HRF/images/01_dr.JPG")
     if not sample_path.exists():
@@ -146,4 +145,3 @@ def test_dr_screening_sanity_check_randomized_perturbation(synthetic_fundus_with
     # Saliency map must significantly change, proving responsiveness to actual lesion pathology
     assert np.mean(heatmap_lesion) != np.mean(heatmap_clean)
     assert len(hotspots_clean) < len(hotspots_lesion) or np.max(heatmap_clean) < np.max(heatmap_lesion)
-

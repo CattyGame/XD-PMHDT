@@ -137,6 +137,3 @@ def test_service_jwt_fails_closed_when_auth_configured(monkeypatch):
             json={"request_id": "req-bad-token", "image_base64": "invalid"},
         )
         assert res_bad_token.status_code in (401, 403)
-
-
-
