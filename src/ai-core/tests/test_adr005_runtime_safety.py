@@ -80,3 +80,63 @@ def test_real_pipeline_black_image_abstains_before_segmentation_or_risk(monkeypa
         process_frangi_analysis(request, FrangiRuntimeConfig(risk_available=True))
     assert error.value.report.is_acceptable is False
     assert segmentation == []
+
+
+def test_oct_modality_canonical_rejection_code(monkeypatch):
+    """Verify SCRUM-352 canonical boundary: modality='OCT' fails with 422 UNSUPPORTED_MODALITY."""
+    monkeypatch.setenv("AURA_RUNTIME_MODE", "TEST")
+    monkeypatch.setenv("AURA_AI_ENGINE", "mock")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "true")
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 48), color=(80, 40, 20)).save(buffer, format="PNG")
+    valid_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/analyze",
+            json={
+                "request_id": str(uuid.uuid4()),
+                "image_base64": valid_b64,
+                "modality": "OCT",
+            },
+        )
+        assert response.status_code == 422
+        payload = response.json()
+        assert payload["error_code"] == "UNSUPPORTED_MODALITY"
+        assert "OCT" in payload["message"]
+        assert "FUNDUS" in payload["details"]["supported_modalities"]
+
+
+def test_service_jwt_fails_closed_when_auth_configured(monkeypatch):
+    """Verify SCRUM-352 fail-closed service JWT boundary: missing/forged tokens are rejected."""
+    from tests.test_frangi_sprint3 import generate_deterministic_rsa_keypair
+
+    keypair = generate_deterministic_rsa_keypair(seed=20261028, bits=2048)
+
+    monkeypatch.setenv("AURA_AI_ENGINE", "frangi")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "false")
+    monkeypatch.setenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM", keypair.public_pem)
+    monkeypatch.delenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPath", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPem", raising=False)
+
+    with TestClient(app) as client:
+        # Request with missing token
+        res_no_auth = client.post(
+            "/api/v1/analyze",
+            json={"request_id": "req-no-auth", "image_base64": "invalid"},
+        )
+        assert res_no_auth.status_code in (401, 403)
+        assert res_no_auth.json()["error_code"] == "UNAUTHORIZED_SERVICE_TOKEN"
+
+        # Request with forged bearer token
+        res_bad_token = client.post(
+            "/api/v1/analyze",
+            headers={"Authorization": "Bearer forged-token.fake.signature"},
+            json={"request_id": "req-bad-token", "image_base64": "invalid"},
+        )
+        assert res_bad_token.status_code in (401, 403)
+
+
+
