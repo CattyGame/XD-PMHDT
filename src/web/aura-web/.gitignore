@@ -25,3 +25,7 @@ dist-ssr
 
 # Generated for the selected Firebase environment by build:sw.
 /public/firebase-messaging-sw.js
+
+# Playwright artifacts
+/playwright-report/
+/test-results/
