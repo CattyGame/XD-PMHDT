@@ -1,0 +1,506 @@
+{
+  "dataset": "CHASE_DB1 Complete Set (28 images)",
+  "evaluation_timestamp": "2026-11-08T18:47:22.873904+00:00",
+  "total_images": 28,
+  "total_time_seconds": 113.97,
+  "mean_latency_ms": 4061.23,
+  "mean_dice": 0.401484,
+  "std_dice": 0.033728,
+  "mean_iou": 0.251719,
+  "std_iou": 0.026487,
+  "mean_sensitivity": 0.402532,
+  "std_sensitivity": 0.084409,
+  "mean_specificity": 0.955629,
+  "std_specificity": 0.022063,
+  "frozen_parameters": {
+    "sigmas": [
+      1,
+      2,
+      3,
+      5,
+      8
+    ],
+    "smoothing_sigma": 1.0,
+    "threshold": 0.02,
+    "region_threshold": 20,
+    "erosion_iterations": 12
+  },
+  "per_image": [
+    {
+      "subject_id": "01",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_01L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_01L_1stHO.png",
+      "latency_ms": 3953.48,
+      "metrics": {
+        "dice": 0.424641,
+        "iou": 0.269552,
+        "sensitivity": 0.385602,
+        "specificity": 0.967723,
+        "tp": 25791,
+        "fp": 28796,
+        "fn": 41094,
+        "tn": 863359
+      }
+    },
+    {
+      "subject_id": "01",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_01R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_01R_1stHO.png",
+      "latency_ms": 4020.13,
+      "metrics": {
+        "dice": 0.398377,
+        "iou": 0.248733,
+        "sensitivity": 0.334235,
+        "specificity": 0.971747,
+        "tp": 24345,
+        "fp": 25038,
+        "fn": 48493,
+        "tn": 861164
+      }
+    },
+    {
+      "subject_id": "02",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_02L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_02L_1stHO.png",
+      "latency_ms": 4004.54,
+      "metrics": {
+        "dice": 0.40457,
+        "iou": 0.25358,
+        "sensitivity": 0.412041,
+        "specificity": 0.944816,
+        "tp": 32065,
+        "fp": 48629,
+        "fn": 45755,
+        "tn": 832591
+      }
+    },
+    {
+      "subject_id": "02",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_02R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_02R_1stHO.png",
+      "latency_ms": 4012.72,
+      "metrics": {
+        "dice": 0.383643,
+        "iou": 0.23735,
+        "sensitivity": 0.466003,
+        "specificity": 0.918401,
+        "tp": 34899,
+        "fp": 72146,
+        "fn": 39991,
+        "tn": 812004
+      }
+    },
+    {
+      "subject_id": "03",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_03L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_03L_1stHO.png",
+      "latency_ms": 4301.77,
+      "metrics": {
+        "dice": 0.37481,
+        "iou": 0.230626,
+        "sensitivity": 0.265945,
+        "specificity": 0.986971,
+        "tp": 19998,
+        "fp": 11516,
+        "fn": 55198,
+        "tn": 872328
+      }
+    },
+    {
+      "subject_id": "03",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_03R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_03R_1stHO.png",
+      "latency_ms": 4238.26,
+      "metrics": {
+        "dice": 0.418386,
+        "iou": 0.264531,
+        "sensitivity": 0.360973,
+        "specificity": 0.970221,
+        "tp": 26142,
+        "fp": 26403,
+        "fn": 46279,
+        "tn": 860216
+      }
+    },
+    {
+      "subject_id": "04",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_04L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_04L_1stHO.png",
+      "latency_ms": 4325.04,
+      "metrics": {
+        "dice": 0.404332,
+        "iou": 0.253394,
+        "sensitivity": 0.411984,
+        "specificity": 0.946774,
+        "tp": 30968,
+        "fp": 47045,
+        "fn": 44200,
+        "tn": 836827
+      }
+    },
+    {
+      "subject_id": "04",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_04R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_04R_1stHO.png",
+      "latency_ms": 4052.17,
+      "metrics": {
+        "dice": 0.366816,
+        "iou": 0.224602,
+        "sensitivity": 0.331748,
+        "specificity": 0.960215,
+        "tp": 24491,
+        "fp": 35218,
+        "fn": 49333,
+        "tn": 849998
+      }
+    },
+    {
+      "subject_id": "05",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_05L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_05L_1stHO.png",
+      "latency_ms": 4114.96,
+      "metrics": {
+        "dice": 0.417296,
+        "iou": 0.26366,
+        "sensitivity": 0.491816,
+        "specificity": 0.925586,
+        "tp": 37349,
+        "fp": 65715,
+        "fn": 38592,
+        "tn": 817384
+      }
+    },
+    {
+      "subject_id": "05",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_05R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_05R_1stHO.png",
+      "latency_ms": 4276.27,
+      "metrics": {
+        "dice": 0.445771,
+        "iou": 0.286812,
+        "sensitivity": 0.580728,
+        "specificity": 0.904618,
+        "tp": 47424,
+        "fp": 83686,
+        "fn": 34239,
+        "tn": 793691
+      }
+    },
+    {
+      "subject_id": "06",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_06L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_06L_1stHO.png",
+      "latency_ms": 4174.38,
+      "metrics": {
+        "dice": 0.405343,
+        "iou": 0.254189,
+        "sensitivity": 0.439465,
+        "specificity": 0.940271,
+        "tp": 31921,
+        "fp": 52944,
+        "fn": 40715,
+        "tn": 833460
+      }
+    },
+    {
+      "subject_id": "06",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_06R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_06R_1stHO.png",
+      "latency_ms": 4026.99,
+      "metrics": {
+        "dice": 0.402334,
+        "iou": 0.251826,
+        "sensitivity": 0.454882,
+        "specificity": 0.934779,
+        "tp": 32646,
+        "fp": 57869,
+        "fn": 39122,
+        "tn": 829403
+      }
+    },
+    {
+      "subject_id": "07",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_07L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_07L_1stHO.png",
+      "latency_ms": 4022.4,
+      "metrics": {
+        "dice": 0.420627,
+        "iou": 0.266325,
+        "sensitivity": 0.382134,
+        "specificity": 0.96327,
+        "tp": 28545,
+        "fp": 32482,
+        "fn": 46154,
+        "tn": 851859
+      }
+    },
+    {
+      "subject_id": "07",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_07R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_07R_1stHO.png",
+      "latency_ms": 4016.94,
+      "metrics": {
+        "dice": 0.354373,
+        "iou": 0.215342,
+        "sensitivity": 0.259991,
+        "specificity": 0.982926,
+        "tp": 18971,
+        "fp": 15129,
+        "fn": 53997,
+        "tn": 870943
+      }
+    },
+    {
+      "subject_id": "08",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_08L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_08L_1stHO.png",
+      "latency_ms": 3987.53,
+      "metrics": {
+        "dice": 0.404086,
+        "iou": 0.253201,
+        "sensitivity": 0.571389,
+        "specificity": 0.913105,
+        "tp": 35441,
+        "fp": 77946,
+        "fn": 26585,
+        "tn": 819068
+      }
+    },
+    {
+      "subject_id": "08",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_08R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_08R_1stHO.png",
+      "latency_ms": 3972.97,
+      "metrics": {
+        "dice": 0.38736,
+        "iou": 0.240202,
+        "sensitivity": 0.53521,
+        "specificity": 0.916671,
+        "tp": 32613,
+        "fp": 74838,
+        "fn": 28322,
+        "tn": 823267
+      }
+    },
+    {
+      "subject_id": "09",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_09L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_09L_1stHO.png",
+      "latency_ms": 4013.04,
+      "metrics": {
+        "dice": 0.434233,
+        "iou": 0.27733,
+        "sensitivity": 0.444914,
+        "specificity": 0.967796,
+        "tp": 21589,
+        "fp": 29322,
+        "fn": 26935,
+        "tn": 881194
+      }
+    },
+    {
+      "subject_id": "09",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_09R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_09R_1stHO.png",
+      "latency_ms": 4073.97,
+      "metrics": {
+        "dice": 0.468688,
+        "iou": 0.30607,
+        "sensitivity": 0.467195,
+        "specificity": 0.971765,
+        "tp": 22808,
+        "fp": 25700,
+        "fn": 26011,
+        "tn": 884521
+      }
+    },
+    {
+      "subject_id": "10",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_10L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_10L_1stHO.png",
+      "latency_ms": 4034.15,
+      "metrics": {
+        "dice": 0.332417,
+        "iou": 0.199341,
+        "sensitivity": 0.291947,
+        "specificity": 0.968954,
+        "tp": 17539,
+        "fp": 27909,
+        "fn": 42537,
+        "tn": 871055
+      }
+    },
+    {
+      "subject_id": "10",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_10R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_10R_1stHO.png",
+      "latency_ms": 3889.36,
+      "metrics": {
+        "dice": 0.368512,
+        "iou": 0.225875,
+        "sensitivity": 0.375874,
+        "specificity": 0.956176,
+        "tp": 22316,
+        "fp": 39427,
+        "fn": 37055,
+        "tn": 860242
+      }
+    },
+    {
+      "subject_id": "11",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_11L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_11L_1stHO.png",
+      "latency_ms": 4060.48,
+      "metrics": {
+        "dice": 0.45417,
+        "iou": 0.293803,
+        "sensitivity": 0.490992,
+        "specificity": 0.962211,
+        "tp": 25099,
+        "fp": 34309,
+        "fn": 26020,
+        "tn": 873612
+      }
+    },
+    {
+      "subject_id": "11",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_11R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_11R_1stHO.png",
+      "latency_ms": 4153.79,
+      "metrics": {
+        "dice": 0.454909,
+        "iou": 0.294422,
+        "sensitivity": 0.42982,
+        "specificity": 0.9741,
+        "tp": 21978,
+        "fp": 23515,
+        "fn": 29155,
+        "tn": 884392
+      }
+    },
+    {
+      "subject_id": "12",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_12L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_12L_1stHO.png",
+      "latency_ms": 3968.47,
+      "metrics": {
+        "dice": 0.35588,
+        "iou": 0.216456,
+        "sensitivity": 0.289851,
+        "specificity": 0.9737,
+        "tp": 20009,
+        "fp": 23407,
+        "fn": 49023,
+        "tn": 866601
+      }
+    },
+    {
+      "subject_id": "12",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_12R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_12R_1stHO.png",
+      "latency_ms": 4054.5,
+      "metrics": {
+        "dice": 0.401919,
+        "iou": 0.251501,
+        "sensitivity": 0.38751,
+        "specificity": 0.957097,
+        "tp": 27316,
+        "fp": 38121,
+        "fn": 43175,
+        "tn": 850428
+      }
+    },
+    {
+      "subject_id": "13",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_13L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_13L_1stHO.png",
+      "latency_ms": 3932.78,
+      "metrics": {
+        "dice": 0.365643,
+        "iou": 0.223723,
+        "sensitivity": 0.311457,
+        "specificity": 0.9743,
+        "tp": 18371,
+        "fp": 23131,
+        "fn": 40613,
+        "tn": 876925
+      }
+    },
+    {
+      "subject_id": "13",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_13R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_13R_1stHO.png",
+      "latency_ms": 4051.46,
+      "metrics": {
+        "dice": 0.368648,
+        "iou": 0.225977,
+        "sensitivity": 0.347596,
+        "specificity": 0.963683,
+        "tp": 21073,
+        "fp": 32628,
+        "fn": 39552,
+        "tn": 865787
+      }
+    },
+    {
+      "subject_id": "14",
+      "eye_side": "L",
+      "image": "datasets/CHASE_DB1/raw/Image_14L.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_14L_1stHO.png",
+      "latency_ms": 4063.96,
+      "metrics": {
+        "dice": 0.44364,
+        "iou": 0.28505,
+        "sensitivity": 0.397164,
+        "specificity": 0.970926,
+        "tp": 26218,
+        "fp": 25964,
+        "fn": 39795,
+        "tn": 867063
+      }
+    },
+    {
+      "subject_id": "14",
+      "eye_side": "R",
+      "image": "datasets/CHASE_DB1/raw/Image_14R.jpg",
+      "mask_1st": "datasets/CHASE_DB1/raw/Image_14R_1stHO.png",
+      "latency_ms": 3917.86,
+      "metrics": {
+        "dice": 0.380138,
+        "iou": 0.234673,
+        "sensitivity": 0.352421,
+        "specificity": 0.96882,
+        "tp": 19774,
+        "fp": 28153,
+        "fn": 36335,
+        "tn": 874778
+      }
+    }
+  ]
+}

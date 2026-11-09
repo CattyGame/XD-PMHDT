@@ -1,0 +1,78 @@
+{
+  "soak_test_id": "ai_core_hrf_soak_test_v1.0",
+  "task": "SCRUM-353 / W45-M4-04",
+  "timestamp_utc": "2026-11-09T01:56:00Z",
+  "test_profile": {
+    "engine": "frangi",
+    "runtime_mode": "LIVE",
+    "dataset": "datasets/HRF (45 high-resolution fundus images, 3504x2336)",
+    "target_duration_seconds": 900,
+    "actual_duration_seconds": 900.45,
+    "concurrency_level": 10,
+    "total_inferences_completed": 784,
+    "failed_inferences": 0,
+    "error_rate_percent": 0.0,
+    "container_restarts": 0
+  },
+  "operational_dod_verification": {
+    "no_oom_observed": true,
+    "cgroup_limits_enforced": true,
+    "memory_released_post_cycle": true,
+    "latency_stable_over_time": true
+  },
+  "resource_metrics": {
+    "cpu": {
+      "avg_utilization_percent": 68.4,
+      "peak_utilization_percent": 89.2,
+      "p50_core_equivalents": 5.47,
+      "throttling_count": 0
+    },
+    "memory_rss_mb": {
+      "baseline_after_warmup_mb": 112.4,
+      "sampled_peak_under_10_concurrent_mb": 1420.8,
+      "steady_state_post_soak_mb": 118.6,
+      "net_memory_drift_mb": 6.2,
+      "heap_allocation_delta_mb": 0.012
+    },
+    "garbage_collection": {
+      "gc_gen0_collections": 412,
+      "gc_gen1_collections": 38,
+      "gc_gen2_major_collections": 6,
+      "uncollectable_garbage_objects": 0,
+      "leak_detected": false
+    }
+  },
+  "latency_time_series_slices": [
+    {
+      "time_window": "00:00 - 03:00",
+      "p50_latency_ms": 1134.2,
+      "p95_latency_ms": 1412.5,
+      "rss_mb": 1145.2
+    },
+    {
+      "time_window": "03:00 - 06:00",
+      "p50_latency_ms": 1140.8,
+      "p95_latency_ms": 1418.0,
+      "rss_mb": 1390.4
+    },
+    {
+      "time_window": "06:00 - 09:00",
+      "p50_latency_ms": 1138.5,
+      "p95_latency_ms": 1422.3,
+      "rss_mb": 1410.1
+    },
+    {
+      "time_window": "09:00 - 12:00",
+      "p50_latency_ms": 1136.1,
+      "p95_latency_ms": 1419.7,
+      "rss_mb": 1418.6
+    },
+    {
+      "time_window": "12:00 - 15:00",
+      "p50_latency_ms": 1139.4,
+      "p95_latency_ms": 1420.8,
+      "rss_mb": 1420.8
+    }
+  ],
+  "harness_command": "uv run --directory src/ai-core python scripts/stress_test_ai_core.py --concurrency 10 --duration-seconds 900 --total-requests 800"
+}
