@@ -66,9 +66,9 @@ describe('Versioned staged upload against one persisted batch', () => {
     expect(items.every(x => /^[a-f0-9]{64}$/.test(x.sha256))).toBe(true)
     expect(new Set(items.map(x => x.itemId)).size).toBe(100)
   })
-  it('clamps requested concurrency to6 without exceeding a single-image body', async () => {
+  it('caps requested concurrency at 4 while still sending one image per request', async () => {
     await sendItemUploadAttempt(createUploadAttempt(context, Array.from({ length: 12 }, (_, i) => image(i)), 'left'), { concurrency: 99 })
-    expect(peak).toBe(6)
+    expect(peak).toBe(4)
   })
   it('binds one clinic selector while preserving different patient/eye metadata per item', async () => {
     const clinicId = '11111111-1111-4111-8111-000000009999'
@@ -93,7 +93,7 @@ describe('Versioned staged upload against one persisted batch', () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(1)
     expect(finalized).toBe(true)
   })
-  it('waits for siblings, preserves inventory, and retry sends only DECLARED items', async () => {
+  it('continues the queue after one lost connection and retries only the unsaved item', async () => {
     let failed = false
     fetchMock.mockImplementation(async (url, init) => {
       if (init?.method === 'PUT' && !failed) { failed = true; throw new TypeError('Connection lost before acceptance') }
@@ -103,9 +103,11 @@ describe('Versioned staged upload against one persisted batch', () => {
     await expect(sendItemUploadAttempt(attempt)).rejects.toMatchObject({ code: 'ERR_NETWORK' })
     expect(active).toBe(0)
     const stagedIds = new Set(items.filter(x => x.uploadStatus === 'STAGED').map(x => x.itemId))
+    expect(stagedIds.size).toBe(7)
     const callCount = fetchMock.mock.calls.length
     await sendItemUploadAttempt(attempt)
     const retriedPuts = fetchMock.mock.calls.slice(callCount).filter(([, init]) => init?.method === 'PUT')
+    expect(retriedPuts).toHaveLength(1)
     expect(String(fetchMock.mock.calls[callCount][0])).toBe(`/api/v1/analysis-upload-batches/${batchId}`)
     expect(retriedPuts.every(([url]) => !stagedIds.has(String(url).split('/').at(-1)!))).toBe(true)
     expect(finalized).toBe(true)
@@ -164,5 +166,62 @@ describe('Versioned staged upload against one persisted batch', () => {
       .rejects.toMatchObject({ code: 'ERR_UPLOAD_EXPIRED', status: 410, canRetry: false, disposition: 'rejected' })
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(0)
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/finalize'))).toHaveLength(0)
+  })
+  it('retries only the requested item, then finalizes once after all failed items are saved', async () => {
+    let fail = true
+    fetchMock.mockImplementation(async (url, init) => {
+      if (fail && init?.method === 'PUT' && (init.body as FormData).get('image') instanceof File &&
+        ((init.body as FormData).get('image') as File).name !== 'retina-2.png') {
+        return json({ error: { code: 'ERR_NETWORK' } }, 500)
+      }
+      return server(url, init)
+    })
+    const attempt = createUploadAttempt(context, [image(0), image(1), image(2)], 'left')
+    const onItemState = vi.fn()
+    await expect(sendItemUploadAttempt(attempt, { onItemState })).rejects.toMatchObject({ status: 500 })
+    expect(onItemState.mock.calls.filter(([, state]) => state.phase === 'failed')).toHaveLength(2)
+    fail = false
+    const start = fetchMock.mock.calls.length
+    expect(await sendItemUploadAttempt(attempt, { retryItemId: items[0].itemId })).toBeUndefined()
+    expect(fetchMock.mock.calls.slice(start).filter(([, init]) => init?.method === 'PUT').map(([url]) => url))
+      .toEqual([`/api/v1/analysis-upload-batches/${batchId}/items/${items[0].itemId}`])
+    expect(finalized).toBe(false)
+    await expect(sendItemUploadAttempt(attempt, { retryItemId: items[1].itemId })).resolves.toMatchObject({ batchId })
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/finalize'))).toHaveLength(1)
+  })
+  it.each([401, 403, 413, 429, 500])('marks a PUT HTTP %s on its own item and avoids finalization', async status => {
+    fetchMock.mockImplementation((url, init) => init?.method === 'PUT' ? Promise.resolve(json({}, status)) : server(url, init))
+    const onItemState = vi.fn()
+    await expect(sendItemUploadAttempt(createUploadAttempt(context, [image(0)], 'left'), { onItemState }))
+      .rejects.toMatchObject({ status })
+    expect(onItemState).toHaveBeenLastCalledWith(items[0].itemId, { phase: 'failed', error: expect.objectContaining({ status }) })
+    expect(finalized).toBe(false)
+  })
+  it('marks a timed-out PUT and reconciles without resending it automatically', async () => {
+    const deadline = new AbortController()
+    const original = AbortSignal.timeout
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => ms === 60_000 && items.length && !deadline.signal.aborted
+      ? deadline.signal : original.call(AbortSignal, ms))
+    fetchMock.mockImplementation((url, init) => {
+      if (init?.method !== 'PUT') return server(url, init)
+      queueMicrotask(() => deadline.abort(new DOMException('Deadline exceeded', 'TimeoutError')))
+      return new Promise(() => {})
+    })
+    await expect(sendItemUploadAttempt(createUploadAttempt(context, [image(0)], 'left')))
+      .rejects.toMatchObject({ code: 'ERR_TIMEOUT' })
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(1)
+    expect(finalized).toBe(false)
+  })
+  it('checks the server for an UNKNOWN admission without sending a PUT or billing finalization', async () => {
+    fetchMock.mockImplementation(async (url, init) => {
+      const response = await server(url, init)
+      const value = await response.json()
+      return json({ ...value, status: 'FINALIZING', items: items.map(item => ({ ...item, uploadStatus: 'UNKNOWN' })) }, response.status)
+    })
+    await expect(resumeItemUpload(context, batchId, [])).rejects.toMatchObject({ code: 'ERR_INVALID_RESPONSE' })
+    const attempt = createUploadAttempt(context, [image(0)], 'left')
+    await expect(sendItemUploadAttempt(attempt)).rejects.toMatchObject({ code: 'ERR_UPLOAD_RECONCILING' })
+    await expect(sendItemUploadAttempt(attempt)).rejects.toMatchObject({ code: 'ERR_UPLOAD_RECONCILING' })
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'POST', 'GET'])
   })
 })

@@ -1,15 +1,14 @@
 import { getFirebaseAuth } from '../firebase/config'
 import { isMockEnabled } from './client'
 import type { BackendContext } from './backendContext'
+import { matchesBulkImageFormat, MAX_BULK_FILE_BYTES, MAX_BULK_IMAGES } from './bulkUploadUi'
 import {
   UploadRequestError, parseUploadHttpError, parseUploadReceipt,
   type UploadAttempt, type UploadReceipt, type EyeSide,
 } from './analysisUpload'
 
 const BASE = '/api/v1/analysis-upload-batches'
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 export const DEFAULT_ITEM_CONCURRENCY = 4
-export const MAX_ITEM_CONCURRENCY = 6
 type UploadStatus = 'DECLARED' | 'STAGED' | 'REJECTED' | 'UNKNOWN' | 'ACCEPTED'
 export type UploadInventoryItem = Readonly<{
   itemId: string; patientId: string; fileName: string; sha256: string
@@ -24,7 +23,11 @@ export type UploadInventory = Readonly<{
 export type ItemUploadOptions = {
   clinicContextId?: string; concurrency?: number; signal?: AbortSignal
   onInventory?: (inventory: UploadInventory) => void
+  onItemState?: (itemId: string, state: ItemTransferState) => void
 }
+export type ItemTransferState = { phase: 'uploading' } | { phase: 'failed'; error: UploadRequestError } | { phase: 'settled' }
+type SingleItemOptions = ItemUploadOptions & { retryItemId: string }
+type TransferOptions = ItemUploadOptions & { retryItemId?: string }
 type Prepared = { items: readonly UploadInventoryItem[]; files: ReadonlyMap<string, File>; batchId?: string }
 const prepared = new WeakMap<UploadAttempt, Promise<Prepared>>()
 export type ClinicUploadSelection = Readonly<{ file: File; patientId: string; eyeSide: EyeSide }>
@@ -39,7 +42,7 @@ function inventory(payload: unknown, expectedId?: string): UploadInventory {
   if (!object(payload) || !uuid(payload.batchId) || (expectedId && payload.batchId !== expectedId) ||
     payload.statusUrl !== `/api/v1/batches/${payload.batchId}` || typeof payload.createdAt !== 'string' ||
     !Number.isFinite(Date.parse(payload.createdAt)) || !Array.isArray(payload.items) ||
-    payload.items.length < 1 || payload.items.length > 100) return invalid()
+    payload.items.length < 1 || payload.items.length > MAX_BULK_IMAGES) return invalid()
   const seen = new Set<string>()
   for (const item of payload.items) {
     if (!object(item) || !uuid(item.itemId) || seen.has(item.itemId) || !uuid(item.patientId) ||
@@ -72,18 +75,20 @@ async function operationId(value: string): Promise<string> {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 function validateFile(file: File) {
-  if (file.size < 1 || file.size > MAX_IMAGE_BYTES ||
-    (!['image/jpeg', 'image/png'].includes(file.type) && !/\.(jpe?g|png)$/i.test(file.name))) {
+  if (file.size < 1 || file.size > MAX_BULK_FILE_BYTES || !matchesBulkImageFormat(file)) {
     throw new UploadRequestError(0, 'ERR_INVALID_UPLOAD_DRAFT', 'not-sent', false)
   }
 }
-async function prepare(attempt: UploadAttempt): Promise<Prepared> {
+async function prepare(attempt: UploadAttempt, check: () => void): Promise<Prepared> {
   if (!uuid(attempt.key) || !uuid(attempt.context.patientId) || !eyes.includes(attempt.eyeSide) ||
-    !attempt.images.length || attempt.images.length > 100) throw new UploadRequestError(0, 'ERR_INVALID_UPLOAD_DRAFT', 'not-sent', false)
+    !attempt.images.length || attempt.images.length > MAX_BULK_IMAGES) throw new UploadRequestError(0, 'ERR_INVALID_UPLOAD_DRAFT', 'not-sent', false)
   const items: UploadInventoryItem[] = [], files = new Map<string, File>()
-  const selections = clinicSelections.get(attempt)?.selections ?? attempt.images.map(file => ({ file, patientId: attempt.context.patientId, eyeSide: attempt.eyeSide }))
+  const selections = clinicSelections.get(attempt)?.selections ?? attempt.images.map((file, index) => ({
+    file, patientId: attempt.context.patientId, eyeSide: attempt.itemEyeSides?.[index] ?? attempt.eyeSide,
+  }))
   // Hash sequentially to bound memory; no image bytes or patient metadata are persisted in browser storage.
   for (let i = 0; i < attempt.images.length; i++) {
+    check()
     const { file, patientId, eyeSide } = selections[i]
     if (!uuid(patientId) || !eyes.includes(eyeSide)) throw new UploadRequestError(0, 'ERR_INVALID_UPLOAD_DRAFT', 'not-sent', false)
     validateFile(file)
@@ -97,7 +102,7 @@ async function prepare(attempt: UploadAttempt): Promise<Prepared> {
 
 /** Clinic UI supplies per-image patient/eye metadata; server resolves membership and tenant authority. */
 export function createClinicItemUploadAttempt(context: BackendContext, clinicId: string, selections: readonly ClinicUploadSelection[]): UploadAttempt {
-  if (!uuid(clinicId) || !uuid(context.accountId) || !context.firebaseUid || !selections.length || selections.length > 100 ||
+  if (!uuid(clinicId) || !uuid(context.accountId) || !context.firebaseUid || !selections.length || selections.length > MAX_BULK_IMAGES ||
     selections.some(x => !uuid(x.patientId) || !eyes.includes(x.eyeSide))) {
     throw new UploadRequestError(0, 'ERR_INVALID_UPLOAD_DRAFT', 'not-sent', false)
   }
@@ -118,7 +123,7 @@ function transport(context: BackendContext, options: ItemUploadOptions) {
     if (auth.currentUser !== user || user.uid !== context.firebaseUid) throw new UploadRequestError(401, 'ERR_SESSION_CHANGED', 'uncertain', false)
   }
   const bounded = <T>(promise: Promise<T>, requestSignal: AbortSignal): Promise<T> => new Promise((resolve, reject) => {
-    const abort = () => reject(new UploadRequestError(0, 'ERR_UPLOAD_INTERRUPTED', 'uncertain', true))
+    const abort = () => reject(requestSignal.reason)
     if (requestSignal.aborted) { void promise.catch(() => {}); abort(); return }
     requestSignal.addEventListener('abort', abort, { once: true })
     promise.then(resolve, reject).finally(() => requestSignal.removeEventListener('abort', abort)).catch(() => {})
@@ -126,8 +131,9 @@ function transport(context: BackendContext, options: ItemUploadOptions) {
   const request = async (path: string, method: string, body?: BodyInit, key?: string): Promise<unknown> => {
     check()
     let sent = false
+    const deadline = AbortSignal.timeout(60_000)
+    const requestSignal = AbortSignal.any([signal, deadline])
     try {
-      const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(60_000)])
       const token = await bounded(user.getIdToken(), requestSignal)
       check()
       if (!token || /\s/.test(token)) throw new UploadRequestError(401, 'ERR_TOKEN_UNAVAILABLE', 'not-sent', false)
@@ -144,7 +150,7 @@ function transport(context: BackendContext, options: ItemUploadOptions) {
       return value
     } catch (cause) {
       if (cause instanceof UploadRequestError) throw cause
-      throw new UploadRequestError(0, signal.aborted ? 'ERR_UPLOAD_INTERRUPTED' : sent ? 'ERR_NETWORK' : 'ERR_TOKEN_UNAVAILABLE',
+      throw new UploadRequestError(0, signal.aborted ? 'ERR_UPLOAD_INTERRUPTED' : deadline.aborted ? 'ERR_TIMEOUT' : sent ? 'ERR_NETWORK' : 'ERR_TOKEN_UNAVAILABLE',
         sent ? 'uncertain' : 'not-sent', true)
     }
   }
@@ -161,7 +167,11 @@ function verifyManifest(actual: UploadInventory, expected: readonly UploadInvent
   }
 }
 
-async function finish(state: Prepared, initial: UploadInventory, context: BackendContext, options: ItemUploadOptions): Promise<UploadReceipt> {
+function awaitingAdmission(value: UploadInventory): boolean {
+  return value.status === 'FINALIZING' || value.items.some(item => item.uploadStatus === 'UNKNOWN')
+}
+
+async function finish(state: Prepared, initial: UploadInventory, context: BackendContext, options: TransferOptions): Promise<UploadReceipt | undefined> {
   const { request, check } = transport(context, options)
   let current = initial
   if (current.status === 'EXPIRED') throw new UploadRequestError(410, 'ERR_UPLOAD_EXPIRED', 'rejected', false)
@@ -170,25 +180,43 @@ async function finish(state: Prepared, initial: UploadInventory, context: Backen
   publish(current)
   const finalizeKey = await operationId(`${current.batchId}:finalize`)
   const template: UploadAttempt = { key: finalizeKey, context, eyeSide: 'unknown', images: current.items.map(() => ({} as File)) }
-  if (current.finalizedResponse) return parseUploadReceipt(current.finalizedResponse, template, true)
-  const pending = current.items.filter(x => x.uploadStatus === 'DECLARED')
+  const readReceipt = (payload: unknown, replayed: boolean) => {
+    const receipt = parseUploadReceipt(payload, template, replayed)
+    return receipt.batchId === initial.batchId ? receipt : invalid()
+  }
+  if (current.finalizedResponse) return readReceipt(current.finalizedResponse, true)
+  const reconcileAdmission = () => new UploadRequestError(409, 'ERR_UPLOAD_RECONCILING', 'uncertain', true)
+  if (awaitingAdmission(current)) throw reconcileAdmission()
+  const pending = current.items.filter(item => item.uploadStatus === 'DECLARED' &&
+    (!options.retryItemId || options.retryItemId === item.itemId))
   let cursor = 0, firstError: unknown
+  let stop = false
+  const failures = new Map<string, UploadRequestError>()
   const requested = options.concurrency ?? DEFAULT_ITEM_CONCURRENCY
-  const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, MAX_ITEM_CONCURRENCY) : DEFAULT_ITEM_CONCURRENCY
+  const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, DEFAULT_ITEM_CONCURRENCY) : DEFAULT_ITEM_CONCURRENCY
   const worker = async () => {
-    while (!firstError && cursor < pending.length) {
+    while (!stop && cursor < pending.length) {
       const item = pending[cursor++]
       try {
         check()
         const file = state.files.get(item.itemId)
         if (!file) throw new UploadRequestError(0, 'ERR_UPLOAD_FILES_REQUIRED', 'not-sent', true)
+        options.onItemState?.(item.itemId, { phase: 'uploading' })
         const form = new FormData(); form.append('image', file)
         const response = await request(`${BASE}/${current.batchId}/items/${item.itemId}`, 'PUT', form, item.itemId)
         if (!object(response) || response.itemId !== item.itemId) return invalid()
         const updated = inventory({ ...current, items: current.items.map(x => x.itemId === item.itemId ? response : x) }, current.batchId)
         verifyManifest(updated, state.items)
         publish(updated)
-      } catch (cause) { firstError ??= cause }
+        options.onItemState?.(item.itemId, { phase: 'settled' })
+      } catch (cause) {
+        const error = cause instanceof UploadRequestError ? cause : new UploadRequestError(0, 'ERR_NETWORK', 'uncertain', true)
+        failures.set(item.itemId, error)
+        firstError ??= error
+        stop ||= [401, 403, 404, 429].includes(error.status) || error.code === 'ERR_UPLOAD_INTERRUPTED' ||
+          (error.code === 'ERR_NETWORK' && globalThis.navigator?.onLine === false)
+        options.onItemState?.(item.itemId, { phase: 'failed', error })
+      }
     }
   }
   // Wait for every in-flight request. No sibling upload continues after this function returns.
@@ -197,15 +225,26 @@ async function finish(state: Prepared, initial: UploadInventory, context: Backen
   const reconciled = inventory(await request(`${BASE}/${current.batchId}`, 'GET'), current.batchId)
   verifyManifest(reconciled, state.items)
   publish(reconciled)
-  if (reconciled.finalizedResponse) return parseUploadReceipt(reconciled.finalizedResponse, template, true)
+  for (const item of reconciled.items) {
+    if (item.uploadStatus !== 'DECLARED' && failures.delete(item.itemId)) {
+      options.onItemState?.(item.itemId, { phase: 'settled' })
+    }
+  }
+  if (reconciled.finalizedResponse) return readReceipt(reconciled.finalizedResponse, true)
+  if (awaitingAdmission(reconciled)) throw reconcileAdmission()
   if (reconciled.items.some(x => x.uploadStatus === 'DECLARED')) {
+    const failure = failures.values().next().value
+    if (failure) throw failure
+    if (options.retryItemId) return undefined
     throw firstError ?? new UploadRequestError(0, 'ERR_UPLOAD_FILES_REQUIRED', 'not-sent', true)
   }
-  return parseUploadReceipt(await request(`${BASE}/${current.batchId}/finalize`, 'POST', '{}', finalizeKey), template, false)
+  return readReceipt(await request(`${BASE}/${current.batchId}/finalize`, 'POST', '{}', finalizeKey), false)
 }
 
 /** Versioned one-batch/item protocol. Retries reconcile persisted inventory before sending any item again. */
-export async function sendItemUploadAttempt(attempt: UploadAttempt, options: ItemUploadOptions = {}): Promise<UploadReceipt> {
+export function sendItemUploadAttempt(attempt: UploadAttempt, options: SingleItemOptions): Promise<UploadReceipt | undefined>
+export function sendItemUploadAttempt(attempt: UploadAttempt, options?: ItemUploadOptions): Promise<UploadReceipt>
+export async function sendItemUploadAttempt(attempt: UploadAttempt, options: TransferOptions = {}): Promise<UploadReceipt | undefined> {
   const clinic = clinicSelections.get(attempt)?.clinicId
   if (clinic) {
     if (options.clinicContextId && options.clinicContextId !== clinic) throw new UploadRequestError(0, 'ERR_INVALID_UPLOAD_DRAFT', 'not-sent', false)
@@ -213,7 +252,10 @@ export async function sendItemUploadAttempt(attempt: UploadAttempt, options: Ite
   }
   const { request, check } = transport(attempt.context, options)
   let promise = prepared.get(attempt)
-  if (!promise) { promise = prepare(attempt); prepared.set(attempt, promise) }
+  if (!promise) {
+    promise = prepare(attempt, check).catch(error => { prepared.delete(attempt); throw error })
+    prepared.set(attempt, promise)
+  }
   const state = await promise
   check()
   let current: UploadInventory
@@ -237,10 +279,16 @@ export async function loadUploadInventory(context: BackendContext, batchId: stri
 }
 
 /** F5 recovery: metadata stays server-side; reselected bytes are matched by checksum, never filename alone. */
-export async function resumeItemUpload(context: BackendContext, batchId: string, selectedFiles: readonly File[], options: ItemUploadOptions = {}): Promise<UploadReceipt> {
+export function resumeItemUpload(context: BackendContext, batchId: string, selectedFiles: readonly File[], options: SingleItemOptions): Promise<UploadReceipt | undefined>
+export function resumeItemUpload(context: BackendContext, batchId: string, selectedFiles: readonly File[], options?: ItemUploadOptions): Promise<UploadReceipt>
+export async function resumeItemUpload(context: BackendContext, batchId: string, selectedFiles: readonly File[], options: TransferOptions = {}): Promise<UploadReceipt | undefined> {
   const current = await loadUploadInventory(context, batchId, options)
   const files = new Map<string, File>(), hashes = new Map<string, File>()
-  for (const file of selectedFiles) { validateFile(file); hashes.set(await imageSha256(file), file) }
+  for (const file of selectedFiles) {
+    if (options.signal?.aborted) throw new UploadRequestError(0, 'ERR_UPLOAD_INTERRUPTED', 'uncertain', true)
+    validateFile(file)
+    hashes.set(await imageSha256(file), file)
+  }
   for (const item of current.items) { const file = hashes.get(item.sha256); if (file) files.set(item.itemId, file) }
   return finish({ items: current.items, files, batchId }, current, context, options)
 }

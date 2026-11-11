@@ -3,12 +3,15 @@ import {
   createUploadAttempt, UploadRequestError,
   type EyeSide, type UploadAttempt, type UploadReceipt,
 } from './analysisUpload'
-import { sendItemUploadAttempt, loadUploadInventory, resumeItemUpload, type UploadInventory } from './itemUpload'
+import { sendItemUploadAttempt, loadUploadInventory, resumeItemUpload, type ItemTransferState, type UploadInventory } from './itemUpload'
+import { bulkFileKey, matchesBulkImageFormat, MAX_BULK_FILE_BYTES, MAX_BULK_IMAGES } from './bulkUploadUi'
 
 export type UploadView = Readonly<{
   phase: 'editing' | 'validating' | 'restoring' | 'sending' | 'error' | 'accepted'
   images: readonly File[]
   eyeSide: EyeSide
+  eyesByFile: Readonly<Record<string, EyeSide>>
+  transfers: Readonly<Record<string, ItemTransferState>>
   attempt?: UploadAttempt
   receipt?: UploadReceipt
   error?: UploadRequestError
@@ -18,7 +21,9 @@ export type UploadView = Readonly<{
   resumeBatchId?: string
 }>
 
-const empty = (): UploadView => Object.freeze({ phase: 'editing', images: Object.freeze([]), eyeSide: 'left', uncertain: false })
+const empty = (): UploadView => Object.freeze({
+  phase: 'editing', images: Object.freeze([]), eyeSide: 'left', uncertain: false, eyesByFile: {}, transfers: {},
+})
 
 function createWorkspace(context: BackendContext) {
   let state = empty()
@@ -33,9 +38,12 @@ function createWorkspace(context: BackendContext) {
   const canReset = () => state.phase !== 'sending' && state.phase !== 'validating' && (
     state.phase === 'accepted' || (!state.attempt && !state.resumeBatchId) ||
     (!state.uncertain && ['not-sent', 'rejected'].includes(state.error?.disposition ?? '')))
+  const canRetryItems = () => state.phase === 'editing' ||
+    (state.phase === 'error' && ![401, 403, 404, 410].includes(state.error?.status ?? 0))
 
   function rememberBatch(batchId?: string) {
     const url = new URL(window.location.href)
+    if (url.searchParams.get('uploadBatchId') === (batchId ?? null)) return
     if (batchId) url.searchParams.set('uploadBatchId', batchId)
     else url.searchParams.delete('uploadBatchId')
     window.history.replaceState(window.history.state, '', url)
@@ -60,14 +68,14 @@ function createWorkspace(context: BackendContext) {
     if (state.attempt || state.phase === 'sending' || state.phase === 'restoring') return
     const revision = ++selection
     const files = [...input]
-    publish({ ...state, images: Object.freeze([]), phase: 'validating', validation: undefined, error: undefined })
+    publish({ ...state, images: Object.freeze([]), eyesByFile: {}, phase: 'validating', validation: undefined, error: undefined })
     let problem: string | undefined
-    if (files.length > 100) problem = 'Mỗi lần chỉ được chọn tối đa 100 ảnh.'
-    else if (files.some((file) => !['image/jpeg', 'image/png'].includes(file.type) && !/\.(jpe?g|png)$/i.test(file.name))) {
+    if (files.length > MAX_BULK_IMAGES) problem = 'Mỗi lần chỉ được chọn tối đa 100 ảnh.'
+    else if (files.some(file => !matchesBulkImageFormat(file))) {
       problem = 'Chỉ hỗ trợ ảnh JPG và PNG.'
-    } else if (files.some((file) => file.size <= 0 || file.size > 10 * 1024 * 1024)) {
+    } else if (files.some((file) => file.size <= 0 || file.size > MAX_BULK_FILE_BYTES)) {
       problem = 'Mỗi ảnh phải có dữ liệu và không được vượt quá 10 MB.'
-    }
+    } else if (new Set(files.map(bulkFileKey)).size !== files.length) problem = 'Danh sách chứa tệp trùng lặp.'
     if (!problem) {
       for (const file of files) {
         try {
@@ -95,20 +103,39 @@ function createWorkspace(context: BackendContext) {
     publish({ ...state, eyeSide })
   }
 
-  async function send() {
-    if (state.phase === 'sending' || state.phase === 'validating' || state.phase === 'accepted' ||
-      (state.phase === 'error' && !state.error?.canRetry)) return
+  function setImageEye(file: File, eyeSide: EyeSide) {
+    if (state.attempt || state.resumeBatchId || state.phase !== 'editing') return
+    publish({ ...state, eyesByFile: { ...state.eyesByFile, [bulkFileKey(file)]: eyeSide } })
+  }
+
+  function removeImage(file: File) {
+    if (state.attempt || state.phase !== 'editing') return
+    const eyesByFile = { ...state.eyesByFile }
+    delete eyesByFile[bulkFileKey(file)]
+    publish({ ...state, eyesByFile, images: state.images.filter(image => image !== file) })
+  }
+
+  async function send(retryItemId?: string) {
+    if (state.phase === 'sending' || state.phase === 'validating' || state.phase === 'restoring' || state.phase === 'accepted') return
+    if (retryItemId) {
+      const transfer = state.transfers[retryItemId]
+      if (!canRetryItems() || transfer?.phase !== 'failed' || !transfer.error.canRetry) return
+    } else if (state.phase === 'error' && !state.error?.canRetry) return
     if (!state.images.length && !state.resumeBatchId) {
       publish({ ...state, validation: 'Vui lòng chọn ít nhất một ảnh.' })
       return
     }
     let attempt: UploadAttempt | undefined
-    try { attempt = state.attempt ?? (state.resumeBatchId ? undefined : createUploadAttempt(context, state.images, state.eyeSide)) }
+    try {
+      attempt = state.attempt ?? (state.resumeBatchId ? undefined : createUploadAttempt(context, state.images, state.eyeSide,
+        state.images.map(file => state.eyesByFile[bulkFileKey(file)] ?? state.eyeSide)))
+    }
     catch {
       publish({ ...state, validation: 'Không tạo được lượt gửi cho hồ sơ hiện tại.' })
       return
     }
     const revision = ++run
+    const previousError = state.error
     controller = new AbortController()
     const signal = controller.signal
     publish({ ...state, attempt, phase: 'sending', error: undefined, validation: undefined })
@@ -118,11 +145,20 @@ function createWorkspace(context: BackendContext) {
         rememberBatch(inventory.batchId)
         publish({ ...state, inventory, resumeBatchId: inventory.batchId })
       }
-      const receipt = attempt
-        ? await sendItemUploadAttempt(attempt, { signal, onInventory })
-        : await resumeItemUpload(context, state.resumeBatchId!, state.images, { signal, onInventory })
+      const onItemState = (id: string, transfer: ItemTransferState) => {
+        if (revision === run) publish({ ...state, transfers: { ...state.transfers, [id]: transfer } })
+      }
+      const options = { signal, onInventory, onItemState }
+      const receipt = retryItemId
+        ? await (attempt ? sendItemUploadAttempt(attempt, { ...options, retryItemId })
+          : resumeItemUpload(context, state.resumeBatchId!, state.images, { ...options, retryItemId }))
+        : await (attempt ? sendItemUploadAttempt(attempt, options)
+          : resumeItemUpload(context, state.resumeBatchId!, state.images, options))
       if (revision !== run) return
-      publish({ ...state, phase: 'accepted', receipt, uncertain: false })
+      if (receipt) publish({ ...state, phase: 'accepted', receipt, uncertain: false, images: [], eyesByFile: {}, attempt: undefined })
+      else if (previousError && !previousError.canRetry)
+        publish({ ...state, phase: 'error', error: previousError, uncertain: false })
+      else publish({ ...state, phase: 'editing', uncertain: false })
     } catch (error) {
       if (revision !== run) return
       const failure = error instanceof UploadRequestError ? error
@@ -152,7 +188,7 @@ function createWorkspace(context: BackendContext) {
   return {
     getSnapshot: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
-    selectImages, setEyeSide, send, release, canReset, restoreFromUrl,
+    selectImages, setEyeSide, setImageEye, removeImage, send, release, canReset, canRetryItems, restoreFromUrl,
     reset: () => { if (canReset()) { selection += 1; rememberBatch(); publish(empty()) } },
   }
 }
@@ -164,4 +200,9 @@ export function getPersonalUploadWorkspace(context: BackendContext) {
   let workspace = workspaces.get(context)
   if (!workspace) { workspace = createWorkspace(context); workspaces.set(context, workspace) }
   return workspace
+}
+
+export function disposePersonalUploadWorkspace(context: BackendContext) {
+  workspaces.get(context)?.release()
+  workspaces.delete(context)
 }

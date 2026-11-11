@@ -273,7 +273,9 @@ describe('Personal upload using backend context and a stable request', () => {
     page()
     await choose()
     submit()
-    fireEvent.click(await screen.findByRole('button', { name: 'Thử lại cùng lượt gửi' }))
+    const acceptedButton = await screen.findByRole('button', { name: 'Đã tiếp nhận' }) as HTMLButtonElement
+    expect(acceptedButton.disabled).toBe(true)
+    fireEvent.click(acceptedButton)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Tạo lượt tải ảnh mới' }))
     expect(screen.queryByText('Thông tin tiếp nhận')).toBeNull()

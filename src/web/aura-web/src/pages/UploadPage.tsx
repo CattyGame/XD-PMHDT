@@ -4,6 +4,8 @@ import BackendSessionNotice from '../auth/BackendSessionNotice'
 import type { BackendContext } from '../api/backendContext'
 import { canUploadPersonal, uploadErrorMessage, type EyeSide } from '../api/analysisUpload'
 import { getPersonalUploadWorkspace } from '../api/personalUploadWorkspace'
+import { bulkFileKey } from '../api/bulkUploadUi'
+import ItemUploadProgress from '../components/ItemUploadProgress'
 
 function ImagePreview({ file }: { file: File }) {
   const [loadFailed, setLoadFailed] = useState(false)
@@ -16,7 +18,7 @@ function ImagePreview({ file }: { file: File }) {
   return <div style={{ marginBottom: 16 }}>
     <p>{file.name} {loadFailed ? '(Tệp hỏng cấu trúc)' : ''}</p>
     {!loadFailed ? (
-      <img ref={attach} alt={`Xem trước ${file.name}`} onError={() => setLoadFailed(true)}
+      <img ref={attach} loading="lazy" alt={`Xem trước ${file.name}`} onError={() => setLoadFailed(true)}
         style={{ width: 200, height: 200, objectFit: 'contain', border: '1px solid #ddd', borderRadius: 8 }} />
     ) : (
       <div style={{ width: 200, height: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', borderRadius: 8, padding: 8, fontSize: 13, textAlign: 'center' }}>
@@ -41,10 +43,11 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
     window.addEventListener('beforeunload', beforeUnload)
     return () => { window.removeEventListener('beforeunload', beforeUnload); workspace.release() }
   }, [workspace])
-  const locked = !!state.attempt || state.phase === 'validating' || state.phase === 'restoring'
+  const locked = !!state.attempt || !!state.receipt || state.phase === 'validating' || state.phase === 'restoring'
   const sending = state.phase === 'sending'
-  const canSend = state.phase === 'editing' || (state.phase === 'error' && state.error?.canRetry)
+  const canSend = state.phase === 'editing' || (state.phase === 'error' && state.error?.canRetry === true)
   const receipt = state.receipt
+  const reconciling = state.inventory?.status === 'FINALIZING' || state.inventory?.items.some(item => item.uploadStatus === 'UNKNOWN')
 
   return (
     <main style={{ maxWidth: 700, margin: '40px auto', padding: 24 }}>
@@ -78,19 +81,31 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
             }} style={{ display: 'block', marginTop: 10 }} />
           {state.images.length > 0 && <div style={{ marginTop: 16 }}>
             <p>Đã chọn {state.images.length} ảnh:</p>
-            {state.images.map((image, index) => <ImagePreview key={index} file={image} />)}
+            {state.images.map(image => <div key={bulkFileKey(image)}>
+              <ImagePreview file={image} />
+              <p>{image.size} byte</p>
+              {!state.resumeBatchId && <label>Mắt của {image.name}
+                <select aria-label={`Mắt của ${image.name}`} disabled={locked} value={state.eyesByFile[bulkFileKey(image)] ?? state.eyeSide}
+                  onChange={event => workspace.setImageEye(image, event.target.value as EyeSide)}>
+                  <option value="left">OS – Mắt trái</option>
+                  <option value="right">OD – Mắt phải</option>
+                  <option value="unknown">Chưa xác định</option>
+                </select>
+              </label>}
+              <button type="button" disabled={locked} onClick={() => workspace.removeImage(image)}>Xóa {image.name}</button>
+            </div>)}
           </div>}
         </div>
         <button type="submit" disabled={!canSend}>
-          {sending ? 'Đang gửi ảnh...' : state.attempt ? 'Thử lại cùng lượt gửi' : state.resumeBatchId ? 'Tiếp tục lượt tải đã lưu' : 'Gửi ảnh phân tích'}
+          {receipt ? 'Đã tiếp nhận' : sending ? 'Đang gửi ảnh...' : reconciling ? 'Kiểm tra tiếp nhận' : state.attempt ? 'Thử lại cùng lượt gửi' : state.resumeBatchId ? 'Tiếp tục lượt tải đã lưu' : 'Gửi ảnh phân tích'}
         </button>
       </form>
       {state.phase === 'validating' && <p role="status">Đang kiểm tra ảnh đã chọn...</p>}
       {state.phase === 'restoring' && <p role="status">Đang khôi phục lượt tải từ máy chủ...</p>}
-      {state.inventory && <section aria-label="Tiến độ tiếp nhận ảnh">
-        <p>Đã lưu trên máy chủ: {state.inventory.items.filter(item => item.uploadStatus !== 'DECLARED').length}/{state.inventory.items.length} ảnh.</p>
-        {state.resumeBatchId && !state.attempt && <p>Chọn lại những ảnh chưa tải. Hệ thống đối chiếu nội dung bằng checksum, không chỉ tên tệp.</p>}
-      </section>}
+      {state.inventory && <ItemUploadProgress inventory={state.inventory} transfers={state.transfers} busy={sending}
+        canRetry={workspace.canRetryItems() && state.images.length > 0} onRetry={id => void workspace.send(id)} />}
+      {state.inventory?.items.some(item => item.uploadStatus === 'DECLARED') && !state.attempt &&
+        <p>Chọn lại những ảnh chưa tải. Hệ thống đối chiếu nội dung bằng checksum.</p>}
       {state.validation && <p role="alert">{state.validation}</p>}
       {state.attempt && <p>Mã yêu cầu upload: <code>{state.attempt.key}</code></p>}
       {state.error && <div role="alert">
@@ -101,7 +116,7 @@ function PersonalUploadForm({ context }: { context: BackendContext }) {
         Kết quả lượt gửi trước chưa rõ. Giữ nguyên ảnh và mắt đã chọn để thử lại cùng lượt gửi.
         Khi tải lại trang, hệ thống đối chiếu lượt tải đã lưu trên máy chủ trước khi gửi lại ảnh.
       </p>}
-      {(state.attempt || state.resumeBatchId) && workspace.canReset() && <button type="button" onClick={workspace.reset}>
+      {(state.attempt || state.resumeBatchId || receipt) && workspace.canReset() && <button type="button" onClick={workspace.reset}>
         {receipt ? 'Tạo lượt tải ảnh mới' : 'Chọn lại ảnh sau khi bị từ chối'}
       </button>}
       {receipt && <section style={{ marginTop: 24 }}>
