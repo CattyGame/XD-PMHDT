@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using AURA.Analysis.Api.Upload;
 using Npgsql;
@@ -70,6 +71,8 @@ public sealed class ReportSnapshotPostgresTests
             read.Parameters.AddWithValue(exported.ReportId);await using var reader=await read.ExecuteReaderAsync();Assert.True(await reader.ReadAsync());
             using var snapshot=JsonDocument.Parse(reader.GetString(0));var root=snapshot.RootElement;
             Assert.Equal(reader.GetString(1),ReportSnapshotDigest.Compute(reader.GetString(0)));
+            Assert.Equal(image,root.GetProperty("analysisId").GetGuid());
+            Assert.Equal(patient,root.GetProperty("patientId").GetGuid());
             Assert.Equal(result1,root.GetProperty("result").GetProperty("resultId").GetGuid());
             Assert.Equal(review1,root.GetProperty("review").GetProperty("reviewId").GetGuid());
             Assert.Equal("LOW",root.GetProperty("review").GetProperty("correctedRiskLevel").GetString());
@@ -77,7 +80,17 @@ public sealed class ReportSnapshotPostgresTests
         }
         var download=await reports.ReadDownloadContentAsync(actor,null,exported.ReportId,null,default);
         Assert.Equal("application/pdf",download.ContentType);
-        await using(var stream=download.Stream)Assert.Equal('%',stream.ReadByte());
+        await using(var stream=download.Stream)
+        using(var bytes=new MemoryStream())
+        {
+            await stream.CopyToAsync(bytes);
+            var pdf=Encoding.Latin1.GetString(bytes.ToArray());
+            Assert.StartsWith("%PDF-",pdf);
+            Assert.Contains("startxref",pdf);
+            Assert.EndsWith("%%EOF",pdf.TrimEnd());
+        }
+        Assert.Equal(404,(await Assert.ThrowsAsync<UploadFailure>(()=>
+            reports.ReadDownloadContentAsync(Guid.NewGuid(),null,exported.ReportId,null,default))).Status);
 
         var batchIdentity=new BatchIdentity(batch,tenant,patient,actor);
         var batchSnapshot=new BatchStatusSnapshot(batch,DateTime.SpecifyKind(DateTime.UtcNow,DateTimeKind.Utc),

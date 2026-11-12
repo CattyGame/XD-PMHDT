@@ -35,12 +35,14 @@ export class BatchProgressError extends Error {
   readonly status: number
   readonly code: string
   readonly retryable: boolean
-  constructor(status: number, code: string, retryable: boolean) {
+  readonly retryAfterMs?: number
+  constructor(status: number, code: string, retryable: boolean, retryAfterMs?: number) {
     super(code)
     this.name = 'BatchProgressError'
     this.status = status
     this.code = code
     this.retryable = retryable
+    this.retryAfterMs = retryAfterMs
   }
 }
 
@@ -119,13 +121,17 @@ export function parseBatchProgress(value: unknown, requestedId: string): BatchPr
 }
 
 export const isBatchTerminal = (data: BatchProgress): boolean =>
-  data.batchStatus !== 'IN_PROGRESS' && data.summary.active === 0
+  data.batchStatus !== 'IN_PROGRESS' && data.summary.active === 0 && (data.uploadPending ?? 0) === 0
 
-function serverError(status: number, payload: unknown): BatchProgressError {
+function serverError(status: number, payload: unknown, retryAfter: string | null): BatchProgressError {
   const details = object(payload) && object(payload.error) ? payload.error : null
   const code = typeof details?.code === 'string' && /^ERR_[A-Z0-9_]{1,60}$/.test(details.code)
     ? details.code : 'ERR_REQUEST_FAILED'
-  return new BatchProgressError(status, code, ![400, 401, 403, 404].includes(status))
+  const delay = retryAfter && (/^\d+$/.test(retryAfter)
+    ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now())
+  const retryable = status === 429 || status === 408 || status >= 500
+  return new BatchProgressError(status, code, retryable,
+    typeof delay === 'number' && Number.isFinite(delay) && delay > 0 ? delay : undefined)
 }
 
 /** Same-origin, current Firebase ID token, no persistent cache, no privilege inference from batch ID. */
@@ -148,7 +154,12 @@ export async function getBatchProgress(
   }
   try {
     ensureCurrent()
-    const token = await user.getIdToken()
+    const token = await new Promise<string>((resolve, reject) => {
+      const cancelled = () => reject(abort.reason)
+      abort.addEventListener('abort', cancelled, { once: true })
+      void Promise.resolve().then(() => user.getIdToken()).then(resolve, reject)
+        .finally(() => abort.removeEventListener('abort', cancelled))
+    })
     ensureCurrent()
     if (typeof token !== 'string' || !token || /\s/.test(token)) {
       throw new BatchProgressError(401, 'ERR_TOKEN_UNAVAILABLE', false)
@@ -164,7 +175,7 @@ export async function getBatchProgress(
     if (response.status === 202) return { kind: 'accepted' }
     const payload: unknown = await response.json().catch(() => null)
     ensureCurrent()
-    if (!response.ok) throw serverError(response.status, payload)
+    if (!response.ok) throw serverError(response.status, payload, response.headers.get('Retry-After'))
     if (response.status !== 200) invalid()
     return { kind: 'batch', data: parseBatchProgress(payload, batchId) }
   } catch (error) {
@@ -180,6 +191,7 @@ export function batchErrorMessage(error: BatchProgressError): string {
     return 'Phiên đăng nhập đã hết hạn hoặc thay đổi. Vui lòng đăng nhập lại.'
   if (error.status === 403) return 'Tài khoản không có quyền xem batch này hoặc quyền đã bị thu hồi.'
   if (error.status === 404) return 'Không tìm thấy batch trong phạm vi được cấp quyền.'
+  if (error.status === 429) return 'Máy chủ đang giới hạn lượt đọc trạng thái. Vui lòng chờ.'
   if (error.code === 'ERR_INVALID_BATCH_ID') return 'Batch ID phải là một UUID hợp lệ.'
   if (error.code === 'ERR_MOCK_ENABLED') return 'Đang bật chế độ demo. Tắt mock để xem API tiến trình thật.'
   if (error.code === 'ERR_INVALID_RESPONSE') return 'Phản hồi trạng thái từ máy chủ chưa đúng hợp đồng API.'
