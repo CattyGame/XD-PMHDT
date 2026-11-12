@@ -4,7 +4,7 @@ import {
   GoogleAuthProvider,
   signInWithEmailAndPassword,
   signInWithPopup,
-  browserLocalPersistence,
+  browserSessionPersistence,
   setPersistence,
 } from 'firebase/auth'
 import { getFirebaseAuth } from '../firebase/config'
@@ -34,7 +34,7 @@ export default function LoginPage() {
     try {
       const auth = getFirebaseAuth()
       if (!auth) throw new Error('Firebase unavailable')
-      await setPersistence(auth, browserLocalPersistence)
+      await setPersistence(auth, browserSessionPersistence)
       if (!mounted.current) return
       if (method === 'email') {
         await signInWithEmailAndPassword(auth, email.trim(), password)
