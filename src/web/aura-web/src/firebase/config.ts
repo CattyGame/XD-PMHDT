@@ -1,5 +1,5 @@
 import { getApp, getApps, initializeApp } from 'firebase/app'
-import { getAuth } from 'firebase/auth'
+import { browserSessionPersistence, getAuth, inMemoryPersistence, setPersistence, type Auth } from 'firebase/auth'
 import { getMessaging, isSupported } from 'firebase/messaging'
 
 const firebaseConfig = {
@@ -9,6 +9,7 @@ const firebaseConfig = {
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 }
+const migratedAuthInstances = new WeakSet<Auth>()
 
 export function isFirebaseConfigured() {
   return Object.values(firebaseConfig).every(
@@ -32,8 +33,16 @@ export function getFirebaseApp() {
 
 export function getFirebaseAuth() {
   const app = getFirebaseApp()
-
-  return app ? getAuth(app) : null
+  if (!app) return null
+  const auth = getAuth(app)
+  if (!migratedAuthInstances.has(auth)) {
+    migratedAuthInstances.add(auth)
+    // Let the SDK restore and move any legacy AURA session out of persistent storage.
+    void setPersistence(auth, browserSessionPersistence)
+      .catch(() => setPersistence(auth, inMemoryPersistence))
+      .catch(() => migratedAuthInstances.delete(auth))
+  }
+  return auth
 }
 
 export async function getFirebaseMessaging() {
