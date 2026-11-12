@@ -130,7 +130,7 @@ export function parseAnalysis(value: unknown, requestedId: string): AnalysisDeta
 
 /** Từng GET cần token của phiên hiện tại, không cache và không ghi thông tin quyền vào URL. */
 export async function authorizedApiResponse(path: string, context: BackendContext, signal?: AbortSignal,
-  method: 'GET' | 'POST' | 'DELETE' | 'PATCH' = 'GET', body?: string): Promise<Response> {
+  method: 'GET' | 'POST' | 'DELETE' | 'PATCH' = 'GET', body?: string, timeoutMs = 15_000): Promise<Response> {
   if (!path.startsWith('/api/v1/') || new URL(path, window.location.origin).origin !== window.location.origin)
     throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
   if (isMockEnabled) throw new AnalysisResultError(0, 'ERR_MOCK_ENABLED')
@@ -142,9 +142,8 @@ export async function authorizedApiResponse(path: string, context: BackendContex
     if (auth.currentUser !== user || user.uid !== context.firebaseUid)
       throw new AnalysisResultError(401, 'ERR_SESSION_CHANGED')
   }
-  const abort = signal
-    ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
-    : AbortSignal.timeout(15000)
+  const deadline = AbortSignal.timeout(timeoutMs)
+  const abort = signal ? AbortSignal.any([signal, deadline]) : deadline
   try {
     current()
     const token = await user.getIdToken()
@@ -196,8 +195,8 @@ export function protectedContentPath(value: string): string {
 }
 
 /** Download bytes with a fresh Firebase bearer; never put a protected URL directly in img/window.open. */
-export async function getProtectedContent(path: string, context: BackendContext, signal?: AbortSignal): Promise<Blob> {
-  const response = await authorizedApiResponse(protectedContentPath(path), context, signal)
+export async function getProtectedContent(path: string, context: BackendContext, signal?: AbortSignal, timeoutMs?: number): Promise<Blob> {
+  const response = await authorizedApiResponse(protectedContentPath(path), context, signal, 'GET', undefined, timeoutMs)
   if (response.status !== 200) invalid()
   const blob = await response.blob()
   const user = getFirebaseAuth()?.currentUser
@@ -233,6 +232,7 @@ export function analysisErrorMessage(error: AnalysisResultError): string {
   if (error.status === 401) return 'Phiên đăng nhập đã hết hạn hoặc thay đổi. Hãy đăng nhập lại.'
   if (error.status === 403) return 'Vai trò hiện tại không được truy cập kết quả hoặc tệp ảnh này.'
   if (error.status === 404) return 'Không tìm thấy dữ liệu trong phạm vi được cấp quyền.'
+  if (error.status === 429) return 'Máy chủ đang giới hạn số yêu cầu. Vui lòng chờ rồi thử lại.'
   if (error.code === 'ERR_MOCK_ENABLED') return 'Đang bật mock. Tắt mock để dùng Analysis API thật.'
   if (error.code === 'ERR_INVALID_RESPONSE') return 'Phản hồi từ Analysis API không đúng hợp đồng.'
   if (error.code === 'ERR_TIMEOUT') return 'Yêu cầu quá thời gian. Có thể thử lại.'
