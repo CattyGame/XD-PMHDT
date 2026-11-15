@@ -12,20 +12,23 @@ public class IdentityRepository
         _dataSource = dataSource;
     }
 
-    public async Task<BootstrapResponse?> GetAccountByFirebaseUidAsync(string firebaseUid, CancellationToken cancellationToken = default)
+    public Task<BootstrapResponse?> GetAccountByFirebaseUidAsync(string firebaseUid, CancellationToken cancellationToken = default)
+        => GetAccountAsync("a.firebase_uid", firebaseUid, cancellationToken);
+
+    private async Task<BootstrapResponse?> GetAccountAsync(string keyColumn, object key, CancellationToken cancellationToken)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
 
-        const string sql = @"
+        var sql = $@"
             SELECT a.account_id, a.firebase_uid, a.account_status, a.profile_provisioning_status,
                    COALESCE(array_agg(ar.role_name) FILTER (WHERE ar.role_name IS NOT NULL), ARRAY[]::VARCHAR[]) as roles
             FROM identity.accounts a
             LEFT JOIN identity.account_roles ar ON a.account_id = ar.account_id
-            WHERE a.firebase_uid = $1
+            WHERE {keyColumn} = $1
             GROUP BY a.account_id, a.firebase_uid, a.account_status, a.profile_provisioning_status;";
 
         await using var cmd = new NpgsqlCommand(sql, connection);
-        cmd.Parameters.AddWithValue(firebaseUid);
+        cmd.Parameters.AddWithValue(key);
 
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         if (await reader.ReadAsync(cancellationToken))
@@ -106,14 +109,8 @@ public class IdentityRepository
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task<BootstrapResponse?> GetAccountByIdAsync(Guid accountId)
-    {
-        await using var connection=await _dataSource.OpenConnectionAsync();
-        await using var cmd=new NpgsqlCommand("SELECT firebase_uid FROM identity.accounts WHERE account_id=$1",connection);
-        cmd.Parameters.AddWithValue(accountId);
-        var uid=await cmd.ExecuteScalarAsync() as string;
-        return uid is null ? null : await GetAccountByFirebaseUidAsync(uid);
-    }
+    public Task<BootstrapResponse?> GetAccountByIdAsync(Guid accountId, CancellationToken cancellationToken = default)
+        => GetAccountAsync("a.account_id", accountId, cancellationToken);
     public async Task<bool> SetDoctorCapabilityAsync(Guid actor, Guid target, bool approved, string reason)
     {
         await using var connection=await _dataSource.OpenConnectionAsync();

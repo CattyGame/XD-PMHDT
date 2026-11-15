@@ -7,7 +7,7 @@ import {
   linkBatchToCampaign,
   updateCampaignStatus,
   getCampaignSummary,
-  getCampaignExportUrl,
+  getCampaignExport,
 } from './campaignManagement'
 import type { BackendContext } from './backendContext'
 
@@ -217,8 +217,10 @@ describe('campaignManagement API Client', () => {
     expect(summary.suspectedCases).toBe(15)
   })
 
-  it('getCampaignExportUrl: generates correct export URL', () => {
-    const url = getCampaignExportUrl(clinicId, campaignId)
-    expect(url).toBe(`/api/v1/campaigns/${campaignId}/export?clinicContextId=${clinicId}`)
+  it('downloads CSV through the authenticated transport', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('test,csv', { headers: { 'Content-Type': 'text/csv' } }))
+    const blob = await getCampaignExport(context, clinicId, campaignId)
+    expect(await blob.text()).toBe('test,csv')
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/campaigns/${campaignId}/export?clinicContextId=${clinicId}`, expect.objectContaining({ headers: { Authorization: 'Bearer mock-jwt-token' } }))
   })
 })

@@ -165,18 +165,18 @@ export async function inviteClinicMember(
   if (
     !isRecord(payload) ||
     typeof payload.membershipId !== 'string' ||
-    typeof payload.email !== 'string' ||
+    typeof payload.invitedEmail !== 'string' ||
     typeof payload.role !== 'string' ||
-    typeof payload.token !== 'string'
+    typeof payload.invitationToken !== 'string'
   ) {
     invalidResponse()
   }
 
   return {
     membershipId: payload.membershipId,
-    email: payload.email,
+    email: payload.invitedEmail,
     role: payload.role,
-    token: payload.token,
+    token: payload.invitationToken,
     expiresAt: String(payload.expiresAt ?? ''),
   }
 }

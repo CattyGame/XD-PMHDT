@@ -135,9 +135,9 @@ describe('ClinicMemberPage Component (W5-M6-01 / AC1)', () => {
         return json(
           {
             membershipId: '11111111-1111-4111-8111-700000000002',
-            email: body.email,
+            invitedEmail: body.email,
             role: body.role,
-            token: 'INV-TOKEN-ALPHA-999',
+            invitationToken: 'INV-TOKEN-ALPHA-999',
             expiresAt: '2026-11-08T00:00:00Z',
           },
           201,

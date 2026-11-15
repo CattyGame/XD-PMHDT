@@ -98,9 +98,9 @@ describe('clinicManagement API client', () => {
     fetchMock.mockResolvedValueOnce(
       json({
         membershipId: '11111111-1111-4111-8111-700000000002',
-        email: 'doctor.b@clinic-alpha.vn',
+        invitedEmail: 'doctor.b@clinic-alpha.vn',
         role: 'DOCTOR',
-        token: 'INV-TOKEN-123456',
+        invitationToken: 'INV-TOKEN-123456',
         expiresAt: '2026-11-08T00:00:00Z',
       }),
     )

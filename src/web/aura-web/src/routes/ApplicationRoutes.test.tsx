@@ -56,6 +56,23 @@ beforeEach(() => { vi.clearAllMocks(); mocks.auth.mockReturnValue(null) })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('Điều hướng tài khoản thật và khu vực minh họa', () => {
+  it('accepts an invitation explicitly after login then refreshes clinic discovery', async () => {
+    const membershipId = '11111111-1111-4111-8111-700000000001'
+    mocks.auth.mockReturnValue({ currentUser: { uid: context.firebaseUid, getIdToken: async () => 'fresh-user-token' } })
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async input => new Response(JSON.stringify(
+      String(input).endsWith('/accept') ? { message: 'Accepted' } : { items: [{ clinicId: membershipId, clinicName: 'Accepted clinic', role: 'STAFF', status: 'ACTIVE' }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    show({ status: 'ready', context }, `/clinics/invitations/${membershipId}`)
+    fireEvent.change(screen.getByLabelText('Token lời mời'), { target: { value: 'one-use-token' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Chấp nhận lời mời' }))
+    await screen.findByText('Accepted clinic')
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/clinics/invitations/${membershipId}/accept`, expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ token: 'one-use-token' }), headers: expect.objectContaining({ Authorization: 'Bearer fresh-user-token' }),
+    }))
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/clinics', expect.anything())
+    expect(context.roles).not.toContain('DOCTOR')
+  })
   it.each(['/', '/upload', '/demo'])('chặn route %s khi anonymous', (path) => {
     show({ status: 'anonymous' }, path)
     expect(screen.getByRole('heading', { name: 'AURA — Đăng nhập' })).toBeTruthy()

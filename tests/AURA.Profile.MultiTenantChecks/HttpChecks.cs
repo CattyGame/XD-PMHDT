@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 internal static class HttpChecks
 {
-    public static async Task RunAsync(ProfileRepository repository,Guid owner,Guid stranger,Guid clinic)
+    public static async Task RunAsync(ProfileRepository repository,Guid owner,Guid stranger,Guid clinic,Guid staff,Guid patient)
     {
         var authority=new IdentityTransport { AccountId=owner };
         var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>
@@ -21,7 +21,7 @@ internal static class HttpChecks
         builder.Services.AddSingleton(new UserIdentityResolver(new Clients(authority),config));
         await using var app=builder.Build();
         app.Use((context,next)=>{context.Items["CorrelationId"]="test-correlation";return next();});
-        app.MapProfilePublicMembershipEndpoints();await app.StartAsync();
+        app.MapProfilePublicMembershipEndpoints();app.MapProfilePatientEndpoints();await app.StartAsync();
         var client=app.GetTestClient();var passed=0;
         void Verify(bool condition,string name){if(!condition)throw new InvalidOperationException("HTTP FAIL: "+name);Console.WriteLine("HTTP PASS: "+name);passed++;}
         async Task<HttpResponseMessage> Get(bool bearer)
@@ -43,6 +43,39 @@ internal static class HttpChecks
             var body=await response.Content.ReadFromJsonAsync<ClinicList>();
             Verify(response.StatusCode==HttpStatusCode.OK && body!.Items.Length==0,"Forged actor header cannot select another account's memberships");
         }
+        async Task<HttpResponseMessage> Patient(HttpMethod method, string path, object? body = null)
+        {
+            using var request=new HttpRequestMessage(method,path);
+            request.Headers.Authorization=new("Bearer","verified-fixture-token");
+            if(body is not null)request.Content=JsonContent.Create(body);
+            return await client.SendAsync(request);
+        }
+        var patientRoute=$"/api/v1/clinics/{clinic:D}/patients/{patient:D}";
+        authority.AccountId=owner;
+        using(var response=await Patient(HttpMethod.Get,patientRoute))
+        {
+            var value=await response.Content.ReadFromJsonAsync<JsonElement>();
+            Verify(response.StatusCode==HttpStatusCode.OK && value.GetProperty("medicalHistory").ValueKind==JsonValueKind.Object,"Admin detail retains medical history positive control");
+        }
+        authority.AccountId=staff;
+        foreach(var method in new[]{HttpMethod.Get,HttpMethod.Patch})
+        using(var response=await Patient(method,patientRoute,method==HttpMethod.Patch?new{}:null))
+        {
+            var value=await response.Content.ReadFromJsonAsync<JsonElement>();
+            Verify(response.StatusCode==HttpStatusCode.OK && value.GetProperty("medicalHistory").ValueKind==JsonValueKind.Null,$"Staff {method} never returns stored medical history");
+        }
+        using(var response=await Patient(HttpMethod.Patch,patientRoute,new{medicalHistory=new{notes="blocked"}}))
+            Verify(response.StatusCode==HttpStatusCode.Forbidden,"Staff cannot write clinical history through PATCH");
+        using(var response=await Patient(HttpMethod.Post,$"/api/v1/clinics/{clinic:D}/patients",new{fullName="staff fixture",medicalHistory=new{notes="blocked"}}))
+            Verify(response.StatusCode==HttpStatusCode.Forbidden,"Staff cannot write clinical history through registration");
+        using(var response=await Patient(HttpMethod.Post,$"/api/v1/clinics/{clinic:D}/patients",new{fullName="staff administrative fixture"}))
+        {
+            var value=await response.Content.ReadFromJsonAsync<JsonElement>();
+            Verify(response.StatusCode==HttpStatusCode.Created && value.GetProperty("medicalHistory").ValueKind==JsonValueKind.Null,"Staff administrative registration remains available without PHI history");
+        }
+        await repository.RevokeClinicMemberAsync(clinic,staff);
+        using(var response=await Patient(HttpMethod.Patch,patientRoute,new{}))
+            Verify(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound,"Revoked Staff loses PATCH immediately");
         var email=$"http-{Guid.NewGuid():N}@example.test";
         var invited=await repository.InviteClinicMemberAsync(clinic,email,"STAFF");
         var membership=invited.Result!;

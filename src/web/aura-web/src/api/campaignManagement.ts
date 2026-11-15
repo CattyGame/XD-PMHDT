@@ -234,6 +234,11 @@ export async function getCampaignSummary(
   }
 }
 
-export function getCampaignExportUrl(clinicId: string, campaignId: string): string {
-  return `/api/v1/campaigns/${encodeURIComponent(campaignId)}/export?clinicContextId=${encodeURIComponent(clinicId)}`
+export async function getCampaignExport(context: BackendContext, clinicId: string, campaignId: string,
+  signal?: AbortSignal): Promise<Blob> {
+  if (!validBatchId(clinicId) || !validBatchId(campaignId)) throw new AnalysisResultError(400, 'ERR_INVALID_ID')
+  const response = await authorizedApiResponse(
+    `/api/v1/campaigns/${campaignId}/export?clinicContextId=${clinicId}`, context, signal)
+  if (response.headers.get('Content-Type')?.split(';')[0] !== 'text/csv') invalidResponse()
+  return response.blob()
 }

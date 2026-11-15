@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
@@ -15,6 +15,11 @@ import {
 import { AnalysisResultError } from '../api/analysisResult'
 import './ClinicPatientPage.css'
 
+const emptyRegistration: RegisterClinicPatientInput = {
+  fullName: '', dateOfBirth: '', gender: 'MALE', phone: '', healthInsuranceNumber: '',
+  medicalHistory: { hasDiabetes: false, hasHypertension: false, notes: '' },
+}
+
 function ClinicPatientContent({ context }: { context: BackendContext }) {
   const [clinics, setClinics] = useState<readonly ClinicInfo[]>([])
   const [selectedClinicId, setSelectedClinicId] = useState<string>('')
@@ -27,22 +32,27 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
   const [error, setError] = useState<string>('')
   const [successMsg, setSuccessMsg] = useState<string>('')
   const [reloadTrigger, setReloadTrigger] = useState(0)
+  const scope = useRef(new AbortController())
+  const detailRequest = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    scope.current = controller
+    setPatients([])
+    setTotalCount(0)
+    setSelectedPatient(null)
+    setShowRegisterModal(false)
+    setFormData(emptyRegistration)
+    setError('')
+    setSuccessMsg('')
+    setSaving(false)
+    return () => controller.abort()
+  }, [context, selectedClinicId])
 
   // Modal register patient state
   const [showRegisterModal, setShowRegisterModal] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [formData, setFormData] = useState<RegisterClinicPatientInput>({
-    fullName: '',
-    dateOfBirth: '',
-    gender: 'MALE',
-    phone: '',
-    healthInsuranceNumber: '',
-    medicalHistory: {
-      hasDiabetes: false,
-      hasHypertension: false,
-      notes: '',
-    },
-  })
+  const [formData, setFormData] = useState<RegisterClinicPatientInput>(emptyRegistration)
 
   // 1. Load actor's clinics
   useEffect(() => {
@@ -103,11 +113,22 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
   // 3. View Patient Detail
   const handleSelectPatient = async (patient: ClinicPatient) => {
     if (!selectedClinicId) return
+    detailRequest.current?.abort()
+    detailRequest.current = new AbortController()
+    const signal = AbortSignal.any([scope.current.signal, detailRequest.current.signal])
+    setSelectedPatient(null)
+    setError('')
     try {
-      const detail = await getClinicPatientDetail(context, selectedClinicId, patient.patientId)
-      setSelectedPatient(detail)
-    } catch {
-      setSelectedPatient(patient)
+      const detail = await getClinicPatientDetail(context, selectedClinicId, patient.patientId, signal)
+      if (!signal.aborted) setSelectedPatient(detail)
+    } catch (cause) {
+      if (!signal.aborted) {
+        if (cause instanceof AnalysisResultError && [401, 403, 404].includes(cause.status)) {
+          setPatients([])
+          setTotalCount(0)
+        }
+        setError('Không thể mở hồ sơ bệnh nhân. Quyền truy cập có thể đã thay đổi; hãy tải lại danh sách.')
+      }
     }
   }
 
@@ -118,6 +139,7 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
     setSaving(true)
     setError('')
     setSuccessMsg('')
+    const signal = scope.current.signal
 
     try {
       const newPatient = await registerClinicPatient(context, selectedClinicId, {
@@ -126,32 +148,25 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
         dateOfBirth: formData.dateOfBirth || null,
         phone: formData.phone?.trim() || null,
         healthInsuranceNumber: formData.healthInsuranceNumber?.trim() || null,
-      })
+        medicalHistory: currentClinic?.role === 'STAFF' ? null : formData.medicalHistory,
+      }, signal)
+
+      if (signal.aborted) return
 
       setSuccessMsg(`Đã tiếp nhận hồ sơ bệnh nhân "${newPatient.fullName}" thành công!`)
       setShowRegisterModal(false)
-      setFormData({
-        fullName: '',
-        dateOfBirth: '',
-        gender: 'MALE',
-        phone: '',
-        healthInsuranceNumber: '',
-        medicalHistory: {
-          hasDiabetes: false,
-          hasHypertension: false,
-          notes: '',
-        },
-      })
+      setFormData(emptyRegistration)
       setReloadTrigger((v) => v + 1)
       setSelectedPatient(newPatient)
     } catch (err) {
+      if (signal.aborted) return
       if (err instanceof AnalysisResultError && err.status === 403) {
         setError('Bạn không có quyền tiếp nhận bệnh nhân tại phòng khám này.')
       } else {
         setError('Không thể đăng ký bệnh nhân. Vui lòng kiểm tra lại thông tin.')
       }
     } finally {
-      setSaving(false)
+      if (!signal.aborted) setSaving(false)
     }
   }
 
@@ -429,6 +444,7 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
                 </div>
               </div>
 
+              {currentClinic?.role !== 'STAFF' && <>
               <div className="form-group">
                 <label>Tiền sử bệnh lý:</label>
                 <div className="checkbox-group">
@@ -486,6 +502,7 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
                 />
               </div>
 
+              </>}
               <div className="modal-actions">
                 <button
                   type="button"
@@ -510,5 +527,5 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
 export default function ClinicPatientPage() {
   const { state } = useBackendSession()
   if (state.status !== 'ready') return <BackendSessionNotice />
-  return <ClinicPatientContent context={state.context} />
+  return <ClinicPatientContent key={`${state.context.accountId}:${state.context.firebaseUid}:${state.context.profileVersion}`} context={state.context} />
 }

@@ -50,6 +50,15 @@ function Assert-SetupRejected {
 }
 
 try {
+    $gateway = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src/gateway/AURA.ApiGateway/appsettings.json') -Raw | ConvertFrom-Json
+    $clinicApproval = $gateway.ReverseProxy.Routes.'clinic-admin-status'
+    Assert-Check ($clinicApproval.ClusterId -eq 'profile-cluster' -and $clinicApproval.Match.Path -eq '/api/v1/admin/clinics/{clinicId}/status' -and $clinicApproval.Match.Methods -contains 'PATCH') 'Clinic approval is routed through the authenticated Gateway to Profile'
+    foreach ($service in @('AURA.Profile.Api', 'AURA.Identity.Api')) {
+        foreach ($file in @('appsettings.json', 'appsettings.Development.json')) {
+            $settings = Get-Content -LiteralPath (Join-Path $repositoryRoot "src/services/$service/$file") -Raw | ConvertFrom-Json
+            Assert-Check ([string]::IsNullOrWhiteSpace($settings.ServiceAuth.ClientSecret)) "$service/$file requires externally provisioned client secret"
+        }
+    }
     # Deliberately not a signing credential: this fixture only tests configuration validation.
     [IO.File]::WriteAllText($credential, '{"type":"service_account","project_id":"aura-dev-97716"}')
     [IO.File]::WriteAllText($key, [Convert]::ToBase64String((New-Object byte[] 32)))

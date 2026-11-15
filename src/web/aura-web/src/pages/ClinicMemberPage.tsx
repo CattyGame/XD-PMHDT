@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
@@ -31,6 +31,21 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
   const [inviteRole, setInviteRole] = useState<'DOCTOR' | 'STAFF'>('DOCTOR')
   const [inviting, setInviting] = useState(false)
   const [lastInvitation, setLastInvitation] = useState<ClinicInvitationResult | null>(null)
+  const scope = useRef(new AbortController())
+
+  useEffect(() => {
+    const controller = new AbortController()
+    scope.current = controller
+    setMembers([])
+    setLastInvitation(null)
+    setShowInviteModal(false)
+    setInviteEmail('')
+    setInviteRole('DOCTOR')
+    setInviting(false)
+    setError('')
+    setSuccessMsg('')
+    return () => controller.abort()
+  }, [context, selectedClinicId])
 
   // 1. Load actor's clinics
   useEffect(() => {
@@ -94,18 +109,22 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
     setInviting(true)
     setError('')
     setSuccessMsg('')
+    const signal = scope.current.signal
     try {
       const result = await inviteClinicMember(
         context,
         selectedClinicId,
         inviteEmail.trim(),
         inviteRole,
+        signal,
       )
+      if (signal.aborted) return
       setLastInvitation(result)
       setSuccessMsg(`Đã gửi lời mời thành công đến ${result.email}!`)
       setInviteEmail('')
       setReloadTrigger((v) => v + 1)
     } catch (err) {
+      if (signal.aborted) return
       if (err instanceof AnalysisResultError) {
         if (err.status === 409) {
           setError('Thành viên này đã tồn tại hoặc đã tham gia phòng khám.')
@@ -118,7 +137,7 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
         setError('Lỗi kết nối khi gửi lời mời.')
       }
     } finally {
-      setInviting(false)
+      if (!signal.aborted) setInviting(false)
     }
   }
 
@@ -137,18 +156,21 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
     setLoading(true)
     setError('')
     setSuccessMsg('')
+    const signal = scope.current.signal
     try {
-      await revokeClinicMember(context, selectedClinicId, member.accountId)
+      await revokeClinicMember(context, selectedClinicId, member.accountId, signal)
+      if (signal.aborted) return
       setSuccessMsg(`Đã thu hồi quyền truy cập thành công!`)
       setReloadTrigger((v) => v + 1)
     } catch (err) {
+      if (signal.aborted) return
       if (err instanceof AnalysisResultError && err.status === 400) {
         setError('Không thể thu hồi quyền quản trị viên duy nhất của phòng khám.')
       } else {
         setError('Không thể thu hồi quyền thành viên.')
       }
     } finally {
-      setLoading(false)
+      if (!signal.aborted) setLoading(false)
     }
   }
 
@@ -233,6 +255,7 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
             Mã Token kích hoạt: <code>{lastInvitation.token}</code>
           </p>
           <small style={{ color: '#64748b' }}>
+            <Link to={`/clinics/invitations/${lastInvitation.membershipId}`}>Mở trang chấp nhận lời mời</Link>.{' '}
             Bác sĩ đăng nhập bằng tài khoản Google có email trên và nhập token để kích hoạt ngữ cảnh
             phòng khám (AC1).
           </small>
@@ -389,5 +412,5 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
 export default function ClinicMemberPage() {
   const { state } = useBackendSession()
   if (state.status !== 'ready') return <BackendSessionNotice />
-  return <ClinicMemberContent context={state.context} />
+  return <ClinicMemberContent key={`${state.context.accountId}:${state.context.firebaseUid}:${state.context.profileVersion}`} context={state.context} />
 }
