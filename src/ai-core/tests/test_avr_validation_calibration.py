@@ -54,6 +54,8 @@ def test_threshold_selection_uses_validation_dice_and_required_support_then_cons
 
 def test_probability_cache_reuses_only_valid_identical_inference(tmp_path,monkeypatch):
     monkeypatch.setitem(sys.modules,'torch',SimpleNamespace(get_num_threads=lambda:2))
+    backend={'version':'synthetic-inference-v1'}
+    monkeypatch.setattr(calibration.importlib.metadata,'version',lambda package:backend['version'])
     calls=[]
     def infer(rgb,model):
         calls.append(1)
@@ -69,6 +71,9 @@ def test_probability_cache_reuses_only_valid_identical_inference(tmp_path,monkey
     np.savez_compressed(path,metadata=metadata,probabilities=np.ones((1,2,3)),inference_seconds=0.)
     with pytest.raises(ValueError,match='Invalid raw probability'):calibration.cached_probabilities(rgb,model,tmp_path)
     assert calls==[1]
+    backend['version']='synthetic-inference-v2'
+    _,changed=calibration.cached_probabilities(rgb,model,tmp_path)
+    assert calls==[1,1] and changed['cache_path']!=path and not changed['cache_hit']
 
 
 def test_calibration_verification_rejects_test_leakage_and_arbitrary_thresholds(tmp_path):
