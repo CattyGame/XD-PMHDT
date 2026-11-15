@@ -1,0 +1,64 @@
+rule_files:
+  - alert.rules.yml
+evaluation_interval: 1m
+tests:
+  - name: failing service cannot be hidden by a healthy high traffic service
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="billing-api",instance="billing:8080",status="500"}'
+        values: '0+3x10'
+      - series: 'http_requests_total{job="billing-api",instance="billing:8080",status="200"}'
+        values: '0+97x10'
+      - series: 'http_requests_total{job="analysis-api",instance="analysis:8080",status="200"}'
+        values: '0+10000x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AuraHighHttp5xxRate
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: AuraHighHttp5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: aura-platform
+              job: billing-api
+              instance: billing:8080
+            exp_annotations:
+              summary: 'Tỷ lệ lỗi HTTP 5xx vượt quá 2% trong 2 phút'
+              description: 'Microservices đang gặp lỗi máy chủ nội bộ HTTP 5xx cao (hiện tại: 3.00%).'
+  - name: queue backlog must persist for five minutes in the correct vhost
+    interval: 1m
+    input_series:
+      - series: 'rabbitmq_queue_messages{vhost="/aura-s3",queue="aura.s3.analysis.jobs"}'
+        values: '51+0x10'
+      - series: 'rabbitmq_queue_messages{vhost="other",queue="aura.s3.analysis.jobs"}'
+        values: '100+0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AuraAnalysisJobQueueBacklog
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: AuraAnalysisJobQueueBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: analysis-worker
+              vhost: /aura-s3
+              queue: aura.s3.analysis.jobs
+            exp_annotations:
+              summary: 'Hàng đợi phân tích ảnh bị tồn đọng quá 50 messages'
+              description: "Hàng đợi 'aura.s3.analysis.jobs' đang tồn đọng 51 messages vượt quá 5 phút. Cần xem xét scale thêm worker."
+  - name: idle traffic and queue at threshold do not fire
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="billing-api",instance="billing:8080",status="500"}'
+        values: '0+0x10'
+      - series: 'rabbitmq_queue_messages{vhost="/aura-s3",queue="aura.s3.analysis.jobs"}'
+        values: '50+0x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: AuraHighHttp5xxRate
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: AuraAnalysisJobQueueBacklog
+        exp_alerts: []

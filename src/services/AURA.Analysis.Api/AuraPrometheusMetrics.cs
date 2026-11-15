@@ -42,21 +42,30 @@ public static class AuraPrometheusMetrics
             }
 
             var sw = Stopwatch.StartNew();
+            var failed = false;
             try
             {
                 await next(context);
+            }
+            catch
+            {
+                failed = true;
+                throw;
             }
             finally
             {
                 sw.Stop();
                 var durationSeconds = sw.Elapsed.TotalSeconds;
-                RecordRequest(context.Request.Method, context.Response.StatusCode, context.Request.Path.Value ?? "/", durationSeconds, sw.ElapsedTicks);
+                // Labels contain route templates, never user-controlled path values.
+                var path = (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText ?? "/unmatched";
+                RecordRequest(context.Request.Method, failed ? 500 : context.Response.StatusCode, path, durationSeconds, sw.ElapsedTicks);
             }
         });
     }
 
     public static void RecordRequest(string method, int statusCode, string rawPath, double durationSeconds, long elapsedTicks = 0)
     {
+        method = method is "GET" or "POST" or "PUT" or "PATCH" or "DELETE" or "HEAD" or "OPTIONS" ? method : "OTHER";
         var sanitizedPath = SanitizePath(rawPath);
         var key = $"{method}|{statusCode}|{sanitizedPath}";
         RequestCounts.AddOrUpdate(key, 1, (_, count) => count + 1);
@@ -137,7 +146,7 @@ public static class AuraPrometheusMetrics
                 var method = parts[0];
                 var status = parts[1];
                 var path = parts[2];
-                sb.AppendLine($"http_requests_total{{method=\"{method}\",status=\"{status}\",path=\"{path}\"}} {kvp.Value}");
+                sb.AppendLine(FormattableString.Invariant($"http_requests_total{{method=\"{method}\",status=\"{status}\",path=\"{path}\"}} {kvp.Value}"));
             }
         }
 
@@ -165,42 +174,42 @@ public static class AuraPrometheusMetrics
         sb.AppendLine("# TYPE http_request_duration_seconds_bucket counter");
         for (int i = 0; i < HistogramBuckets.Length; i++)
         {
-            sb.AppendLine($"http_request_duration_seconds_bucket{{le=\"{HistogramBuckets[i]}\"}} {Interlocked.Read(ref BucketCounts[i])}");
+            sb.AppendLine(FormattableString.Invariant($"http_request_duration_seconds_bucket{{le=\"{HistogramBuckets[i]}\"}} {Interlocked.Read(ref BucketCounts[i])}"));
         }
-        sb.AppendLine($"http_request_duration_seconds_bucket{{le=\"+Inf\"}} {totalCount}");
+        sb.AppendLine(FormattableString.Invariant($"http_request_duration_seconds_bucket{{le=\"+Inf\"}} {totalCount}"));
 
         // Summary Quantiles
         sb.AppendLine("# HELP http_request_duration_seconds HTTP request latencies in seconds");
         sb.AppendLine("# TYPE http_request_duration_seconds summary");
-        sb.AppendLine($"http_request_duration_seconds{{quantile=\"0.5\"}} {p50:F5}");
-        sb.AppendLine($"http_request_duration_seconds{{quantile=\"0.95\"}} {p95:F5}");
-        sb.AppendLine($"http_request_duration_seconds{{quantile=\"0.99\"}} {p99:F5}");
-        sb.AppendLine($"http_request_duration_seconds_sum {sumSeconds:F5}");
-        sb.AppendLine($"http_request_duration_seconds_count {totalCount}");
+        sb.AppendLine(FormattableString.Invariant($"http_request_duration_seconds{{quantile=\"0.5\"}} {p50:F5}"));
+        sb.AppendLine(FormattableString.Invariant($"http_request_duration_seconds{{quantile=\"0.95\"}} {p95:F5}"));
+        sb.AppendLine(FormattableString.Invariant($"http_request_duration_seconds{{quantile=\"0.99\"}} {p99:F5}"));
+        sb.AppendLine(FormattableString.Invariant($"http_request_duration_seconds_sum {sumSeconds:F5}"));
+        sb.AppendLine(FormattableString.Invariant($"http_request_duration_seconds_count {totalCount}"));
 
         // Process metrics
         sb.AppendLine("# HELP process_resident_memory_bytes Resident memory size in bytes");
         sb.AppendLine("# TYPE process_resident_memory_bytes gauge");
-        sb.AppendLine($"process_resident_memory_bytes {memBytes}");
+        sb.AppendLine(FormattableString.Invariant($"process_resident_memory_bytes {memBytes}"));
 
         sb.AppendLine("# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds");
         sb.AppendLine("# TYPE process_cpu_seconds_total counter");
-        sb.AppendLine($"process_cpu_seconds_total {cpuSeconds:F2}");
+        sb.AppendLine(FormattableString.Invariant($"process_cpu_seconds_total {cpuSeconds:F2}"));
 
         sb.AppendLine("# HELP process_uptime_seconds The uptime of the process in seconds");
         sb.AppendLine("# TYPE process_uptime_seconds gauge");
-        sb.AppendLine($"process_uptime_seconds {uptimeSeconds:F1}");
+        sb.AppendLine(FormattableString.Invariant($"process_uptime_seconds {uptimeSeconds:F1}"));
 
         // .NET Runtime
         sb.AppendLine("# HELP dotnet_total_memory_bytes Total memory allocated by GC in bytes");
         sb.AppendLine("# TYPE dotnet_total_memory_bytes gauge");
-        sb.AppendLine($"dotnet_total_memory_bytes {GC.GetTotalMemory(false)}");
+        sb.AppendLine(FormattableString.Invariant($"dotnet_total_memory_bytes {GC.GetTotalMemory(false)}"));
 
         sb.AppendLine("# HELP dotnet_gc_collections_total Number of GC collections");
         sb.AppendLine("# TYPE dotnet_gc_collections_total counter");
-        sb.AppendLine($"dotnet_gc_collections_total{{generation=\"0\"}} {GC.CollectionCount(0)}");
-        sb.AppendLine($"dotnet_gc_collections_total{{generation=\"1\"}} {GC.CollectionCount(1)}");
-        sb.AppendLine($"dotnet_gc_collections_total{{generation=\"2\"}} {GC.CollectionCount(2)}");
+        sb.AppendLine(FormattableString.Invariant($"dotnet_gc_collections_total{{generation=\"0\"}} {GC.CollectionCount(0)}"));
+        sb.AppendLine(FormattableString.Invariant($"dotnet_gc_collections_total{{generation=\"1\"}} {GC.CollectionCount(1)}"));
+        sb.AppendLine(FormattableString.Invariant($"dotnet_gc_collections_total{{generation=\"2\"}} {GC.CollectionCount(2)}"));
 
         return sb.ToString();
     }

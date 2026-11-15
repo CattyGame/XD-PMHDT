@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 import uuid
 import importlib.util
+import urllib.parse
 
 import test_real_batch as batch
 
@@ -36,7 +37,7 @@ class LiveGateTests(unittest.TestCase):
             module.grant(path, True)
             self.assertEqual(published, path.read_bytes())
 
-    def run_gate(self, directory, succeeded):
+    def run_gate(self, directory, succeeded, clinic=None, interrupt=False, resume=False, financial=None):
         output = Path(directory) / "result.json"
         image_dir = Path(directory) / "images"
         image_dir.mkdir()
@@ -44,8 +45,15 @@ class LiveGateTests(unittest.TestCase):
         (image_dir / "two.png").write_bytes(b"unit-fixture-two")
         declared = []
         batch_id = str(uuid.uuid4())
+        paths = []
+        analyses = []
+        ledger_reads = []
 
         def response(base, token, path, method="GET", body=None, content_type=None, key=None):
+            parsed = urllib.parse.urlsplit(path)
+            self.assertEqual(urllib.parse.parse_qs(parsed.query), {"clinicContextId": [clinic]} if clinic else {})
+            path = parsed.path
+            paths.append((method, path))
             if path == "/api/v1/analysis-upload-batches":
                 declared.extend(json.loads(body)["items"])
                 return {"batchId": batch_id, "items": [{**x, "uploadStatus": "DECLARED"} for x in declared]}
@@ -55,22 +63,76 @@ class LiveGateTests(unittest.TestCase):
                 self.assertEqual(path.split("/")[-1], key)
                 return {"itemId": key, "uploadStatus": "STAGED"}
             if method == "POST":
-                return {"items": [{"analysisId": str(uuid.uuid4()), "fileName": x["fileName"], "uploadStatus": "ACCEPTED"} for x in declared]}
+                analyses.extend(str(uuid.uuid4()) for _ in declared)
+                return {"items": [{"analysisId": aid, "fileName": x["fileName"], "uploadStatus": "ACCEPTED"} for x, aid in zip(declared, analyses)]}
+            if "analysis-upload-batches" in path:
+                if not declared:
+                    declared.extend({"sha256": batch.hashlib.sha256(f.read_bytes()).hexdigest(), "patientId": patient,
+                                     "fileName": f.name, "itemId": str(uuid.uuid4())} for f in sorted(image_dir.iterdir()))
+                return {"batchId": batch_id, "items": [{**x, "uploadStatus": "STAGED"} for x in declared]}
             return {"summary": {"total": 2, "active": 0, "succeeded": succeeded, "failed": 2-succeeded, "duplicate": 0}}
 
         def docker(command, **kwargs):
             if command[1] == "stats":
                 return SimpleNamespace(stdout=json.dumps({"MemPerc": "10%"}) + "\n")
+            if command[1] == "exec":
+                self.assertEqual(command[command.index("-F") + 1], "\t")
+                ledger_reads.append(True)
+                state = "RESERVED" if len(ledger_reads) == 1 else "CAPTURED"
+                ids = analyses if financial != "wrong_ids" else [str(uuid.uuid4()) for _ in analyses]
+                rows = ["\t".join([aid, str(uuid.uuid4()), state, "reserve", "capture" if state == "CAPTURED" else "", "", "-1", "0" if state == "CAPTURED" else "", "", "wallet", "8", "8"]) for aid in ids]
+                return SimpleNamespace(stdout="\n".join(rows))
             return SimpleNamespace(stdout=json.dumps([{"State": {"OOMKilled": False, "ExitCode": 0, "Running": True}}]))
-        args = ["test_real_batch", "--url", "http://127.0.0.1:1234", "--patient", str(uuid.uuid4()),
+        patient = str(uuid.uuid4())
+        args = ["test_real_batch", "--url", "http://127.0.0.1:1234", "--patient", patient,
                 "--images", str(image_dir), "--output", str(output), "--count", "2", "--containers", "test-worker"]
+        if clinic:
+            args += ["--clinic-context-id", clinic]
+        if interrupt:
+            args += ["--stop-after-uploads", "1"]
+        if resume:
+            args += ["--resume-batch-id", batch_id]
+        if financial:
+            args += ["--postgres-container", "test-pg", "--require-financial-reconciliation", "--timeout", "1"]
         with patch.dict(os.environ, {"AURA_TEST_FIREBASE_TOKEN": "unit-only"}), patch("sys.argv", args), patch.object(batch, "request", side_effect=response), patch.object(batch.subprocess, "run", side_effect=docker), patch.object(batch.time, "sleep"):
-            if succeeded == 2:
+            if succeeded == 2 and financial != "wrong_ids":
                 batch.main()
             else:
                 with self.assertRaises(RuntimeError):
                     batch.main()
-        return json.loads(output.read_text())
+        evidence = json.loads(output.read_text())
+        evidence["testPaths"] = paths
+        evidence["testLedgerReads"] = len(ledger_reads)
+        return evidence
+
+    def test_clinic_selector_reaches_create_upload_finalize_and_poll(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clinic = str(uuid.uuid4())
+            evidence = self.run_gate(directory, 2, clinic=clinic)
+            self.assertEqual(evidence["clinicContextId"], clinic)
+            self.assertEqual([method for method, _ in evidence["testPaths"]].count("PUT"), 2)
+            self.assertTrue(any(path.endswith("/finalize") for _, path in evidence["testPaths"]))
+
+    def test_clinic_selector_reaches_interruption_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self.run_gate(directory, 2, clinic=str(uuid.uuid4()), interrupt=True)["status"], "INTERRUPTED")
+
+    def test_clinic_selector_reaches_resume_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = self.run_gate(directory, 2, clinic=str(uuid.uuid4()), resume=True)
+            self.assertEqual(evidence["status"], "PASS_PIPELINE_ONLY")
+            self.assertFalse(any(method == "PUT" for method, _ in evidence["testPaths"]))
+
+    def test_financial_gate_waits_for_async_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = self.run_gate(directory, 2, financial="settles")
+            self.assertEqual(evidence["status"], "PASS")
+            self.assertEqual(evidence["testLedgerReads"], 2)
+
+    def test_same_counts_with_wrong_analysis_ids_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = self.run_gate(directory, 2, financial="wrong_ids")
+            self.assertEqual(evidence["status"], "FAIL")
 
     def test_all_real_admissions_and_terminal_success_are_required(self):
         with tempfile.TemporaryDirectory() as directory:
