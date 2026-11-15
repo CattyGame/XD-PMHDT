@@ -40,12 +40,11 @@ public partial class ProfileRepository
         return new(allowed, allowed ? tenant : Guid.Empty, role, allowed ? null : "ROLE_DENIED");
     }
 
-    private async Task<AccessResolveResponse> ResolvePatientAccessCoreAsync(Guid actor, Guid patient, Guid? clinic, string action, Guid? analysis, CancellationToken ct)
+    private sealed record PatientScope(Guid Tenant, Guid? Linked, Guid Owner, Guid? ClinicTenant,
+        string? Status, string? Role, bool Assigned);
+
+    private async Task<PatientScope?> ReadPatientScopeAsync(Guid actor, Guid patient, Guid? clinic, Guid? analysis, CancellationToken ct)
     {
-        AccessResolveResponse Deny(string reason) => new(false, null, patient, null, null, null, null, 1, reason);
-        if (actor == Guid.Empty || patient == Guid.Empty || action is not ("ANALYSIS_CREATE" or "ANALYSIS_READ" or "ANALYSIS_FILE_READ" or "DOCTOR_REVIEW")) return Deny("INVALID_REQUEST");
-        var account=await AccountAsync(actor,ct);
-        if (account?.AccountStatus != "ACTIVE") return Deny("ACCOUNT_DISABLED");
         await using var connection=await _dataSource.OpenConnectionAsync(ct);
         await using var p=new NpgsqlCommand("""
             SELECT p.tenant_id,p.linked_account_id,p.owner_principal_id,c.tenant_id,c.status,m.role,
@@ -61,17 +60,26 @@ public partial class ProfileRepository
         p.Parameters.AddWithValue((object?)clinic??DBNull.Value);
         p.Parameters.AddWithValue(actor);
         p.Parameters.AddWithValue((object?)analysis??DBNull.Value);
-        Guid tenant,owner; Guid? linked;
-        Guid? clinicTenant; string? status,role; bool assigned;
-        await using(var reader=await p.ExecuteReaderAsync(ct))
-        {
-            if(!await reader.ReadAsync(ct))return Deny("PATIENT_NOT_FOUND");
-            tenant=reader.GetGuid(0);linked=reader.IsDBNull(1)?null:reader.GetGuid(1);owner=reader.GetGuid(2);
-            clinicTenant=reader.IsDBNull(3)?null:reader.GetGuid(3);
-            status=reader.IsDBNull(4)?null:reader.GetString(4);
-            role=reader.IsDBNull(5)?null:reader.GetString(5);
-            assigned=reader.GetBoolean(6);
-        }
+        await using var reader=await p.ExecuteReaderAsync(ct);
+        if(!await reader.ReadAsync(ct))return null;
+        return new(reader.GetGuid(0),reader.IsDBNull(1)?null:reader.GetGuid(1),reader.GetGuid(2),
+            reader.IsDBNull(3)?null:reader.GetGuid(3),reader.IsDBNull(4)?null:reader.GetString(4),
+            reader.IsDBNull(5)?null:reader.GetString(5),reader.GetBoolean(6));
+    }
+
+    private async Task<AccessResolveResponse> ResolvePatientAccessCoreAsync(Guid actor, Guid patient, Guid? clinic, string action, Guid? analysis, CancellationToken ct)
+    {
+        AccessResolveResponse Deny(string reason) => new(false, null, patient, null, null, null, null, 1, reason);
+        if (actor == Guid.Empty || patient == Guid.Empty || action is not ("ANALYSIS_CREATE" or "ANALYSIS_READ" or "ANALYSIS_FILE_READ" or "DOCTOR_REVIEW")) return Deny("INVALID_REQUEST");
+        // These independent reads overlap; both live authorities must complete before any grant.
+        var accountRead=AccountAsync(actor,ct);
+        var scopeRead=ReadPatientScopeAsync(actor,patient,clinic,analysis,ct);
+        await Task.WhenAll(accountRead,scopeRead);
+        var account=await accountRead;
+        if (account?.AccountStatus != "ACTIVE") return Deny("ACCOUNT_DISABLED");
+        var scope=await scopeRead;
+        if(scope is null)return Deny("PATIENT_NOT_FOUND");
+        var (tenant,linked,owner,clinicTenant,status,role,assigned)=scope;
         if(clinic is null)
         {
             if(action=="DOCTOR_REVIEW" || owner!=actor || linked!=actor)return Deny("NOT_OWNER");

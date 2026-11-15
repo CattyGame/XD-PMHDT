@@ -33,9 +33,10 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
   const [lastInvitation, setLastInvitation] = useState<ClinicInvitationResult | null>(null)
   const scope = useRef(new AbortController())
 
-  useEffect(() => {
-    const controller = new AbortController()
-    scope.current = controller
+  function selectClinic(clinicId: string) {
+    scope.current.abort()
+    scope.current = new AbortController()
+    setSelectedClinicId(clinicId)
     setMembers([])
     setLastInvitation(null)
     setShowInviteModal(false)
@@ -44,8 +45,8 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
     setInviting(false)
     setError('')
     setSuccessMsg('')
-    return () => controller.abort()
-  }, [context, selectedClinicId])
+  }
+  useEffect(() => () => scope.current.abort(), [])
 
   // 1. Load actor's clinics
   useEffect(() => {
@@ -55,7 +56,7 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
         if (controller.signal.aborted) return
         setClinics(items)
         if (items.length > 0) {
-          setSelectedClinicId(items[0].clinicId)
+          selectClinic(items[0].clinicId)
         }
       })
       .catch((err) => {
@@ -196,7 +197,7 @@ function ClinicMemberContent({ context }: { context: BackendContext }) {
         <select
           id="clinic-select"
           value={selectedClinicId}
-          onChange={(e) => setSelectedClinicId(e.target.value)}
+          onChange={(e) => selectClinic(e.target.value)}
           disabled={loading || clinics.length === 0}
         >
           {clinics.map((c) => (

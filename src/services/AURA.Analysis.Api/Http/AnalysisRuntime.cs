@@ -55,6 +55,8 @@ public static class AnalysisRuntime
         services.AddTransient<IUploadRepository,PostgresUploadRepository>();services.AddTransient<IUploadRecoveryJournal,PostgresUploadRecoveryRepository>();
         services.AddTransient<IFileAccessRepository,PostgresFileAccessRepository>();services.AddTransient<IBatchStatusRepository,PostgresBatchStatusRepository>();
         services.AddTransient<IAnalysisQueryRepository,PostgresAnalysisQueryRepository>();
+        services.AddTransient<IPatientHistoryRepository,PostgresAnalysisQueryRepository>();
+        services.AddTransient<PatientHistoryService>();
         services.AddTransient<IDoctorWorklistRepository,PostgresAnalysisQueryRepository>();
         services.AddTransient<IDoctorReviewRepository,PostgresDoctorReviewRepository>();
         services.AddTransient<IDoctorAssignmentClient,ProfileDoctorAssignmentClient>();

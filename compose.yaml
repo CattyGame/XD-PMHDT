@@ -195,11 +195,12 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: "8080"
+      Logging__LogLevel__System.Net.Http.HttpClient: "Warning"
       ConnectionStrings__Postgres: >-
         Host=postgres;Port=5432;Database=${POSTGRES_DB};
         Username=aura_identity_app;
         Password="${IDENTITY_DB_PASSWORD:?Set IDENTITY_DB_PASSWORD}";
-        Timeout=5;Command Timeout=10
+        Timeout=5;Command Timeout=10;Max Auto Prepare=16;Auto Prepare Min Usages=5
       Services__Profile__BaseUrl: "http://profile-api:8080"
       ServiceAuth__Issuer: "aura-identity-local"
       ServiceAuth__ClientSecret: "${IDENTITY_SERVICE_CLIENT_SECRET:?Set IDENTITY_SERVICE_CLIENT_SECRET}"
@@ -233,11 +234,12 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: "8080"
+      Logging__LogLevel__System.Net.Http.HttpClient: "Warning"
       ConnectionStrings__Postgres: >-
         Host=postgres;Port=5432;Database=${POSTGRES_DB};
         Username=aura_profile_app;
         Password="${PROFILE_DB_PASSWORD:?Set PROFILE_DB_PASSWORD}";
-        Timeout=5;Command Timeout=10
+        Timeout=5;Command Timeout=10;Max Auto Prepare=16;Auto Prepare Min Usages=5
       Services__Identity__BaseUrl: "http://identity-api:8080"
       ServiceAuth__Issuer: "aura-identity-local"
       ServiceAuth__Audience: "aura-profile"

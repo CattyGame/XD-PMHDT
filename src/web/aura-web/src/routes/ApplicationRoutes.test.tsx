@@ -56,6 +56,20 @@ beforeEach(() => { vi.clearAllMocks(); mocks.auth.mockReturnValue(null) })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('Điều hướng tài khoản thật và khu vực minh họa', () => {
+  it('opens actual history for the selected clinic patient with bearer and a result link', async () => {
+    const clinic='11111111-1111-4111-8111-700000000001'
+    const analysis='11111111-1111-4111-8111-700000000002'
+    mocks.auth.mockReturnValue({ currentUser: { uid: context.firebaseUid, getIdToken: async () => 'fresh-user-token' } })
+    const fetchMock=vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({patientId:context.patientId,
+      items:[{analysisId:analysis,batchId:analysis,processingStatus:'COMPLETED',reviewStatus:'REVIEWED',createdAt:'2026-11-15T00:00:00Z'}],nextBeforeId:null}),
+      {headers:{'Content-Type':'application/json'}}))
+    vi.stubGlobal('fetch',fetchMock)
+    show({status:'ready',context},`/clinics/patients/${context.patientId}/history?clinicContextId=${clinic}`)
+    await screen.findByRole('heading',{name:'Lịch sử phân tích của bệnh nhân'})
+    expect((await screen.findByRole('link',{name:'Xem kết quả'})).getAttribute('href')).toBe(`/analyses/${analysis}?clinicContextId=${clinic}`)
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/analyses/patients/${context.patientId}/history?clinicContextId=${clinic}&limit=20`,
+      expect.objectContaining({headers:{Authorization:'Bearer fresh-user-token'}}))
+  })
   it('accepts an invitation explicitly after login then refreshes clinic discovery', async () => {
     const membershipId = '11111111-1111-4111-8111-700000000001'
     mocks.auth.mockReturnValue({ currentUser: { uid: context.firebaseUid, getIdToken: async () => 'fresh-user-token' } })

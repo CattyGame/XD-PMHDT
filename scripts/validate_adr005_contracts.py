@@ -15,6 +15,14 @@ def main():
                  "ai-openapi-1.3.yaml", "ai_service_openapi.yaml", "ai_service_openapi.json"):
         document, base = read_from_filename(str(ROOT / "contracts" / name))
         validate(document, base_uri=base)
+        schemes = set(document.get("components", {}).get("securitySchemes", {}))
+        for operations in document.get("paths", {}).values():
+            for method, operation in operations.items():
+                if method not in ("get", "post", "put", "patch", "delete", "head", "options", "trace"):
+                    continue
+                for requirement in operation.get("security", document.get("security", [])):
+                    if not set(requirement) <= schemes:
+                        raise ValueError(f"{name}: undefined security scheme on {method}")
     validators = {}
     profile, _ = read_from_filename(str(ROOT / "contracts/profile-openapi.yaml"))
     membership = profile["components"]["schemas"]["ClinicMembershipDto"]["properties"]

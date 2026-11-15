@@ -337,13 +337,13 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
               >
                 + Chụp / Gửi ảnh phân tích
               </Link>
-              <Link
+              {currentClinic?.role !== 'STAFF' && <Link
                 className="btn-secondary"
-                to={`/batches?clinicContextId=${selectedPatient.clinicId}`}
+                to={`/clinics/patients/${selectedPatient.patientId}/history?clinicContextId=${selectedPatient.clinicId}`}
                 style={{ textDecoration: 'none', fontSize: '13px' }}
               >
                 Lịch sử đợt khám
-              </Link>
+              </Link>}
             </div>
           </div>
 

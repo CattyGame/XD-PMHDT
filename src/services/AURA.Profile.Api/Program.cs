@@ -681,6 +681,7 @@ app.MapPost("/api/v1/clinics/{clinicId:guid}/assignments", async (
             "ERR_ASSIGNMENT_ALREADY_EXISTS" => StatusCodes.Status409Conflict,
             "ERR_CLINIC_NOT_FOUND" => StatusCodes.Status404NotFound,
             "ERR_PATIENT_NOT_IN_CLINIC" => StatusCodes.Status400BadRequest,
+            "ERR_INVALID_ANALYSIS_BINDING" => StatusCodes.Status400BadRequest,
             "ERR_INVALID_DOCTOR" => StatusCodes.Status400BadRequest,
             _ => StatusCodes.Status500InternalServerError
         };
@@ -903,6 +904,7 @@ app.MapPost("/api/v1/clinics/{clinicId:guid}/assignments/{assignmentId:guid}/tra
             "ERR_ASSIGNMENT_NOT_FOUND" => StatusCodes.Status404NotFound,
             "ERR_ASSIGNMENT_NOT_ACTIVE" => StatusCodes.Status400BadRequest,
             "ERR_SAME_DOCTOR" => StatusCodes.Status400BadRequest,
+            "ERR_INVALID_ANALYSIS_BINDING" => StatusCodes.Status400BadRequest,
             "ERR_INVALID_DOCTOR" => StatusCodes.Status400BadRequest,
             _ => StatusCodes.Status500InternalServerError
         };

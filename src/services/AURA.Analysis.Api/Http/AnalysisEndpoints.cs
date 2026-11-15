@@ -20,6 +20,13 @@ public static class AnalysisEndpoints
 {
     public static void MapAnalysisEndpoints(this WebApplication app)
     {
+        app.MapGet("/api/v1/analyses/patients/{patientId}/history", (HttpContext c, string patientId, int? limit, Guid? beforeId) => Handle(c, async () =>
+        {
+            var user = await User(c);
+            var clinic = Clinic(c) ?? throw UploadFailure.Validation(new ErrorDetail("clinicContextId", "required"));
+            return Results.Json(await c.RequestServices.GetRequiredService<PatientHistoryService>().GetAsync(
+                user.AccountId, clinic, ResourceId(patientId), limit ?? 20, beforeId, Correlation(c), c.RequestAborted), UploadJson.Options);
+        }));
         app.MapGet("/internal/v1/analysis/bindings/{analysisId}",(HttpContext c,string analysisId)=>Handle(c,async()=>
         {
             ServiceAuthValidator.RequireServiceScope(c.Request,"analysis:binding");

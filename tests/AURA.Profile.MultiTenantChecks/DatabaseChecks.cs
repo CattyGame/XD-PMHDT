@@ -30,6 +30,7 @@ internal static class DatabaseChecks
         builder.Options="-c role=aura_profile_app";
         await using var runtime=NpgsqlDataSource.Create(builder.ConnectionString);
         var repository=new ProfileRepository(runtime,authority,bindings);
+        await ParallelAccessChecks.RunAsync(admin,connectionString,owner,clinic,patient);
         var passed=0;
         void Verify(bool condition,string name){if(!condition)throw new InvalidOperationException("DB FAIL: "+name);Console.WriteLine("DB PASS: "+name);passed++;}
 

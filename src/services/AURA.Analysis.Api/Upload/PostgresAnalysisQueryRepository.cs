@@ -2,8 +2,34 @@ using Npgsql;
 
 namespace AURA.Analysis.Api.Upload;
 
-public sealed class PostgresAnalysisQueryRepository(NpgsqlDataSource dataSource) : IAnalysisQueryRepository, IDoctorWorklistRepository
+public sealed class PostgresAnalysisQueryRepository(NpgsqlDataSource dataSource) : IAnalysisQueryRepository, IDoctorWorklistRepository, IPatientHistoryRepository
 {
+    public async Task<IReadOnlyList<PatientHistoryItem>> ListAsync(Guid tenantId, Guid clinicId, Guid patientId,
+        int limit, Guid? beforeId, CancellationToken ct)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT i.id,COALESCE(i.batch_id,i.analysis_request_id),i.processing_status,i.review_status,i.created_at
+            FROM analysis.images i JOIN analysis.analysis_requests r
+              ON r.id=i.analysis_request_id AND r.tenant_id=i.tenant_id
+            WHERE i.tenant_id=$1 AND r.owner_id=$2 AND r.patient_id=$3
+              AND ($4::uuid IS NULL OR (i.created_at,i.id) < (
+                SELECT ci.created_at,ci.id FROM analysis.images ci
+                JOIN analysis.analysis_requests cr ON cr.id=ci.analysis_request_id AND cr.tenant_id=ci.tenant_id
+                WHERE ci.id=$4 AND ci.tenant_id=$1 AND cr.owner_id=$2 AND cr.patient_id=$3))
+            ORDER BY i.created_at DESC,i.id DESC LIMIT $5;
+            """);
+        command.Parameters.AddWithValue(tenantId);
+        command.Parameters.AddWithValue(clinicId);
+        command.Parameters.AddWithValue(patientId);
+        command.Parameters.AddWithValue((object?)beforeId ?? DBNull.Value);
+        command.Parameters.AddWithValue(limit);
+        var rows = new List<PatientHistoryItem>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            rows.Add(new(reader.GetGuid(0),reader.GetGuid(1),reader.GetString(2),reader.GetString(3),reader.GetDateTime(4)));
+        return rows;
+    }
+
     public async Task<IReadOnlyList<AnalysisIdentity>> ListDoctorWorklistAsync(Guid tenantId, Guid patientId, CancellationToken ct)
     {
         if (tenantId == Guid.Empty || patientId == Guid.Empty) return Array.Empty<AnalysisIdentity>();
