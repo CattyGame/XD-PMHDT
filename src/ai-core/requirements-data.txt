@@ -1,0 +1,4 @@
+# Optional dataset preparation and expert-reference evaluation; not required by the API.
+pymupdf==2.1.0
+# Original HRF expert optic-disc reference workbook (legacy XLS).
+xlrd==2.0.2

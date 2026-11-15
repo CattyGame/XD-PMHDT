@@ -1,0 +1,6 @@
+# Third-party research components
+
+- `rrwnet/model.py`: José Morano, MIT license in `rrwnet/LICENSE`; upstream `j-morano/rrwnet`, commit `03069bb673f87d4b3cee37df378e0f15e5ade280`. The author's **weights have a separate CC BY-NC 4.0 license**; the download command retains that license beside the artifact.
+- Optic-disc preprocessing/postprocessing in `avr_optic_disc.py` follows the PVBM DiscSegmenter method, AIMLab, MIT code license in `pvbm/LICENSE`. Source: `https://github.com/aim-lab/PVBM/blob/main/PVBM/DiscSegmenter.py`, source blob `ac9ad464aa70bd0a45ceacc22586405092442945`. The ONNX artifact is pinned separately; code licensing does not establish clinical validation or commercial rights for model weights.
+
+No remote Python code is executed by the runtime. Artifacts are downloaded explicitly, SHA-256 checked, and mounted read-only. This combined pipeline is offered for research/noncommercial use; no clinical validation is claimed.

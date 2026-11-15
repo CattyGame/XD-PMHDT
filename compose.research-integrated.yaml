@@ -1,0 +1,29 @@
+# Merge after compose.yaml, compose.workers.yaml and compose.research-avr.yaml.
+# One CPU research inference at a time; weights remain outside the image/repository.
+services:
+  ai-core:
+    cpus: '2.0'
+    mem_limit: 2048M
+    environment:
+      AURA_INTEGRATED_RESEARCH_ENABLED: "true"
+      AURA_FRANGI_CONFIG_PATH: /app/config/ai-frangi-v1.3.yaml
+      AURA_DR_CNN_CHECKPOINT: /run/aura-dr/model.pt
+      AURA_DR_CNN_SHA256: "${AURA_DR_CHECKPOINT_SHA256:?Set the verified DR checkpoint SHA-256}"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    volumes:
+      - type: bind
+        source: "${AURA_DR_CHECKPOINT_FILE:?Set the verified DR checkpoint file}"
+        target: /run/aura-dr/model.pt
+        read_only: true
+        bind: {create_host_path: false}
+  analysis-worker:
+    environment:
+      WorkerOptions__Concurrency: "1"
+      WorkerOptions__Prefetch: "1"
+      RABBITMQ_PREFETCH_COUNT: "1"
+      WorkerOptions__AiTimeoutSeconds: "240"
+      AiClient__TimeoutSeconds: "240"
+    deploy:
+      replicas: 1

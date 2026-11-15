@@ -77,6 +77,30 @@ describe('SCRUM-333 — Analysis Result client', () => {
     expect(() => parseAnalysis({ ...completed, processingStatus: 'FAILED' }, analysisId)).toThrow(AnalysisResultError)
   })
 
+  it('preserves a null AVR and rejects AI outcome labels used as processing statuses', () => {
+    const value = { ...completed, result: { ...completed.result, metrics: { avRatio: null } } }
+    expect(parseAnalysis(value, analysisId).result?.metrics.avRatio).toBeNull()
+    for (const status of ['WARNING', 'SUCCESS', 'UNKNOWN']) {
+      expect(() => parseAnalysis({ ...completed, processingStatus: status, result: null }, analysisId)).toThrow(AnalysisResultError)
+    }
+  })
+
+  it('retains research provenance and rejects impossible DR probabilities or misplaced Grad-CAM', () => {
+    const research = {
+      avr: { measurement_available: false, avr: null, crae_px: null, crve_px: null,
+        unavailable_reason: 'INCOMPLETE_ZONE_B', model_version: 'avr-v8', model_sha256: 'a'.repeat(64) },
+      dr: { probability_dr: 0.61, model_version: 'resnet34', checkpoint_sha256: 'b'.repeat(64),
+        gradcam_method: 'GRAD_CAM', gradcam_geometry: 'IMAGENET_CENTER_CROP_224' },
+    }
+    const value = { ...completed, result: { ...completed.result, metrics: { avRatio: null }, research } }
+    expect(parseAnalysis(value, analysisId).result).toHaveProperty('research.dr.probability_dr', 0.61)
+    const lowRisk = { ...value.result, riskAvailable: true, riskLevel: 'LOW', riskScore: 0.1, confidenceScore: 0.9 }
+    expect(() => parseAnalysis({ ...value, result: lowRisk }, analysisId)).toThrow(AnalysisResultError)
+    for (const dr of [{ ...research.dr, probability_dr: 1.5 }, { ...research.dr, gradcam_geometry: 'NATIVE_FULL_IMAGE' }]) {
+      expect(() => parseAnalysis({ ...value, result: { ...value.result, research: { ...research, dr } } }, analysisId)).toThrow(AnalysisResultError)
+    }
+  })
+
   it.each([401, 403, 404])('fails closed for HTTP %i', async (status) => {
     fetchMock.mockResolvedValueOnce(json({ error: { code: 'ERR_FORBIDDEN' } }, status))
     await expect(getAnalysisResult(analysisId, context)).rejects.toMatchObject({ status })

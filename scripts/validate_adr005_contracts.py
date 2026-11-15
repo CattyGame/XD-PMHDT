@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    for name in ("analysis-openapi-0.9.yaml", "billing-openapi.yaml", "profile-openapi.yaml", "identity-openapi.yaml"):
+    for name in ("analysis-openapi-0.9.yaml", "billing-openapi.yaml", "profile-openapi.yaml", "identity-openapi.yaml",
+                 "ai-openapi-1.3.yaml", "ai_service_openapi.yaml", "ai_service_openapi.json"):
         document, base = read_from_filename(str(ROOT / "contracts" / name))
         validate(document, base_uri=base)
     validators = {}
@@ -35,7 +36,7 @@ def main():
     validators["0.7"].validate(invalid)
     if validators["0.7"].is_valid(event):
         raise ValueError("Historical0.7 accepted a new0.8 envelope")
-    print("PASS ADR005: four OpenAPI contracts; event0.8 canonical and event0.7 historical compatibility, with negative controls.")
+    print("PASS ADR005: seven OpenAPI contracts; event0.8 canonical and event0.7 historical compatibility, with negative controls.")
 
 
 if __name__ == "__main__":

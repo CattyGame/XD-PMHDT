@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Moq;
 using Aura.Worker.Analysis.Configuration;
@@ -76,8 +77,13 @@ public class JobProcessorTests
             _loggerMock.Object);
     }
 
-    [Fact]
-    public async Task AC1_ValidFundusImage_CompletesSuccessfully_WithAnnotationsAndOutbox()
+    [Theory]
+    [InlineData(null, false, false)]
+    [InlineData(0.672, false, false)]
+    [InlineData(null, true, false)]
+    [InlineData(0.672, true, false)]
+    [InlineData(null, true, true)]
+    public async Task AC1_Annotations_AreValidatedBeforeCanonicalCommit(double? avRatio, bool integrated, bool invalidCrop)
     {
         // Arrange
         var tenantId = Guid.NewGuid();
@@ -134,7 +140,7 @@ public class JobProcessorTests
             ConfigVersion = "s3-frangi-1.0.0",
             ThresholdVersion = "frangi-threshold-0.02-v1",
             ImageInfo = new AiImageInfo { Width = 1, Height = 1, Channels = 3, EyeSide = "left", Modality = "FUNDUS" },
-            Metrics = new AiMetrics { VesselDensity = 0.05 },
+            Metrics = new AiMetrics { VesselDensity = 0.05, AvRatio = avRatio },
             RiskAvailable = false,
             RiskAssessment = null,
             Warnings = new List<AiWarning> { new() { Code = "RISK_UNAVAILABLE", Message = "Frangi" } },
@@ -146,8 +152,32 @@ public class JobProcessorTests
             }
         };
 
+        if (avRatio is null)
+            validAiResponse.Warnings.Add(new() { Code = "AVR_UNAVAILABLE", Message = "Insufficient vessel sets" });
+        if (integrated)
+        {
+            validAiResponse.Research = new AiResearchResults {
+                Avr = new AiAvrResearch { MeasurementAvailable = avRatio is not null, Avr = avRatio,
+                    CraePx = avRatio * 20, CrvePx = avRatio is null ? null : 20,
+                    UnavailableReason = avRatio is null ? "INSUFFICIENT_SIX_VESSEL_SETS" : null,
+                    ModelVersion = "avr-v8", ModelSha256 = new string('a',64) },
+                Dr = new AiDrResearch { ProbabilityDr = 0.61, ModelVersion = "resnet34", CheckpointSha256 = new string('b',64),
+                    GradcamMethod = "GRAD_CAM", GradcamGeometry = "IMAGENET_CENTER_CROP_224" }
+            };
+            validAiResponse.Segmentation.AvOverlayBase64 = validAiResponse.Segmentation.OverlayBase64;
+            validAiResponse.Segmentation.GradcamBase64 = "iVBORw0KGgoAAAANSUhEUgAAAOAAAADgCAAAAAA/RjU9AAAASElEQVR42u3BMQEAAADCoPVPbQo/oAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAICXAcTgAAGGKhurAAAAAElFTkSuQmCC";
+            if (invalidCrop) validAiResponse.Segmentation.GradcamBase64 = validAiResponse.Segmentation.OverlayBase64;
+        }
+
         _aiMock.Setup(a => a.AnalyzeAsync(It.IsAny<AiAnalyzeRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AiCallResult { IsSuccess = true, Response = validAiResponse });
+
+        string? committedJson = null;
+        _analysisRepoMock.Setup(r => r.CommitSuccessAsync(analysisId, It.IsAny<JobLease>(), It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<AnnotationDescriptor>>(), It.IsAny<OutboxRecord>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, JobLease, string, IReadOnlyList<AnnotationDescriptor>, OutboxRecord, CancellationToken>(
+                (_, _, json, _, _, _) => committedJson = json)
+            .Returns(Task.CompletedTask);
 
         var processor = CreateProcessor();
 
@@ -155,10 +185,36 @@ public class JobProcessorTests
         var result = await processor.ProcessAsync(message, CancellationToken.None);
 
         // Assert
+        if (invalidCrop)
+        {
+            Assert.Equal(JobProcessResult.AckFailure, result);
+            Assert.Null(committedJson);
+            _blobMock.Verify(b => b.UploadAnnotationAsync(It.IsAny<string>(),It.IsAny<byte[]>(),It.IsAny<string>(),It.IsAny<CancellationToken>()),Times.Never);
+            _analysisRepoMock.Verify(r => r.CommitFailureAsync(analysisId,It.IsAny<JobLease>(),AnalysisStatus.Failed,
+                It.IsAny<string>(),It.IsAny<OutboxRecord>(),It.IsAny<CancellationToken>()),Times.Once);
+            return;
+        }
         Assert.Equal(JobProcessResult.AckSuccess, result);
+        using var persisted = JsonDocument.Parse(Assert.IsType<string>(committedJson));
+        var root = persisted.RootElement;
+        var storedAvr = root.GetProperty("metrics").GetProperty("avRatio");
+        if (avRatio is null) Assert.Equal(JsonValueKind.Null, storedAvr.ValueKind);
+        else Assert.Equal(avRatio.Value, storedAvr.GetDouble());
+        Assert.False(root.GetProperty("riskAvailable").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("riskLevel").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("riskScore").ValueKind);
+        if (avRatio is null)
+            Assert.Contains(root.GetProperty("warnings").EnumerateArray(), w => w.GetProperty("code").GetString() == "AVR_UNAVAILABLE");
+        if (integrated)
+        {
+            Assert.True(root.GetProperty("metrics").TryGetProperty("research", out var research));
+            Assert.Equal(0.61, research.GetProperty("dr").GetProperty("probability_dr").GetDouble());
+            Assert.Equal(4, root.GetProperty("annotations").GetArrayLength());
+        }
         _blobMock.Verify(b => b.UploadAnnotationAsync(It.Is<string>(s => s.Contains("mask")), It.IsAny<byte[]>(), "image/png", It.IsAny<CancellationToken>()), Times.Once);
         _blobMock.Verify(b => b.UploadAnnotationAsync(It.Is<string>(s => s.Contains("overlay")), It.IsAny<byte[]>(), "image/png", It.IsAny<CancellationToken>()), Times.Once);
-        _analysisRepoMock.Verify(r => r.CommitSuccessAsync(analysisId, It.Is<JobLease>(l => l.JobId == jobId), It.IsAny<string>(), It.Is<IReadOnlyList<AnnotationDescriptor>>(a => a.Count == 2 && a.All(x => x.SizeBytes != 2048 && x.Width == 1)), It.Is<OutboxRecord>(o => o.EventType == "analysis.completed"), It.IsAny<CancellationToken>()), Times.Once);
+        _analysisRepoMock.Verify(r => r.CommitSuccessAsync(analysisId, It.Is<JobLease>(l => l.JobId == jobId), It.IsAny<string>(), It.Is<IReadOnlyList<AnnotationDescriptor>>(a => a.Count == (integrated ? 4 : 2)
+            && a.All(x => x.SizeBytes != 2048 && x.Width == (x.Type == "HEATMAP" ? 224 : 1))), It.Is<OutboxRecord>(o => o.EventType == "analysis.completed"), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

@@ -318,6 +318,24 @@
               }
             }
           },
+          "429": {
+            "description": "RESEARCH_MODEL_BUSY when the optional research profile shares one bounded inference slot; retry with backoff.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Processing failure",
             "content": {
@@ -706,6 +724,16 @@
             "type": "string",
             "nullable": true,
             "minLength": 4
+          },
+          "av_overlay_base64": {
+            "type": "string",
+            "minLength": 4,
+            "description": "Native-size artery/vein overlay, available with integrated research."
+          },
+          "gradcam_base64": {
+            "type": "string",
+            "minLength": 4,
+            "description": "DR Grad-CAM overlay in ImageNet center-crop coordinates (224x224)."
           }
         }
       },
@@ -819,6 +847,9 @@
             "nullable": true,
             "default": null
           },
+          "research": {
+            "$ref": "#/components/schemas/ResearchResults"
+          },
           "segmentation": {
             "allOf": [
               {
@@ -826,6 +857,18 @@
               }
             ],
             "nullable": true
+          }
+        },
+        "not": {
+          "required": [
+            "research"
+          ],
+          "properties": {
+            "risk_available": {
+              "enum": [
+                true
+              ]
+            }
           }
         }
       },
@@ -857,6 +900,120 @@
             "pattern": "Z$"
           }
         }
+      },
+      "ResearchResults": {
+        "additionalProperties": false,
+        "properties": {
+          "avr": {
+            "$ref": "#/components/schemas/AvrResearchResult"
+          },
+          "dr": {
+            "$ref": "#/components/schemas/DrResearchResult"
+          }
+        },
+        "required": [
+          "avr",
+          "dr"
+        ],
+        "type": "object"
+      },
+      "AvrResearchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "measurement_available": {
+            "title": "Measurement Available",
+            "type": "boolean"
+          },
+          "avr": {
+            "default": null,
+            "title": "Avr",
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "nullable": true
+          },
+          "crae_px": {
+            "default": null,
+            "title": "Crae Px",
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "nullable": true
+          },
+          "crve_px": {
+            "default": null,
+            "title": "Crve Px",
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "nullable": true
+          },
+          "unavailable_reason": {
+            "default": null,
+            "title": "Unavailable Reason",
+            "type": "string",
+            "nullable": true
+          },
+          "model_version": {
+            "minLength": 1,
+            "title": "Model Version",
+            "type": "string"
+          },
+          "model_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Model Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "measurement_available",
+          "model_version",
+          "model_sha256"
+        ],
+        "type": "object"
+      },
+      "DrResearchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "probability_dr": {
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Probability Dr",
+            "type": "number"
+          },
+          "model_version": {
+            "minLength": 1,
+            "title": "Model Version",
+            "type": "string"
+          },
+          "checkpoint_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Checkpoint Sha256",
+            "type": "string"
+          },
+          "gradcam_method": {
+            "enum": [
+              "GRAD_CAM"
+            ],
+            "title": "Gradcam Method",
+            "type": "string"
+          },
+          "gradcam_geometry": {
+            "enum": [
+              "IMAGENET_CENTER_CROP_224"
+            ],
+            "title": "Gradcam Geometry",
+            "type": "string"
+          }
+        },
+        "required": [
+          "probability_dr",
+          "model_version",
+          "checkpoint_sha256",
+          "gradcam_method",
+          "gradcam_geometry"
+        ],
+        "type": "object"
       }
     }
   }

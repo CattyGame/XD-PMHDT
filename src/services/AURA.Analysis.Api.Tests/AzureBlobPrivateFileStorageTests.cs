@@ -65,11 +65,29 @@ public sealed class AzureBlobPrivateFileStorageTests
     [InlineData("../escape")]
     [InlineData("/absolute")]
     [InlineData("patient-name/photo.png")]
+    [InlineData("staging/not-a-uuid/11111111-1111-4111-8111-111111111111")]
+    [InlineData("staging/11111111-1111-4111-8111-111111111111/../../escape")]
+    [InlineData("staging/11111111-1111-4111-8111-111111111111/00000000-0000-0000-0000-000000000000")]
+    [InlineData("11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111/patient-photo.png")]
+    [InlineData("11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111/mask-00000000-0000-0000-0000-000000000000.png")]
     [InlineData("00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000")]
     public async Task Unsafe_object_names_are_rejected_before_any_request(string key)
     {
         var storage = new AzureBlobPrivateFileStorage(Options(), true);
         await Assert.ThrowsAsync<ArgumentException>(() => storage.OpenReadAsync("aura-originals", key, default));
+    }
+
+    [Fact]
+    public async Task Staging_keys_reach_content_validation_without_relaxing_payload_checks()
+    {
+        var storage=new AzureBlobPrivateFileStorage(Options(),true);
+        var annotations=new[]{"mask","overlay","annotated","heatmap"}.Select(kind=>$"{ObjectKey}/{kind}-{Guid.NewGuid():D}.png");
+        foreach(var key in new[]{ObjectKey,$"staging/{Guid.NewGuid():D}/{Guid.NewGuid():D}"}.Concat(annotations))
+        {
+            using var empty=new MemoryStream();
+            var error=await Assert.ThrowsAsync<ArgumentException>(()=>storage.PutAsync("aura-originals",key,empty,"image/png",default));
+            Assert.Equal("Invalid storage content.",error.Message);
+        }
     }
 
     [Fact]

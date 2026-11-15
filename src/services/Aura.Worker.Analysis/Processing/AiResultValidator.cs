@@ -86,6 +86,29 @@ public static class AiResultValidator
             };
         }
 
+        if (response.Research is { } research)
+        {
+            var a = research.Avr;
+            var d = research.Dr;
+            bool Positive(double? value) => value is { } number && double.IsFinite(number) && number > 0;
+            bool Hash(string? value) => value is { Length: 64 } && value.All(Uri.IsHexDigit);
+            var avrValid = a is not null && (a.MeasurementAvailable is true
+                ? Positive(a.Avr) && Positive(a.CraePx) && Positive(a.CrvePx)
+                  && Math.Abs(a.Avr!.Value - a.CraePx!.Value / a.CrvePx!.Value) <= 1e-6
+                  && a.UnavailableReason is null && !string.IsNullOrWhiteSpace(response.Segmentation.AvOverlayBase64)
+                : a.MeasurementAvailable is false && a.Avr is null && a.CraePx is null && a.CrvePx is null
+                  && !string.IsNullOrWhiteSpace(a.UnavailableReason));
+            if (response.RiskAvailable || !avrValid || a!.Avr != response.Metrics.AvRatio || string.IsNullOrWhiteSpace(a.ModelVersion) || !Hash(a.ModelSha256)
+                || d is null || d.ProbabilityDr is not (>= 0 and <= 1) || !double.IsFinite(d.ProbabilityDr.Value)
+                || string.IsNullOrWhiteSpace(d.ModelVersion) || !Hash(d.CheckpointSha256)
+                || d.GradcamMethod != "GRAD_CAM" || d.GradcamGeometry != "IMAGENET_CENTER_CROP_224"
+                || string.IsNullOrWhiteSpace(response.Segmentation.GradcamBase64))
+                return new ValidationOutcome { IsValid = false, ErrorCode = "ERR_AI_OUTPUT_INVALID",
+                    ErrorMessage = "Invalid integrated research metadata or AVR measurement invariants." };
+        }
+        else if (response.Segmentation.AvOverlayBase64 is not null || response.Segmentation.GradcamBase64 is not null)
+            return new ValidationOutcome { IsValid = false, ErrorCode = "ERR_AI_OUTPUT_INVALID", ErrorMessage = "Research annotations require research provenance." };
+
         return new ValidationOutcome { IsValid = true };
     }
 }

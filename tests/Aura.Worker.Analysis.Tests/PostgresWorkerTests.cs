@@ -70,6 +70,33 @@ public sealed class PostgresWorkerTests
         warnings=new[]{new{code="RISK_UNAVAILABLE",message="Research fixture"}}});
 
     [PostgresFact]
+    public async Task Integrated_research_and_all_four_private_annotations_survive_canonical_commit()
+    {
+        var f=await Seed();await using var db=Database();
+        var lease=(await new JobRepository(db,NullLogger<JobRepository>.Instance)
+            .TryAcquireLeaseAsync(f.Job,"integrated-test",TimeSpan.FromMinutes(1),default))!;
+        var bytes=Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jkioAAAAASUVORK5CYII=");
+        var annotations=new[]{"MASK","OVERLAY","ANNOTATED","HEATMAP"}.Select(type=>AnnotationMetadata.FromPng(
+            Guid.NewGuid(),type,$"{f.Tenant:D}/{f.Request:D}/{f.Image:D}/{type.ToLowerInvariant()}.png",bytes)).ToArray();
+        var result=System.Text.Json.Nodes.JsonNode.Parse(Result)!;
+        result["metrics"]!["avRatio"]=null;
+        result["metrics"]!["research"]=System.Text.Json.Nodes.JsonNode.Parse("""
+            {"avr":{"measurement_available":false,"avr":null,"crae_px":null,"crve_px":null,
+            "unavailable_reason":"INSUFFICIENT_SIX_VESSEL_SETS","model_version":"avr-v8-test"},
+            "dr":{"probability_dr":0.61,"model_version":"resnet34-test","gradcam_geometry":"IMAGENET_CENTER_CROP_224"}}
+            """);
+        await new AnalysisRepository(db).CommitSuccessAsync(f.Image,lease,result.ToJsonString(),annotations,
+            OutboxEventFactory.CreateCompletedEvent(f.Tenant,f.Image,f.Patient,"integrated-test","fixture-model","fixture-config","fixture-threshold"),default);
+        await using var connection=new NpgsqlConnection(Admin);await connection.OpenAsync();
+        await using var command=new NpgsqlCommand("SELECT metrics::text,(SELECT count(*) FROM analysis.annotation_refs a WHERE a.analysis_result_id=r.id) FROM analysis.analysis_results r WHERE image_id=$1",connection);
+        command.Parameters.AddWithValue(f.Image);await using var reader=await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());Assert.Equal(4,reader.GetInt64(1));
+        using var metrics=JsonDocument.Parse(reader.GetString(0));
+        Assert.Equal(JsonValueKind.Null,metrics.RootElement.GetProperty("avRatio").ValueKind);
+        Assert.Equal(.61,metrics.RootElement.GetProperty("research").GetProperty("dr").GetProperty("probability_dr").GetDouble());
+    }
+
+    [PostgresFact]
     public async Task Twenty_workers_contend_for_one_job_and_stale_fence_protects_terminal_result()
     {
         var f=await Seed();

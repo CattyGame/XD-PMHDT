@@ -21,6 +21,9 @@ import gc
 import io
 import json
 import math
+import os
+import subprocess
+import sys
 import time
 import tracemalloc
 import uuid
@@ -140,6 +143,16 @@ def client():
 
 
 def test_vectorized_frangi_matches_baseline_100_percent_and_under_1800ms():
+    if os.getenv("AURA_FRANGI_PERF_CHILD") != "1":
+        # Measure the baseline runtime independently of optional ML libraries loaded by other tests.
+        environment = {**os.environ, "AURA_FRANGI_PERF_CHILD": "1"}
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", f"{Path(__file__).resolve()}::test_vectorized_frangi_matches_baseline_100_percent_and_under_1800ms", "-q"],
+            cwd=REPO_ROOT, env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "1 passed" in result.stdout, result.stdout
+        return
     with MANIFEST_CSV.open(encoding="utf-8-sig", newline="") as f:
         test_rows = [r for r in csv.DictReader(f) if r["split"] == "test"]
     assert len(test_rows) == 6

@@ -53,6 +53,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/web/aura-web/package-lock.json
+
+      - name: Install locked schema validation dependencies
+        run: npm ci --ignore-scripts --prefix src/web/aura-web
+
       - name: Provision isolated M1 broker and private storage fixtures
         shell: pwsh
         env:
@@ -106,14 +115,6 @@ jobs:
             psql -X -v ON_ERROR_STOP=1 -f "${migration%$'\r'}"
           done < "$RUNNER_TEMP/adr005/migrations.txt" 2>&1 | tee "$RUNNER_TEMP/adr005/migrations-fresh.log"
 
-      - name: Reapply the exact upgrade and role-hardening plan
-        id: upgrade
-        shell: bash
-        run: |
-          while IFS= read -r migration; do
-            psql -X -v ON_ERROR_STOP=1 -f "${migration%$'\r'}"
-          done < "$RUNNER_TEMP/adr005/migrations.txt" 2>&1 | tee "$RUNNER_TEMP/adr005/migrations-upgrade.log"
-
       - name: Restore solution
         run: dotnet restore AURA.sln
 
@@ -125,7 +126,9 @@ jobs:
       - name: Contract route validation
         id: contracts
         shell: bash
-        run: python3 scripts/validate_openapi.py 2>&1 | tee "$RUNNER_TEMP/adr005/contracts.log"
+        run: |
+          python3 scripts/validate_openapi.py 2>&1 | tee "$RUNNER_TEMP/adr005/contracts.log"
+          node tests/research/m4_compose_checks.cjs 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
 
       - name: Live harness guardrails and service scope upgrade
         run: python3 -m unittest discover -s scripts/dev -p test_m1_harnesses.py
@@ -133,6 +136,8 @@ jobs:
       - name: Required Analysis, Billing and Worker tests including PostgreSQL
         id: tests
         shell: bash
+        env:
+          AURA_M2_ARTIFACTS: ${{ runner.temp }}/adr005/m2-responses
         run: |
           status=0
           for component in analysis billing worker m1; do
@@ -151,6 +156,21 @@ jobs:
 
       - name: Reject skipped or missing required TRX results
         run: python3 scripts/release/create_candidate_manifest.py --verify-trx "${{ runner.temp }}/adr005/results"
+
+      - name: Validate actual serialized Analysis responses against OpenAPI
+        id: response_contracts
+        shell: bash
+        run: |
+          node scripts/validate_analysis_responses.cjs --self-test 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
+          node scripts/validate_analysis_responses.cjs "${{ runner.temp }}/adr005/m2-responses/analysis-responses.json" 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
+
+      - name: Reapply migrations against the populated candidate database
+        id: upgrade
+        shell: bash
+        run: |
+          while IFS= read -r migration; do
+            psql -X -v ON_ERROR_STOP=1 -f "${migration%$'\r'}"
+          done < "$RUNNER_TEMP/adr005/migrations.txt" 2>&1 | tee "$RUNNER_TEMP/adr005/migrations-upgrade.log"
 
       - name: Actual encrypted PostgreSQL and private asset recovery
         shell: pwsh
@@ -186,10 +206,12 @@ jobs:
           FRESH_RESULT: ${{ steps.fresh.outcome }}
           UPGRADE_RESULT: ${{ steps.upgrade.outcome }}
           CONTRACT_RESULT: ${{ steps.contracts.outcome }}
+          CONTRACT_RESPONSE_RESULT: ${{ steps.response_contracts.outcome }}
           PROFILE_RESULT: ${{ steps.profile.outcome }}
           NOTIFICATION_RESULT: ${{ steps.notification.outcome }}
         run: |
           check_status() { if [ "$1" = success ]; then printf PASS; else printf BLOCKED; fi; }
+          if [ "$CONTRACT_RESPONSE_RESULT" != success ]; then CONTRACT_RESULT=failure; fi
           python3 scripts/release/create_candidate_manifest.py \
             --mode TEST --output "$RUNNER_TEMP/adr005/candidate-$GITHUB_SHA.json" \
             --image postgres=postgres:17 \

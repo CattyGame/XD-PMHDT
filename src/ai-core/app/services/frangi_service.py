@@ -140,11 +140,16 @@ class FrangiRuntimeConfig:
     min_contrast: float = 8.0
     min_sharpness: float = 3.5
     min_estimated_region_ratio: float = 0.15
+    preprocessing: str = "baseline"
 
     def __post_init__(self) -> None:
         self.validate()
 
     def validate(self) -> None:
+        if self.preprocessing not in ("baseline", "hrf-clahe-proxy-v1"):
+            raise FrangiConfigError("Unsupported preprocessing pipeline.")
+        if self.preprocessing != "baseline" and self.risk_available:
+            raise FrangiConfigError("HRF research pipeline requires riskAvailable=false.")
         if self.engine != "frangi":
             raise FrangiConfigError("Frangi runtime requires engine='frangi'.")
         if self.allow_mock is not False:
@@ -221,6 +226,7 @@ def load_frangi_config(config_path: Optional[Path] = None) -> FrangiRuntimeConfi
             config_version=str(raw.get("configVersion", "")),
             threshold_version=str(raw.get("thresholdVersion", "")),
             risk_available=risk_available,
+            preprocessing=str(alg.get("preprocessing", "baseline")),
             modality=str(inp.get("modality", "FUNDUS")),
             color=str(inp.get("color", "RGB")),
             max_bytes=int(inp.get("maxBytes", 10_485_760)),
@@ -511,6 +517,7 @@ def fast_vectorized_frangi_2d(
     gamma: Optional[float] = None,
     black_ridges: bool = True,
     mode: str = "reflect",
+    dtype=np.float64,
 ) -> np.ndarray:
     """
     Vectorized, zero-heap-churn 2D Frangi vesselness filter (Sprint 4-5 / W45-M4-02).
@@ -525,23 +532,25 @@ def fast_vectorized_frangi_2d(
        (Dice = 1.000000 against frozen Sprint 3 baseline across CHASE_DB1 test split).
     """
     _ = alpha
-    img = np.asarray(image, dtype=np.float64)
+    if dtype not in (np.float32, np.float64):
+        raise ValueError("Frangi working dtype must be float32 or float64.")
+    img = np.asarray(image, dtype=dtype)
     if img.size == 0 or float(img.max() - img.min()) == 0.0:
-        return np.zeros(img.shape, dtype=np.float64)
+        return np.zeros(img.shape, dtype=dtype)
     if not black_ridges:
         img = -img
 
     shape = img.shape
-    filtered_max = np.zeros(shape, dtype=np.float64)
-    buf_tmp = np.empty(shape, dtype=np.float64)
-    h00 = np.empty(shape, dtype=np.float64)
-    h01 = np.empty(shape, dtype=np.float64)
-    h11 = np.empty(shape, dtype=np.float64)
-    d = np.empty(shape, dtype=np.float64)
-    e_plus = np.empty(shape, dtype=np.float64)
-    e_minus = np.empty(shape, dtype=np.float64)
-    s_norm = np.empty(shape, dtype=np.float64)
-    vals = np.empty(shape, dtype=np.float64)
+    filtered_max = np.zeros(shape, dtype=dtype)
+    buf_tmp = np.empty(shape, dtype=dtype)
+    h00 = np.empty(shape, dtype=dtype)
+    h01 = np.empty(shape, dtype=dtype)
+    h11 = np.empty(shape, dtype=dtype)
+    d = np.empty(shape, dtype=dtype)
+    e_plus = np.empty(shape, dtype=dtype)
+    e_minus = np.empty(shape, dtype=dtype)
+    s_norm = np.empty(shape, dtype=dtype)
+    vals = np.empty(shape, dtype=dtype)
 
     sq1_2 = 1.0 / math.sqrt(2.0)
     gamma_val = gamma
@@ -596,8 +605,13 @@ def fast_vectorized_frangi_2d(
 
         np.square(s_norm, out=buf_tmp)
         buf_tmp *= inv_two_gamma_sq
-        np.exp(buf_tmp, out=buf_tmp)
-        np.subtract(1.0, buf_tmp, out=buf_tmp)
+        if dtype == np.float32:
+            # 1-exp(-x) cancels to zero for small retinal responses in float32.
+            np.expm1(buf_tmp, out=buf_tmp)
+            np.negative(buf_tmp, out=buf_tmp)
+        else:
+            np.exp(buf_tmp, out=buf_tmp)
+            np.subtract(1.0, buf_tmp, out=buf_tmp)
 
         vals *= buf_tmp
         np.maximum(filtered_max, vals, out=filtered_max)
@@ -735,7 +749,12 @@ def process_frangi_analysis(
         raise LowQualityImageError(quality_report.message, quality_report)
 
     # Step 3: Run vectorized Frangi v0.2 vessel segmentation
-    vessel_mask, _ = run_frangi_segmentation(rgb, interior=interior, config=config)
+    if config.preprocessing == "hrf-clahe-proxy-v1":
+        from .image_preprocessor import process_hrf_frangi_vessel_segmentation
+
+        vessel_mask = process_hrf_frangi_vessel_segmentation(rgb)["mask"]
+    else:
+        vessel_mask, _ = run_frangi_segmentation(rgb, interior=interior, config=config)
 
     # Step 4: Encode mask (PNG L 0/255) and overlay (PNG RGB) in original geometry
     mask_b64, overlay_b64 = encode_mask_and_overlay_png(rgb, vessel_mask)
@@ -783,6 +802,9 @@ def process_frangi_analysis(
             )
         ]
         limitations = "Segmentation research baseline; no clinical risk assessment."
+
+    if config.preprocessing != "baseline":
+        limitations += " HRF CLAHE proxy at 1280px longest edge; nearest-neighbor restoration; density uses original full image area."
 
     elapsed_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
 

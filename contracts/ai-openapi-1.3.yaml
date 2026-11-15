@@ -74,6 +74,17 @@ paths:
             application/json:
               schema:
                 $ref: ai-error.schema.json
+        '429':
+          description: RESEARCH_MODEL_BUSY; shared inference slot occupied when optional research artifacts are configured. Retry with backoff.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/XCorrelationId'
+            Retry-After:
+              schema: {type: integer, minimum: 1}
+          content:
+            application/json:
+              schema:
+                $ref: ai-error.schema.json
         '500':
           description: Internal inference runtime failure
           headers:

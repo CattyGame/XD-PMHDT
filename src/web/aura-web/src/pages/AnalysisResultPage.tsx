@@ -26,8 +26,8 @@ const fileLabels: Record<FileRef['kind'], string> = {
   original: 'Ảnh võng mạc gốc',
   mask: 'Mask phân vùng mạch máu',
   overlay: 'Ảnh phủ overlay',
-  heatmap: 'Heatmap',
-  annotated: 'Ảnh chú thích',
+  heatmap: 'Grad-CAM DR — crop 224×224',
+  annotated: 'Phân vùng động/tĩnh mạch trên ảnh gốc',
 }
 const processingLabels: Record<string, string> = {
   PENDING: 'Đang tiếp nhận',
@@ -125,6 +125,12 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
   useEffect(() => {
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
+    // Bound browser monitoring without changing the durable processing status.
+    const deadline = setTimeout(() => {
+      controller.abort()
+      if (timer !== undefined) clearTimeout(timer)
+      setView({ phase: 'error', error: new AnalysisResultError(0, 'ERR_STATUS_POLL_TIMEOUT', true) })
+    }, 300_000)
 
     const read = async () => {
       try {
@@ -133,9 +139,12 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
         setView({ phase: 'ready', analysis })
         if (!terminalStatuses.has(analysis.processingStatus)) {
           timer = setTimeout(() => { void read() }, 5000)
+        } else {
+          clearTimeout(deadline)
         }
       } catch (cause) {
         if (controller.signal.aborted) return
+        clearTimeout(deadline)
         // On permission revocation / session change, never retain previous personal data.
         setView({ phase: 'error', error: cause instanceof AnalysisResultError
           ? cause : new AnalysisResultError(0, 'ERR_NETWORK', true) })
@@ -146,6 +155,7 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
     return () => {
       controller.abort()
       if (timer !== undefined) clearTimeout(timer)
+      clearTimeout(deadline)
     }
   }, [analysisId, context, retryKey])
 
@@ -158,6 +168,8 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
 
   const { analysis } = view
   const result = analysis.result
+  const avRatio = result?.metrics.avRatio ?? null
+  const avrWarning = result?.warnings.find((warning) => warning.code === 'AVR_UNAVAILABLE')
   const files: FileRef[] = [
     ...(analysis.image ? [analysis.image] : []),
     ...(result?.annotations ?? []),
@@ -193,6 +205,26 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
         <p><strong>Cấu hình:</strong> {result.configVersion}</p>
         <p><strong>Ngưỡng:</strong> {result.thresholdVersion}</p>
       </div>
+      <section aria-label="Tỷ số động/tĩnh mạch (AVR)">
+        <h2>Tỷ số động/tĩnh mạch (AVR)</h2>
+        {avRatio !== null
+          ? <p>AVR: <strong>{avRatio}</strong></p>
+          : <div className="analysis-result-warning" role="note">
+            <p><strong>Chưa có kết quả AVR</strong> — AI đã xử lý xong, không tiếp tục chờ chỉ số này.</p>
+            <p>{avrWarning?.message ?? 'API chưa cung cấp số đo AVR cho ảnh này; xem các cảnh báo bên dưới nếu có.'}</p>
+            <p>Thiếu AVR không có nghĩa nguy cơ thấp. Các đánh giá khác, nếu có, được trình bày riêng.</p>
+          </div>}
+      </section>
+      {result.research && <section aria-label="Kết quả AI nghiên cứu">
+        <h2>Kết quả AI nghiên cứu</h2>
+        <p><strong>AVR V8:</strong> {result.research.avr.model_version}</p>
+        <p>CRAE: {result.research.avr.crae_px ?? 'Chưa đo được'} px · CRVE: {result.research.avr.crve_px ?? 'Chưa đo được'} px</p>
+        {!result.research.avr.measurement_available && <p>Lý do chưa có AVR: {result.research.avr.unavailable_reason}</p>}
+        <p><strong>DR nhị phân:</strong> {result.research.dr.model_version}</p>
+        <p>Xác suất DR do mô hình nghiên cứu ước lượng: {(result.research.dr.probability_dr * 100).toFixed(1)}%</p>
+        <p>Grad-CAM dùng vùng crop 224×224 từ ảnh đã resize, không phải bản đồ tổn thương trên toàn ảnh gốc.</p>
+        <p>Kết quả này không phân độ ICDR và không thay thế kết luận lâm sàng.</p>
+      </section>}
       {result.riskAvailable
         ? <section aria-label="Đánh giá nguy cơ từ API">
           <h2>Đánh giá nguy cơ do API cung cấp</h2>

@@ -7,7 +7,9 @@ using AURA.Analysis.Api.Auth;
 using AURA.Analysis.Api.Campaign;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
-using SkiaSharp;
+using QuestPDF.Fluent;
+using QuestPDF.Helpers;
+using QuestPDF.Infrastructure;
 
 namespace AURA.Analysis.Api.Upload;
 
@@ -27,6 +29,17 @@ public sealed record BatchArchiveManifestItem(string CaseCode, Guid AnalysisId, 
 public sealed class AnalysisReportOptions
 {
     public string PublicApiBaseUrl { get; set; } = "http://localhost:5000";
+
+    public string AnalysisUrl(Guid analysisId, Guid? clinicId)
+    {
+        if (!Uri.TryCreate(PublicApiBaseUrl, UriKind.Absolute, out var origin)
+            || !(origin.Scheme == "https" || origin.Scheme == "http" && origin.IsLoopback)
+            || origin.UserInfo.Length != 0 || origin.Query.Length != 0 || origin.Fragment.Length != 0)
+            throw new InvalidOperationException("Report public URL must be HTTPS (or loopback HTTP) without credentials, query or fragment.");
+        var path = $"api/v1/analyses/{analysisId:D}";
+        if (clinicId is { } clinic) path += $"?clinicContextId={clinic:D}";
+        return new Uri(new Uri(origin.AbsoluteUri.TrimEnd('/') + "/"), path).AbsoluteUri;
+    }
 }
 
 /// <summary>Generates authorized, de-identified batch exports and single-case PDF reports in private Blob storage.</summary>
@@ -40,6 +53,7 @@ public sealed class AnalysisReportService(
     NpgsqlDataSource dataSource,
     TimeProvider clock)
 {
+    public const long MaximumBatchExportBytes = 64 * 1024 * 1024;
     private static readonly TimeSpan LinkLifetime = TimeSpan.FromMinutes(15);
     private static readonly JsonSerializerOptions ManifestJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -75,8 +89,7 @@ public sealed class AnalysisReportService(
         var snapshotJson=JsonSerializer.Serialize(snapshot,UploadJson.Options);
         var digest=ReportSnapshotDigest.Compute(snapshotJson);
         var metrics = detail.Result.Metrics;
-        var secureAnalysisUrl = new Uri(new Uri(reportOptions.PublicApiBaseUrl.TrimEnd('/') + "/"),
-            $"api/v1/analyses/{detail.AnalysisId:D}").AbsoluteUri;
+        var secureAnalysisUrl = reportOptions.AnalysisUrl(detail.AnalysisId, clinicId);
         var pdfBytes = MedicalReportPdfRenderer.Render(new MedicalReportPdfData(
             reportId, detail.AnalysisId, detail.BatchId, detail.PatientId, clinicId,
             review?.DoctorId, DateTime.SpecifyKind(detail.CreatedAt, DateTimeKind.Utc), review is null?"PENDING":review.IsApproved?"REVIEWED":"CORRECTION_REQUIRED",
@@ -86,7 +99,7 @@ public sealed class AnalysisReportService(
             secureAnalysisUrl, originalBytes, overlayBytes)
             {ResultId=detail.Result.ResultId,ResultVersion=detail.Result.Version,ReviewId=review?.ReviewId,
                 ReviewVersion=review?.ReviewVersion,ConfigVersion=detail.Result.ConfigVersion,ThresholdVersion=detail.Result.ThresholdVersion,
-                CorrectedRiskLevel=review?.CorrectedRiskLevel,SnapshotDigest=digest});
+                CorrectedRiskLevel=review?.CorrectedRiskLevel,SnapshotDigest=digest,Research=detail.Result.Research});
         await using var pdf = new MemoryStream(pdfBytes, writable: false);
         return await StoreAndSignAsync(reportId, "pdf", original.TenantId, detail.BatchId, detail.AnalysisId,
             "application/pdf", pdf,requesterId,clinicId,snapshotJson,ct);
@@ -168,6 +181,7 @@ public sealed class AnalysisReportService(
                     var pdfEntry=$"case-{item.AnalysisId:D}.pdf";
                     await using var output=zip.CreateEntry(pdfEntry,CompressionLevel.Fastest).Open();
                     var pdfSha256=await CopyAndHashAsync(input,output,ct);
+                    if (archiveBytes.Length > MaximumBatchExportBytes) throw ReportTooLarge();
                     var sourceReview=doctorReviews.GetValueOrDefault(item.AnalysisId);
                     manifestItems.Add(new(caseCode,item.AnalysisId,item.ProcessingStatus,item.Error?.Code,
                         resultId,expectedSources[item.AnalysisId].ResultVersion,reviewId,sourceReview?.ReviewVersion,
@@ -198,6 +212,7 @@ public sealed class AnalysisReportService(
         else
             bytes = RenderBatchPdf(status, reportId, clock.GetUtcNow(),doctorReviews);
 
+        if (bytes.LongLength > MaximumBatchExportBytes) throw ReportTooLarge();
         await using var content = new MemoryStream(bytes, writable: false);
         return await StoreAndSignAsync(reportId, normalized, tenantId, batchId, batchId,
             normalized == "csv" ? "text/csv" : normalized=="zip"?"application/zip":"application/pdf", content,
@@ -260,15 +275,19 @@ public sealed class AnalysisReportService(
     {
         using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer=new byte[64*1024];
+        long length = 0;
         while(true)
         {
             var count=await input.ReadAsync(buffer,ct);
             if(count==0)break;
+            length += count;
+            if (length >= MedicalReportPdfRenderer.MaximumPdfBytes) throw ReportTooLarge();
             hash.AppendData(buffer,0,count);
             await output.WriteAsync(buffer.AsMemory(0,count),ct);
         }
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
+    private static UploadFailure ReportTooLarge() => new(413,"ERR_REPORT_TOO_LARGE","Báo cáo vượt giới hạn dung lượng; hãy tải PDF từng ca riêng lẻ.");
     public async Task<Stream> ReadDownloadAsync(Guid requesterId,Guid? clinicId,Guid reportId,string? correlation,CancellationToken ct)
     {
         await using var command=dataSource.CreateCommand("SELECT tenant_id,batch_id,analysis_id,requester_id,clinic_id,object_key,expires_at FROM analysis.report_snapshots WHERE id=$1");
@@ -325,57 +344,57 @@ public sealed class AnalysisReportService(
     private static string Rate(int count,int denominator)=>denominator==0?"N/A":(100d*count/denominator).ToString("F2",CultureInfo.InvariantCulture)+"%";
     private static string? DoctorConclusion(BatchPublicItem item,DoctorReportReview? review)=>review is null?null:review.CorrectedRiskLevel??(review.IsApproved?item.RiskLevel:null);
 
-    private static byte[] RenderBatchPdf(BatchStatusResponse report, Guid reportId, DateTimeOffset generatedAt,IReadOnlyDictionary<Guid,DoctorReportReview?> reviews)
+    public static byte[] RenderBatchPdf(BatchStatusResponse report, Guid reportId, DateTimeOffset generatedAt,
+        IReadOnlyDictionary<Guid,DoctorReportReview?> reviews)
     {
-        using var output = new MemoryStream();
-        using var document = SKDocument.CreatePdf(output);
         var suspicious = report.Items.Count(x => x.ProcessingStatus == "COMPLETED" && x.RiskLevel is "MODERATE" or "HIGH");
         var denominator = report.Items.Count(x => x.ProcessingStatus == "COMPLETED" && x.RiskLevel is not null);
-        var rate = Rate(suspicious,denominator);
-        var page = document.BeginPage(595, 842);
-        DrawText(page, "AURA - Batch Summary Report", 36, 42, 22, true);
-        DrawText(page, $"Batch: {report.BatchId:D}    Report: {reportId:D}", 36, 72);
-        DrawText(page, $"Generated (UTC): {generatedAt:yyyy-MM-dd HH:mm:ss}", 36, 96);
-        DrawText(page, $"Status: {report.BatchStatus}    Total: {report.Summary.Total}    Completed: {report.Summary.Succeeded}    Failed: {report.Summary.Failed}", 36, 124);
-        DrawText(page, $"AI research indicator: {rate} ({suspicious}/{denominator} available; not a clinical diagnosis)", 36, 150, 10, true);
-        DrawText(page, "Case (de-identified)", 36, 194, 10, true);
-        DrawText(page, "Processing", 198, 194, 10, true);
-        DrawText(page, "Review", 310, 194, 10, true);
-        DrawText(page, "AI", 410, 194, 10, true);
-        DrawText(page, "Doctor", 490, 194, 10, true);
-        var rowIndex = 0;
-        foreach (var item in report.Items)
+        return Document.Create(document => document.Page(page =>
         {
-            if (rowIndex > 0 && rowIndex % 28 == 0)
+            page.Size(PageSizes.A4);
+            page.Margin(28);
+            page.DefaultTextStyle(style => style.FontSize(8));
+            page.Header().Column(header =>
             {
-                document.EndPage();
-                page = document.BeginPage(595, 842);
-                DrawText(page, "AURA - Batch Summary (continued)", 36, 42, 18, true);
-                DrawText(page, "Case (de-identified)", 36, 72, 10, true);
-                DrawText(page, "Processing", 198, 72, 10, true);
-                DrawText(page, "Review", 310, 72, 10, true);
-                DrawText(page, "AI", 410, 72, 10, true);
-                DrawText(page, "Doctor", 490, 72, 10, true);
-            }
-            var y = (rowIndex % 28) * 21 + (rowIndex < 28 ? 217 : 95);
-            DrawText(page, $"CASE-{rowIndex + 1:D4}", 36, y, 9);
-            DrawText(page, item.ProcessingStatus, 198, y, 9);
-            DrawText(page, item.ReviewStatus, 310, y, 9);
-            DrawText(page, item.RiskLevel ?? "-", 410, y, 9);
-            DrawText(page, DoctorConclusion(item,reviews.GetValueOrDefault(item.AnalysisId))??"Not reviewed", 490, y, 8);
-            rowIndex++;
-        }
-        document.EndPage();
-        document.Close();
-        return output.ToArray();
+                header.Item().Text("AURA - Batch Summary Report").FontSize(17).Bold();
+                header.Item().Text($"Batch: {report.BatchId:D}");
+                header.Item().Text($"Report: {reportId:D} | UTC: {generatedAt.UtcDateTime:yyyy-MM-dd HH:mm:ss}");
+            });
+            page.Content().PaddingVertical(10).Column(content =>
+            {
+                content.Spacing(8);
+                content.Item().Text($"Status: {report.BatchStatus} | Total: {report.Summary.Total} | Completed: {report.Summary.Succeeded} | Failed: {report.Summary.Failed}");
+                content.Item().Text($"AI research indicator: {Rate(suspicious,denominator)} ({suspicious}/{denominator} available; not a clinical diagnosis)");
+                content.Item().Table(table =>
+                {
+                    table.ColumnsDefinition(columns =>
+                    {
+                        columns.RelativeColumn(1);
+                        columns.RelativeColumn(1.3f);
+                        columns.RelativeColumn(1.5f);
+                        columns.RelativeColumn(.9f);
+                        columns.RelativeColumn(1.2f);
+                    });
+                    table.Header(header =>
+                    {
+                        foreach (var title in new[] { "Case", "Processing", "Review", "AI", "Doctor" })
+                            header.Cell().Background(Colors.Grey.Lighten3).Padding(5).Text(title).Bold();
+                    });
+                    for (var index = 0; index < report.Items.Count; index++)
+                    {
+                        var item = report.Items[index];
+                        foreach (var value in new[] { $"CASE-{index+1:D4}", item.ProcessingStatus, item.ReviewStatus,
+                            item.RiskLevel ?? "UNAVAILABLE", DoctorConclusion(item,reviews.GetValueOrDefault(item.AnalysisId)) ?? "Not reviewed" })
+                            table.Cell().BorderBottom(.5f).BorderColor(Colors.Grey.Lighten2).Padding(5).Text(value);
+                    }
+                });
+            });
+            page.Footer().AlignRight().Text(text =>
+            {
+                text.CurrentPageNumber();
+                text.Span(" / ");
+                text.TotalPages();
+            });
+        })).GeneratePdf();
     }
-
-    private static void DrawText(SKCanvas canvas, string text, float x, float y, float size = 10, bool bold = false)
-    {
-        using var typeface = SKTypeface.FromFamilyName("Arial", bold ? SKFontStyle.Bold : SKFontStyle.Normal);
-        using var font = new SKFont(typeface, size);
-        using var paint = new SKPaint { Color = SKColors.Black, IsAntialias = true };
-        canvas.DrawText(text, x, y, SKTextAlign.Left, font, paint);
-    }
-
 }

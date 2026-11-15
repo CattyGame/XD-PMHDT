@@ -52,6 +52,7 @@ services:
       - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./infra/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     networks:
       - aura_network
     healthcheck:
@@ -124,7 +125,10 @@ services:
     build:
       context: src/ai-core
       dockerfile: Dockerfile
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    cpus: 4.0
+    mem_limit: 2g
+    pids_limit: 128
     ports:
       - "127.0.0.1:8000:8000"
     networks:
@@ -165,6 +169,8 @@ services:
       ServiceAuth__Audience: "aura-billing"
       ServiceAuth__ClientId: "billing-api"
       ServiceAuth__ClientSecret: "${BILLING_SERVICE_CLIENT_SECRET:?Set BILLING_SERVICE_CLIENT_SECRET}"
+      # Fetch Identity's key on the private network instead of inheriting a Windows Development path.
+      ServiceAuth__PublicKeyPath: ""
     ports:
       - "127.0.0.1:5002:8080"
     depends_on:

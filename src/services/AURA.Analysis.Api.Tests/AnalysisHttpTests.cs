@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using Npgsql;
 using Xunit;
 
 namespace AURA.Analysis.Api.Tests;
@@ -49,7 +50,7 @@ public sealed class AnalysisHttpTests
         public readonly Identity Identity=new();public readonly Upload Upload=new();public readonly FakeAccess Access=new();
         public readonly FakeFileRepo Files=new();public readonly FakeStorage Storage=new();public readonly Batch Batch=new();
         public WebApplication App=null!;public HttpClient Client=null!;
-        public static async Task<Rig> Start(long imageLimit=10485760,int images=100,long total=1101004800)
+        public static async Task<Rig> Start(long imageLimit=10485760,int images=100,long total=1101004800,NpgsqlDataSource? itemDatabase=null)
         {
             var r=new Rig();var b=WebApplication.CreateBuilder();b.WebHost.UseTestServer();b.Logging.ClearProviders();
             b.Services.AddSingleton<IAnalysisUserIdentityResolver>(r.Identity);b.Services.AddSingleton<IAnalysisUploadHandler>(r.Upload);
@@ -57,6 +58,8 @@ public sealed class AnalysisHttpTests
             b.Services.AddSingleton(new AnalysisUploadGate(1));b.Services.AddSingleton(new StorageOptions());
             b.Services.AddSingleton<IPatientAccessResolver>(r.Access);b.Services.AddSingleton<IFileAccessRepository>(r.Files);b.Services.AddSingleton<IPrivateFileStorage>(r.Storage);
             b.Services.AddSingleton<IBatchStatusRepository>(r.Batch);b.Services.AddTransient<BatchStatusService>();b.Services.AddTransient<FileAccessService>();
+            if(itemDatabase is not null)
+            {b.Services.AddSingleton(itemDatabase);b.Services.AddSingleton(TimeProvider.System);b.Services.AddTransient<ItemUploadService>();}
             r.App=b.Build();r.App.MapAnalysisEndpoints();await r.App.StartAsync();r.Client=r.App.GetTestClient();r.Client.DefaultRequestHeaders.Authorization=new("Bearer","fixture-user");
             return r;
         }
@@ -75,6 +78,33 @@ public sealed class AnalysisHttpTests
     }
     [Fact] public async Task Multipart_binds_authenticated_actor_and_returns_202()
     {await using var r=await Rig.Start();using var request=r.Post();request.Headers.Add("X-Account-Id",Guid.NewGuid().ToString());request.Headers.Add("X-User-Id",Guid.NewGuid().ToString());using var result=await r.Client.SendAsync(request);Assert.Equal(HttpStatusCode.Accepted,result.StatusCode);Assert.Equal(r.Identity.Account,r.Upload.Last!.RequesterId);Assert.Equal(10,r.Upload.Length);Assert.NotNull(result.Headers.Location);}
+    [PostgresFact]
+    public async Task Item_multipart_accepts_one_image_and_rejects_extra_sections()
+    {
+        var cs=new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("AURA_SCRUM345_TEST_CONNECTION_STRING")!){Options="-c role=aura_analysis_app"};
+        await using var database=NpgsqlDataSource.Create(cs.ConnectionString);
+        await using var r=await Rig.Start(itemDatabase:database);
+        var bytes=TestImages.Png(64,64);var item=Guid.NewGuid();
+        using var create=new HttpRequestMessage(HttpMethod.Post,"/api/v1/analysis-upload-batches")
+        {Content=JsonContent.Create(new UploadManifest([new(item,Guid.NewGuid(),"synthetic.png",Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),"FUNDUS","unknown")]))};
+        create.Headers.Add("Idempotency-Key",Guid.NewGuid().ToString());
+        using var admitted=await r.Client.SendAsync(create);Assert.Equal(HttpStatusCode.Created,admitted.StatusCode);
+        var inventory=(await admitted.Content.ReadFromJsonAsync<UploadInventory>(UploadJson.Options))!;
+        foreach(var extra in new[]{"none","file","field"})
+        {
+            using var form=new MultipartFormDataContent();
+            var image=new ByteArrayContent(bytes);image.Headers.ContentType=new("image/png");form.Add(image,"image","synthetic.png");
+            if(extra=="file")form.Add(new ByteArrayContent(bytes),"image","second.png");
+            if(extra=="field")form.Add(new StringContent("ignored"),"extra");
+            using var put=new HttpRequestMessage(HttpMethod.Put,$"/api/v1/analysis-upload-batches/{inventory.BatchId:D}/items/{item:D}"){Content=form};
+            put.Headers.Add("Idempotency-Key",item.ToString());
+            using var response=await r.Client.SendAsync(put);
+            if(extra=="none")
+            {Assert.Equal(HttpStatusCode.OK,response.StatusCode);Assert.Equal("STAGED",(await response.Content.ReadFromJsonAsync<UploadInventoryItem>(UploadJson.Options))!.UploadStatus);}
+            else await Code(response,400,"ERR_VALIDATION");
+        }
+        Assert.Equal(1,r.Storage.PutCalls);
+    }
     [Fact] public async Task Legacy_batch_endpoint_rejects_multiple_images_before_admission()
     {
         await using var r=await Rig.Start(images:100);

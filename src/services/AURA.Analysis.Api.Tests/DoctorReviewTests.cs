@@ -1,12 +1,79 @@
 using AURA.Analysis.Api.Upload;
 using Npgsql;
 using Xunit;
+using AURA.Analysis.Api.Auth;
+using AURA.Analysis.Api.Http;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System.Net;
+using System.Net.Http.Json;
 
 namespace AURA.Analysis.Api.Tests;
 
 public sealed class DoctorReviewTests
 {
     private static readonly string? ConnectionString = Environment.GetEnvironmentVariable("AURA_SCRUM345_TEST_CONNECTION_STRING");
+
+    [PostgresFact]
+    public async Task Twenty_HTTP_reviews_use_real_endpoint_and_database_with_one_winner_and_immutable_AI()
+    {
+        await using var db=NpgsqlDataSource.Create(ConnectionString!);
+        var tenant=Guid.NewGuid();var clinic=Guid.NewGuid();var patient=Guid.NewGuid();var doctor=Guid.NewGuid();
+        var requestId=Guid.NewGuid();var image=Guid.NewGuid();var resultId=Guid.NewGuid();
+        await SeedCompletedAnalysis(db,tenant,patient,clinic,requestId,image,Guid.NewGuid(),resultId);
+        async Task<string> ResultJson()
+        {
+            await using var sql=db.CreateCommand("SELECT row_to_json(r)::text FROM analysis.analysis_results r WHERE id=$1");
+            sql.Parameters.AddWithValue(resultId);return (string)(await sql.ExecuteScalarAsync())!;
+        }
+        var before=await ResultJson();
+        var policy=new ReviewAccess(tenant,clinic,patient,doctor);
+        var query=new PostgresAnalysisQueryRepository(db);
+        var builder=WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();builder.Logging.ClearProviders();
+        builder.Services.AddSingleton<IAnalysisUserIdentityResolver>(new ReviewIdentity(doctor));
+        builder.Services.AddSingleton(new DoctorReviewService(query,policy,new PostgresDoctorReviewRepository(db)));
+        await using var app=builder.Build();app.MapAnalysisEndpoints();await app.StartAsync();
+        using var client=app.GetTestClient();client.DefaultRequestHeaders.Authorization=new("Bearer","review-fixture");
+        var url=$"/api/v1/doctor/analyses/{image:D}/reviews?clinicContextId={clinic:D}";
+        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var responses=await Task.WhenAll(Enumerable.Range(0,20).Select(_=>client.PostAsJsonAsync(url,
+            new DoctorReviewRequest(true,0,DoctorNotes:"HTTP concurrency fixture"),deadline.Token)));
+        try
+        {
+            Assert.Single(responses,r=>r.StatusCode==HttpStatusCode.Created);
+            Assert.Equal(19,responses.Count(r=>r.StatusCode==HttpStatusCode.Conflict));
+            foreach(var response in responses.Where(r=>r.StatusCode==HttpStatusCode.Conflict))
+                Assert.Contains("ERR_CONCURRENT_REVIEW",await response.Content.ReadAsStringAsync());
+        }
+        finally {foreach(var response in responses)response.Dispose();}
+        Assert.Equal(before,await ResultJson());
+        await using var count=db.CreateCommand("SELECT count(*) FROM analysis.doctor_reviews WHERE image_id=$1");
+        count.Parameters.AddWithValue(image);Assert.Equal(1L,await count.ExecuteScalarAsync());
+        policy.Allowed=false;
+        using var denied=await client.PostAsJsonAsync(url,new DoctorReviewRequest(true,1),deadline.Token);
+        Assert.Equal(HttpStatusCode.Forbidden,denied.StatusCode);
+        Assert.Equal(1L,await count.ExecuteScalarAsync());
+    }
+
+    // Only external identity/Profile authority are fixtures; routing, review service and PostgreSQL are real.
+    private sealed class ReviewIdentity(Guid doctor):IAnalysisUserIdentityResolver
+    {
+        public Task<AnalysisUserContext> ResolveAsync(HttpRequest request,CancellationToken ct)
+            =>request.Headers.Authorization=="Bearer review-fixture"
+                ?Task.FromResult(new AnalysisUserContext(doctor,["DOCTOR"]))
+                :throw new UploadFailure(401,"ERR_UNAUTHORIZED","Fixture bearer required.");
+    }
+    private sealed class ReviewAccess(Guid tenant,Guid clinic,Guid patient,Guid doctor):IPatientAccessResolver
+    {
+        public bool Allowed=true;
+        public Task<AccessDecision> ResolveAsync(PatientAccessRequest request,CancellationToken ct)
+            =>Task.FromResult(new AccessDecision(Allowed && request.RequesterId==doctor && request.ClinicId==clinic && request.PatientId==patient,
+                tenant,"CLINIC",clinic,$"CLINIC:{clinic:D}",1));
+    }
 
     [PostgresFact]
     public async Task Concurrent_reviews_commit_once_and_reject_stale_versions_without_deadlock()

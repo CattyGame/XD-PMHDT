@@ -7,9 +7,14 @@ and explicit opt-in mock mode for unit regression testing.
 from __future__ import annotations
 
 import logging
+import gc
 import os
+import pickle
 import time
 import uuid
+from collections import Counter
+from pathlib import Path
+from threading import BoundedSemaphore
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Security, status
@@ -37,6 +42,9 @@ from .services.frangi_service import (
     LowQualityImageError,
      SUPPORTED_FRANGI_FORMATS,
     load_frangi_config,
+    decode_and_validate_fundus_image,
+    estimate_prediction_region,
+    evaluate_frangi_quality,
     process_frangi_analysis,
     utc_timestamp_z,
 )
@@ -45,11 +53,15 @@ from .services.mock_service import (
     MockLowQualityImageError,
     process_mock_analysis,
 )
+from .services.integrated_inference import IntegratedModelUnavailable, configured_artifacts, process_integrated_analysis
 
 APP_START_TIME = time.time()
 SERVICE_NAME = "AURA.AiCore"
 VERSION = "0.2.0"
 API_VERSION = "1.3.0"
+HTTP_COUNTS = Counter()
+HTTP_SECONDS = Counter()
+CNN_SLOT = BoundedSemaphore(1)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +103,7 @@ async def correlation_id_middleware(request: Request, call_next):
     Echo hoặc tự sinh correlation ID để phục vụ distributed tracing xuyên suốt
     Web -> Gateway -> Analysis API -> Worker -> AI Core.
     """
+    started = time.perf_counter()
     raw_cid = request.headers.get("X-Correlation-Id")
     correlation_id = raw_cid.strip() if (raw_cid and raw_cid.strip()) else str(uuid.uuid4())
     try:
@@ -107,6 +120,11 @@ async def correlation_id_middleware(request: Request, call_next):
             },
         )
     response.headers["X-Correlation-Id"] = correlation_id
+    route = request.scope.get("route")
+    path = getattr(route, "path", "unmatched")
+    method = request.method if request.method in {"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"} else "OTHER"
+    HTTP_COUNTS[(method, path, response.status_code)] += 1
+    HTTP_SECONDS[(method, path)] += time.perf_counter() - started
     return response
 
 
@@ -262,6 +280,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.get("/", include_in_schema=False)
 def root():
+    integrated = os.getenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false").strip().lower() == "true"
     return {
         "service": SERVICE_NAME,
         "version": VERSION,
@@ -274,9 +293,9 @@ def root():
         "capabilities": {
             "segmentation_algorithm": "FRANGI_VESSEL_SEGMENTATION",
             "optional_research_risk_method": "HEURISTIC_VESSEL_DENSITY_TORTUOSITY",
-            "dr_cnn_available": False,
-            "grad_cam_available": False,
-            "avr_available": False,
+            "dr_cnn_available": integrated,
+            "grad_cam_available": integrated,
+            "avr_available": integrated,
             "clinical_validation": "NOT_ESTABLISHED",
         },
     }
@@ -349,6 +368,13 @@ def ready():
             },
         ) from error
 
+    if os.getenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false").strip().lower() == "true":
+        try:
+            configured_artifacts()
+        except IntegratedModelUnavailable as error:
+            raise HTTPException(status_code=503, detail={"error_code": "SERVICE_NOT_READY",
+                "message": str(error), "details": None}) from error
+
     return ReadyResponse(
         status="ready",
         service=SERVICE_NAME,
@@ -356,7 +382,8 @@ def ready():
         api_version=API_VERSION,
         engine=frangi_config.engine,
         model_version=frangi_config.model_version,
-        config_version=frangi_config.config_version,
+        config_version=frangi_config.config_version + (
+            "-integrated-research-v1" if os.getenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false").strip().lower() == "true" else ""),
         threshold_version=frangi_config.threshold_version,
         jwt_verification_ready=True,
         timestamp=utc_timestamp_z(),
@@ -381,6 +408,7 @@ def ping():
     operation_id="analyzeRetina",
     response_model=AnalysisResponse,
     responses={
+        429: {"model": ErrorResponse, "description": "Inference slot busy when the optional research profile is enabled."},
         400: {
             "model": ErrorResponse,
             "description": "Invalid Base64/image payload",
@@ -551,8 +579,20 @@ def analyze_retina(
             },
         )
 
+    integrated = os.getenv('AURA_INTEGRATED_RESEARCH_ENABLED', 'false').strip().lower() == 'true'
+    bounded_profile = integrated or bool((os.getenv('AURA_AVR_MODEL_PATH') and os.getenv('AURA_AVR_MODEL_SHA256'))
+                           or (os.getenv('AURA_DR_CNN_CHECKPOINT') and os.getenv('AURA_DR_CNN_SHA256')))
+    if bounded_profile and not CNN_SLOT.acquire(blocking=False):
+        raise HTTPException(429, detail={"error_code": "RESEARCH_MODEL_BUSY", "message": "Inference slot is busy; retry later."},
+                            headers={"Retry-After": "1"})
     try:
+        if integrated:
+            return process_integrated_analysis(request, frangi_config)
         return process_frangi_analysis(request, config=frangi_config)
+
+    except IntegratedModelUnavailable as error:
+        raise HTTPException(503, detail={"error_code": "RESEARCH_MODEL_UNAVAILABLE",
+                            "message": "Verified integrated AVR/DR artifacts are unavailable."}) from error
 
     except InvalidImagePayloadError as error:
         raise HTTPException(
@@ -591,34 +631,32 @@ def analyze_retina(
         ) from error
 
 
+    finally:
+        if bounded_profile:
+            CNN_SLOT.release()
+
+
 @app.get("/metrics", response_class=PlainTextResponse)
 async def metrics_endpoint():
     """Prometheus metrics exposition endpoint for AI Core."""
     uptime = time.time() - APP_START_TIME
-    mem_bytes = 105906176
-    cpu_seconds = 1.05
+    mem_bytes = None
+    cpu = os.times()
+    cpu_seconds = cpu.user + cpu.system
     try:
         import psutil
         proc = psutil.Process()
         mem_bytes = proc.memory_info().rss
         cpu_seconds = sum(proc.cpu_times()[:2])
-    except Exception:
-        pass
+    except ImportError:
+        if Path("/proc/self/statm").is_file():
+            mem_bytes = int(Path("/proc/self/statm").read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE")
 
     lines = [
         "# HELP http_requests_total Total number of HTTP requests processed",
         "# TYPE http_requests_total counter",
-        'http_requests_total{method="POST",path="/api/v1/analyze",status="200"} 1',
         "# HELP http_request_duration_seconds HTTP request latencies in seconds",
         "# TYPE http_request_duration_seconds summary",
-        'http_request_duration_seconds{quantile="0.5"} 1.095',
-        'http_request_duration_seconds{quantile="0.95"} 1.450',
-        'http_request_duration_seconds{quantile="0.99"} 1.780',
-        'http_request_duration_seconds_sum 1.095',
-        'http_request_duration_seconds_count 1',
-        "# HELP process_resident_memory_bytes Resident memory size in bytes",
-        "# TYPE process_resident_memory_bytes gauge",
-        f"process_resident_memory_bytes {mem_bytes}",
         "# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds",
         "# TYPE process_cpu_seconds_total counter",
         f"process_cpu_seconds_total {cpu_seconds:.2f}",
@@ -626,4 +664,67 @@ async def metrics_endpoint():
         "# TYPE process_uptime_seconds gauge",
         f"process_uptime_seconds {uptime:.1f}",
     ]
+    for (method, path, code), count in sorted(HTTP_COUNTS.items()):
+        lines.append(f'http_requests_total{{method="{method}",path="{path}",status="{code}"}} {count}')
+    for (method, path), seconds in sorted(HTTP_SECONDS.items()):
+        count = sum(n for (m, p, _), n in HTTP_COUNTS.items() if m == method and p == path)
+        labels = f'method="{method}",path="{path}"'
+        lines.extend([f'http_request_duration_seconds_sum{{{labels}}} {seconds}',
+                      f'http_request_duration_seconds_count{{{labels}}} {count}'])
+    if mem_bytes is not None:
+        lines.extend(["# TYPE process_resident_memory_bytes gauge", f"process_resident_memory_bytes {mem_bytes}"])
+    lines.extend(["# TYPE python_gc_collections_total counter", "# TYPE python_gc_uncollectable_total counter"])
+    for generation, statistics in enumerate(gc.get_stats()):
+        lines.append(f'python_gc_collections_total{{generation="{generation}"}} {statistics["collections"]}')
+        lines.append(f'python_gc_uncollectable_total{{generation="{generation}"}} {statistics["uncollectable"]}')
     return "\n".join(lines) + "\n"
+
+
+def run_research_inference(request, config, path, digest, inference):
+    if config is None or not path or not digest:
+        raise HTTPException(503, detail={"error_code": "RESEARCH_MODEL_UNAVAILABLE", "message": "Configure a verified research artifact and real service authentication."})
+    if request.patient_id is not None or request.modality.strip().upper() != "FUNDUS":
+        raise HTTPException(422, detail={"error_code": "INVALID_RESEARCH_REQUEST", "message": "FUNDUS only; patient_id must be null."})
+    if not CNN_SLOT.acquire(blocking=False):
+        raise HTTPException(429, detail={"error_code": "RESEARCH_MODEL_BUSY", "message": "Retry after the current research inference completes."},
+                            headers={"Retry-After": "1"})
+    try:
+        try:
+            uuid.UUID(request.request_id)
+            rgb, _, _ = decode_and_validate_fundus_image(request.image_base64, config)
+            report = evaluate_frangi_quality(rgb, estimate_prediction_region(rgb, config), config)
+            if not report.is_acceptable:
+                raise HTTPException(422, detail={"error_code": "LOW_QUALITY_IMAGE", "message": report.message})
+        except ValueError as error:
+            raise HTTPException(400, detail={"error_code": "INVALID_IMAGE_PAYLOAD", "message": str(error)}) from error
+        try:
+            return {"request_id": request.request_id, **inference(rgb, path, digest)}
+        except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError, IndexError, EOFError, pickle.UnpicklingError) as error:
+            logger.warning("Research model unavailable: %s", type(error).__name__)
+            raise HTTPException(503, detail={"error_code": "RESEARCH_MODEL_UNAVAILABLE", "message": "Research dependencies or verified artifact are unavailable."}) from error
+    finally:
+        CNN_SLOT.release()
+
+
+@app.post("/api/v1/research/dr-screening", tags=["Research"],
+          summary="Experimental HRF binary ResNet34 with gradient Grad-CAM; not clinical grading")
+def research_dr_screening(request: AnalysisRequest,
+                          config: Optional[FrangiRuntimeConfig] = Depends(verify_runtime_and_auth)):
+    def infer(rgb, path, digest):
+        from .services.dr_cnn_service import screen_dr_cnn
+        return screen_dr_cnn(rgb, path, digest)
+    return run_research_inference(request, config, os.getenv("AURA_DR_CNN_CHECKPOINT"),
+                                  os.getenv("AURA_DR_CNN_SHA256"), infer)
+
+
+@app.post("/api/v1/research/avr", tags=["Research"],
+          summary="Experimental A/V segmentation and native-pixel vessel diameters; abstains when insufficient")
+def research_avr(request: AnalysisRequest,
+                 config: Optional[FrangiRuntimeConfig] = Depends(verify_runtime_and_auth)):
+    def infer(rgb, path, digest):
+        from .services.avr_model import load_avr_model
+        from .services.avr_service import calculate_automatic_avr
+        return calculate_automatic_avr(rgb, load_avr_model(path, digest),
+                                       generate_visualization=request.include_overlay, include_masks=request.include_mask)
+    return run_research_inference(request, config, os.getenv("AURA_AVR_MODEL_PATH"),
+                                  os.getenv("AURA_AVR_MODEL_SHA256"), infer)

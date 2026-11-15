@@ -77,6 +77,7 @@ internal sealed class FakeStorage : IPrivateFileStorage
     public int PutCalls;
     public int FailOnPut = -1;                                    // lần Put thứ n (từ 1) ném lỗi
     public Func<Task>? BeforePut;                                 // để dựng tình huống đồng thời
+    public Func<string,string,Stream>? ReadOverride;
 
     public async Task PutAsync(string container, string key, Stream content, string contentType, CancellationToken ct)
     {
@@ -88,7 +89,7 @@ internal sealed class FakeStorage : IPrivateFileStorage
         Files[container + "/" + key] = ms.ToArray();
     }
     public Task<Stream> OpenReadAsync(string container, string key, CancellationToken ct) =>
-        Task.FromResult<Stream>(new MemoryStream(Files[container + "/" + key]));
+        Task.FromResult(ReadOverride?.Invoke(container,key) ?? new MemoryStream(Files[container + "/" + key]));
     public Task DeleteAsync(string container, string key, CancellationToken ct)
     {
         Files.TryRemove(container + "/" + key, out _);

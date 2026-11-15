@@ -72,8 +72,11 @@ public sealed class AnalysisRepository(WorkerDbContext db) : IAnalysisRepository
         var result=parsed.RootElement;
         string Required(string name)=>result.GetProperty(name).GetString() is {Length:>0} value ? value : throw new DataException($"Missing {name}.");
         if(result.GetProperty("isMock").GetBoolean())throw new DataException("Mock result cannot be committed in the real worker.");
-        if(annotations.Count!=2 || annotations.Select(a=>a.Type).Order().SequenceEqual(new[]{"MASK","OVERLAY"})==false)
-            throw new DataException("Expected mask and overlay metadata.");
+        var types = annotations.Select(a => a.Type).ToHashSet(StringComparer.Ordinal);
+        if(annotations.Count is < 2 or > 4 || types.Count != annotations.Count
+            || !types.Contains("MASK") || !types.Contains("OVERLAY")
+            || types.Any(type => type is not ("MASK" or "OVERLAY" or "ANNOTATED" or "HEATMAP")))
+            throw new DataException("Expected mask/overlay and optional unique research annotations.");
         foreach(var a in annotations)
             if(a.FileId==Guid.Empty || a.SizeBytes<=0 || a.Width<=0 || a.Height<=0 || a.Sha256.Length!=64 || a.Sha256.Any(ch=>!Uri.IsHexDigit(ch)))
                 throw new DataException("Invalid actual annotation metadata.");

@@ -56,3 +56,9 @@ ConfigChung/
 
 # Never commit master instructions
 README_PROJECT_MASTER.md
+
+# Local research artifacts and acceptance traces
+*.safetensors
+*.onnx
+/model-artifacts/
+/.review-evidence/

@@ -3,6 +3,7 @@ using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 using QRCoder;
 using SkiaSharp;
+using System.Text.Json;
 
 namespace AURA.Analysis.Api.Upload;
 
@@ -37,6 +38,7 @@ public sealed record MedicalReportPdfData(
     public string ConfigVersion { get; init; } = "";
     public string ThresholdVersion { get; init; } = "";
     public string? CorrectedRiskLevel { get; init; }
+    public JsonElement? Research { get; init; }
 }
 
 /// <summary>Renders one case as a compressed A4 clinical report. ICDR is only shown when stored on an approved review.</summary>
@@ -108,7 +110,7 @@ public static class MedicalReportPdfRenderer
 
             page.Content().PaddingVertical(10).Column(content =>
             {
-                content.Spacing(8);
+                content.Spacing(data.Research is null ? 8 : 5);
                 content.Item().Text("CASE INFORMATION").Bold().FontSize(10);
                 content.Item().Table(table =>
                 {
@@ -153,8 +155,26 @@ public static class MedicalReportPdfRenderer
                     });
                     MetricRow(table, "vessel_density", data.VesselDensity, data.ModelVersion);
                     MetricRow(table, "tortuosity_index", data.TortuosityIndex, data.ModelVersion);
-                    MetricRow(table, "av_ratio", data.AvRatio, data.ModelVersion);
+                    var avrModel = data.Research?.GetProperty("avr").GetProperty("model_version").GetString() ?? data.ModelVersion;
+                    MetricRow(table, "av_ratio", data.AvRatio, avrModel);
+                    if (data.Research is { } research)
+                    {
+                        var avr = research.GetProperty("avr");
+                        MetricRow(table, "CRAE (native px)", avr.GetProperty("crae_px").ValueKind == JsonValueKind.Number ? avr.GetProperty("crae_px").GetDouble() : null, avrModel);
+                        MetricRow(table, "CRVE (native px)", avr.GetProperty("crve_px").ValueKind == JsonValueKind.Number ? avr.GetProperty("crve_px").GetDouble() : null, avrModel);
+                    }
                 });
+
+                if (data.Research is { } researchResult)
+                {
+                    var avr = researchResult.GetProperty("avr");
+                    var dr = researchResult.GetProperty("dr");
+                    content.Item().Text("RESEARCH OUTPUTS - NOT A CLINICAL DIAGNOSIS").Bold().FontSize(10);
+                    if (!avr.GetProperty("measurement_available").GetBoolean())
+                        content.Item().Text($"AVR unavailable: {avr.GetProperty("unavailable_reason").GetString()}");
+                    content.Item().Text(FormattableString.Invariant($"Binary DR probability: {dr.GetProperty("probability_dr").GetDouble():P1} | Model: {dr.GetProperty("model_version").GetString()}"));
+                    content.Item().Text("Grad-CAM uses an ImageNet center crop (224x224), not full-image lesion localization or ICDR grading.").FontSize(8);
+                }
 
                 content.Item().PaddingTop(2).Text("CLINICAL REVIEW").Bold().FontSize(10);
                 content.Item().Text($"Doctor conclusion: {data.CorrectedRiskLevel ?? (data.DoctorApproved?data.AiRiskLevel:null) ?? "Not reviewed"}");

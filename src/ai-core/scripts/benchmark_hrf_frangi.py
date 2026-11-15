@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gc
+import hashlib
 import json
 import os
 import platform
@@ -25,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
+import cv2
 import PIL
 import scipy
 import skimage
@@ -32,7 +34,7 @@ from PIL import Image
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(os.getenv("AURA_BENCHMARK_ROOT") or Path(__file__).resolve().parents[3])
 AI_CORE_DIR = Path(__file__).resolve().parents[1]
 if str(AI_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(AI_CORE_DIR))
@@ -46,7 +48,7 @@ DEFAULT_OUTPUT_JSON = ROOT / "docs" / "benchmarks" / "frangi_hrf_benchmark_v1.0.
 MANIFEST_PATH = ROOT / "docs" / "datasets" / "hrf" / "manifest.csv"
 
 
-def get_process_rss_mb() -> float:
+def get_process_rss_mb(peak: bool = False) -> float:
     """
     Đo lường bộ nhớ Resident Set Size (RSS) thực tế của tiến trình (bao gồm C/C++ buffers của NumPy/SciPy/Pillow).
     Ưu tiên psutil nếu có; hỗ trợ đầy đủ 64-bit Win32 K32GetProcessMemoryInfo và Linux /proc/self/status.
@@ -55,7 +57,9 @@ def get_process_rss_mb() -> float:
         import psutil  # type: ignore
 
         process = psutil.Process(os.getpid())
-        return round(float(process.memory_info().rss) / (1024.0 * 1024.0), 2)
+        memory = process.memory_info()
+        if not peak or hasattr(memory, "peak_wset"):
+            return round(float(memory.peak_wset if peak else memory.rss) / (1024.0 * 1024.0), 2)
     except Exception:
         pass
 
@@ -92,7 +96,7 @@ def get_process_rss_mb() -> float:
             counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
             handle = k32.GetCurrentProcess()
             if k32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
-                return round(float(counters.WorkingSetSize) / (1024.0 * 1024.0), 2)
+                return round(float(counters.PeakWorkingSetSize if peak else counters.WorkingSetSize) / (1024.0 * 1024.0), 2)
         except Exception:
             pass
 
@@ -100,21 +104,28 @@ def get_process_rss_mb() -> float:
     if proc_status.is_file():
         try:
             for line in proc_status.read_text(encoding="utf-8").splitlines():
-                if line.startswith("VmRSS:"):
+                if line.startswith("VmHWM:" if peak else "VmRSS:"):
                     kb = float(line.split()[1])
                     return round(kb / 1024.0, 2)
         except Exception:
             pass
 
-    return 0.0
+    raise RuntimeError("OS RSS telemetry is unavailable; do not report fabricated zero RAM.")
 
 
-def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0) -> Dict[str, Any]:
+def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0, split: str = "test") -> Dict[str, Any]:
     if not MANIFEST_PATH.is_file():
         raise FileNotFoundError(f"HRF manifest not found at {MANIFEST_PATH}. Run prepare_hrf.py first.")
 
     with MANIFEST_PATH.open("r", encoding="utf-8-sig", newline="") as f:
-        rows = [r for r in csv.DictReader(f) if r["split"] == "test"]
+        rows = [r for r in csv.DictReader(f) if split == "all" or r["split"] == split]
+
+    if not rows:
+        raise ValueError("No samples selected.")
+    for row in rows:
+        for field, digest in (("image_path", "image_sha256"), ("manual_path", "manual_sha256")):
+            if hashlib.sha256((ROOT / row[field]).read_bytes()).hexdigest() != row[digest]:
+                raise ValueError(f"Dataset hash mismatch: {row[field]}")
 
     if max_samples > 0:
         rows = rows[:max_samples]
@@ -122,7 +133,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
     print(f"Loaded {len(rows)} HRF test samples for benchmark.")
 
     config = PreprocessorConfig(
-        clahe_clip_limit=0.02,
+        clahe_clip_limit=2.0,
         tile_grid_size=(8, 8),
         max_processing_width=1280,
         frangi_sigmas=(1.0, 2.0, 3.0),
@@ -159,6 +170,10 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             rgb = np.asarray(im.convert("RGB"), dtype=np.uint8)
         with Image.open(manual_p) as mim:
             gt_mask = np.asarray(mim.convert("L"), dtype=np.uint8) > 0
+        fov_path = ROOT / row["mask_path"]
+        with Image.open(fov_path) as fim:
+            reference_fov = np.asarray(fim.convert("L"), dtype=np.uint8) > 0
+        del im, mim, fim
 
         gc.collect()
         rss_before = get_process_rss_mb()
@@ -167,6 +182,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             rgb,
             config=config,
             ground_truth_mask=gt_mask,
+            ground_truth_fov=reference_fov,
         )
 
         rss_after = get_process_rss_mb()
@@ -185,6 +201,11 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
 
         sample_record = {
             "patient_id": row["patient_id"],
+            "split": row["split"],
+            "image_sha256": row["image_sha256"],
+            "manual_sha256": row["manual_sha256"],
+            "fov_sha256": hashlib.sha256(fov_path.read_bytes()).hexdigest(),
+            "evaluation_fov_source": m["evaluation_fov_source"],
             "category": row["category"],
             "image": Path(row["image_path"]).name,
             "processing_mode": m["processing_mode"],
@@ -202,7 +223,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             "iou": m["iou"],
             "sensitivity": m["sensitivity"],
             "specificity": m["specificity"],
-            "peak_rss_mb": peak_rss,
+            "sampled_rss_before_after_mb": peak_rss,
         }
         samples.append(sample_record)
         print(
@@ -211,6 +232,8 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             f"Dice={m['dice']:.4f}, IoU={m['iou']:.4f}, Sens={m['sensitivity']:.4f}, Spec={m['specificity']:.4f}, "
             f"TreeRatio={m['topology_largest_component_ratio']:.4f}"
         )
+        del result, rgb, gt_mask, reference_fov
+        gc.collect()
 
     heap_current, heap_peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -220,7 +243,13 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
         "task": "SCRUM-371 / W5-M4-01",
         "timestamp_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "dataset": "HRF (High-Resolution Fundus Image Database)",
-        "split": "test",
+        "split": split,
+        "evaluation_scope": "full-dataset coverage, not held-out generalization" if split == "all" else "selected split",
+        "memory_method": "RSS before/after each inference; not a continuous peak measurement",
+        "process_peak_rss_mb": get_process_rss_mb(peak=True),
+        "peak_memory_method": "OS process lifetime high-water mark, including warmup and benchmark instrumentation",
+        "source_sha256": {str(p.relative_to(ROOT) if p.is_relative_to(ROOT) else Path("ai-core") / p.relative_to(AI_CORE_DIR)): hashlib.sha256(p.read_bytes()).hexdigest() for p in
+                          (Path(__file__), AI_CORE_DIR / "app/services/image_preprocessor.py", AI_CORE_DIR / "app/services/frangi_service.py", MANIFEST_PATH)},
         "sample_count": len(samples),
         "environment": {
             "os": platform.platform(),
@@ -230,6 +259,8 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             "scipy": scipy.__version__,
             "scikit_image": skimage.__version__,
             "pillow": PIL.__version__,
+            "opencv": cv2.__version__,
+            "opencv_threads": cv2.getNumThreads(),
         },
         "configuration": {
             "processing_mode": "MULTI_RESOLUTION_PROXY",
@@ -242,6 +273,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
             "frangi_gamma": config.frangi_gamma,
             "binary_threshold": config.binary_threshold,
             "upsampling_interpolation": "NEAREST_NEIGHBOR",
+            "frangi_working_dtype": "float32",
         },
         "accuracy_metrics": {
             "mean_dice": round(float(np.mean(dices)), 6),
@@ -265,7 +297,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
         "memory_telemetry": {
             "baseline_rss_mb": baseline_rss,
             "mean_rss_mb": round(float(np.mean(rss_peaks)), 2),
-            "peak_rss_mb": round(float(np.max(rss_peaks)), 2),
+            "max_sampled_rss_mb": round(float(np.max(rss_peaks)), 2),
             "tracemalloc_peak_heap_mb": round(heap_peak / (1024.0 * 1024.0), 2),
         },
         "samples": samples,
@@ -281,7 +313,7 @@ def run_benchmark(output_path: Path = DEFAULT_OUTPUT_JSON, max_samples: int = 0)
     )
     print(
         f"Memory: Baseline RSS={baseline_rss}MB, Mean RSS={report['memory_telemetry']['mean_rss_mb']}MB, "
-        f"Peak RSS={report['memory_telemetry']['peak_rss_mb']}MB"
+        f"Max sampled RSS={report['memory_telemetry']['max_sampled_rss_mb']}MB"
     )
     print(
         f"Accuracy: Mean Dice={report['accuracy_metrics']['mean_dice']}, "
@@ -296,9 +328,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="HRF Vessel Segmentation Benchmark")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_JSON)
     parser.add_argument("--max-samples", type=int, default=0)
+    parser.add_argument("--split", choices=("train", "validation", "test", "all"), default="test")
     args = parser.parse_args()
 
-    run_benchmark(output_path=args.output, max_samples=args.max_samples)
+    run_benchmark(output_path=args.output, max_samples=args.max_samples, split=args.split)
 
 
 if __name__ == "__main__":

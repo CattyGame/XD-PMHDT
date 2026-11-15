@@ -132,6 +132,8 @@ components:
             isApproved: { const: true }
             baseVersion: { type: integer, minimum: 0 }
             doctorNotes: { type: string, maxLength: 2000 }
+            icdrLevel:
+              $ref: './analysis-openapi-0.9.yaml#/components/schemas/DoctorReview/properties/icdrLevel'
           additionalProperties: false
         - type: object
           required: [isApproved, baseVersion, correctedRiskLevel, reason]
@@ -156,6 +158,8 @@ components:
         createdAt: { type: string, format: date-time }
         reason: { type: string }
         aiResultVersion: { type: integer, minimum: 1 }
+        icdrLevel:
+          $ref: './analysis-openapi-0.9.yaml#/components/schemas/DoctorReview/properties/icdrLevel'
     Error:
       type: object
       required: [error]
