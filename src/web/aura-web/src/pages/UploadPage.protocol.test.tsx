@@ -48,9 +48,11 @@ it('routes the actual UploadPage through manifest, separate item requests and on
   const files = [0, 1, 2].map(i => new File([`pixels-${i}`], `retina-${i}.png`, { type: 'image/png' }))
   fireEvent.change(screen.getByLabelText('Chọn ảnh võng mạc'), { target: { files } })
   await screen.findByText('Đã chọn 3 ảnh:')
+  fireEvent.change(screen.getByLabelText('Mắt của retina-1.png'), { target: { value: 'right' } })
   fireEvent.click(screen.getByRole('button', { name: 'Gửi ảnh phân tích' }))
   await screen.findByText('Thông tin tiếp nhận')
   expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(3)
+  expect(items.map(item => item.eyeSide)).toEqual(['left', 'right', 'left'])
   expect(fetchMock.mock.calls.filter(([url]) => String(url) === '/api/v1/analyses')).toHaveLength(0)
   expect(new URL(window.location.href).searchParams.get('uploadBatchId')).toBe(batchId)
   expect(localStorage.length).toBe(0)
@@ -77,4 +79,36 @@ it('restores server inventory after a new page/context and reselects bytes befor
   await screen.findByText('Thông tin tiếp nhận')
   expect(items[0].uploadStatus).toBe('STAGED')
   expect(fetchMock.mock.calls.slice(before).filter(([url, init]) => init?.method === 'POST' && String(url).endsWith('/analysis-upload-batches'))).toHaveLength(0)
+})
+
+it('allows retrying a recoverable image independently of a rejected sibling', async () => {
+  const serve = fetchMock.getMockImplementation()!
+  let disconnected = false
+  fetchMock.mockImplementation(async (url, init) => {
+    if (init?.method === 'PUT') {
+      const file = (init.body as FormData).get('image') as File
+      if (file.name === 'rejected.png') return json({ error: { code: 'ERR_PAYLOAD_TOO_LARGE', retryable: false } }, 413)
+      if (!disconnected) {
+        disconnected = true
+        await new Promise(resolve => setTimeout(resolve, 5))
+        throw new TypeError('Single request interrupted')
+      }
+    }
+    return serve(url, init)
+  })
+  render(tree())
+  const files = ['rejected.png', 'recoverable.png'].map(name => new File([name], name, { type: 'image/png' }))
+  fireEvent.change(screen.getByLabelText('Chọn ảnh võng mạc'), { target: { files } })
+  await screen.findByText('Đã chọn 2 ảnh:')
+  fireEvent.click(screen.getByRole('button', { name: 'Gửi ảnh phân tích' }))
+  await screen.findByRole('alert')
+  expect(screen.queryByRole('button', { name: 'Thử lại rejected.png' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Thử lại recoverable.png' }))
+  await screen.findByText('Đã tải: 1/2 ảnh')
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Thử lại cùng lượt gửi' })).toHaveProperty('disabled', true))
+  expect(items.map(item => item.uploadStatus)).toEqual(['DECLARED', 'STAGED'])
+  const uploads = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')
+    .map(([, init]) => ((init!.body as FormData).get('image') as File).name)
+  expect(uploads).toEqual(['rejected.png', 'recoverable.png', 'recoverable.png'])
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/finalize'))).toBe(false)
 })

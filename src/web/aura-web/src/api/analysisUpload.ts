@@ -7,6 +7,7 @@ export type UploadAttempt = Readonly<{
   key: string
   context: BackendContext
   eyeSide: EyeSide
+  itemEyeSides?: readonly EyeSide[]
   images: readonly File[]
 }>
 export type UploadItem = Readonly<{
@@ -59,7 +60,8 @@ function id(value: unknown): value is string {
 export function canUploadPersonal(context: BackendContext): boolean {
   return context.roles.includes('PATIENT') && !context.roles.includes('SYSTEM_ADMIN')
 }
-export function createUploadAttempt(context: BackendContext, images: readonly File[], eyeSide: EyeSide): UploadAttempt {
+export function createUploadAttempt(context: BackendContext, images: readonly File[], eyeSide: EyeSide,
+  itemEyeSides?: readonly EyeSide[]): UploadAttempt {
   if (!canUploadPersonal(context) || !id(context.patientId) || !id(context.accountId) ||
     !id(context.personalTenantId) || !context.firebaseUid || !images.length || images.length > 100 ||
     !['left', 'right', 'unknown', 'corrupted', 'retry'].includes(eyeSide)) {
@@ -67,7 +69,8 @@ export function createUploadAttempt(context: BackendContext, images: readonly Fi
   }
   const key = crypto.randomUUID()
   if (!id(key)) throw new UploadRequestError(0, 'ERR_INVALID_UPLOAD_KEY', 'not-sent', false)
-  return Object.freeze({ key, context, eyeSide, images: Object.freeze([...images]) })
+  return Object.freeze({ key, context, eyeSide, images: Object.freeze([...images]),
+    itemEyeSides: itemEyeSides && Object.freeze([...itemEyeSides]) })
 }
 
 function receipt(payload: unknown, attempt: UploadAttempt, replayed: boolean): UploadReceipt {
@@ -254,6 +257,7 @@ export async function sendUploadAttempt(
 export function uploadErrorMessage(error: UploadRequestError): string {
   if (error.code === 'ERR_UPLOAD_EXPIRED') return 'Lượt tải đã hết hạn. Chọn tạo lượt mới và chọn lại ảnh để tiếp tục.'
   if (error.code === 'ERR_UPLOAD_FILES_REQUIRED') return 'Chọn lại những ảnh chưa được máy chủ xác nhận để tiếp tục lượt tải.'
+  if (error.code === 'ERR_UPLOAD_RECONCILING') return 'Máy chủ đang đối soát tiếp nhận và credit. Bạn có thể kiểm tra lại trạng thái.'
   if (error.code === 'ERR_MOCK_ENABLED') return 'Không gửi ảnh thật trong chế độ demo.'
   if (error.code === 'ERR_IDEMPOTENCY_KEY_REUSED') return 'Mã yêu cầu đã gắn với nội dung khác. Cần đối chiếu trước khi gửi tiếp.'
   if (error.code === 'ERR_REQUEST_IN_PROGRESS') return 'Yêu cầu đang được xử lý hoặc đối soát. Hãy thử lại cùng lượt gửi.'

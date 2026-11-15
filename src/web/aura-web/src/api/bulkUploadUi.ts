@@ -9,6 +9,13 @@ export type BulkSelectionResult = Readonly<{
   tooMany: boolean
 }>
 
+export const bulkFileKey = (file: File) => JSON.stringify([file.name, file.size, file.lastModified])
+
+export function matchesBulkImageFormat(file: File): boolean {
+  const expectedMime = /\.png$/i.test(file.name) ? 'image/png' : /\.jpe?g$/i.test(file.name) ? 'image/jpeg' : null
+  return expectedMime !== null && (!file.type || file.type === expectedMime)
+}
+
 export function validateBulkFiles(files: readonly File[]): BulkSelectionResult {
   if (files.length > MAX_BULK_IMAGES) {
     return { accepted: [], tooMany: true, rejected: [{
@@ -17,18 +24,21 @@ export function validateBulkFiles(files: readonly File[]): BulkSelectionResult {
   }
   const accepted: File[] = []
   const rejected: InvalidBulkImage[] = []
+  const seen = new Set<string>()
   for (const file of files) {
-    const extension = /\.(jpe?g|png)$/i.exec(file.name)?.[1].toLowerCase()
-    const expectedMime = extension === 'png' ? 'image/png' : extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg' : null
-    const reason = !expectedMime || (file.type !== '' && file.type !== expectedMime)
+    const key = bulkFileKey(file)
+    const reason = !matchesBulkImageFormat(file)
       ? 'Chỉ chấp nhận .jpg, .jpeg hoặc .png với định dạng tương ứng.'
       : file.size === 0
         ? 'Ảnh trống (0 byte).'
         : file.size > MAX_BULK_FILE_BYTES
           ? 'Dung lượng vượt 10 MiB.'
-          : ''
+          : seen.has(key) ? 'Tệp này đã có trong danh sách.' : ''
     if (reason) rejected.push({ name: file.name, reason })
-    else accepted.push(file)
+    else {
+      seen.add(key)
+      accepted.push(file)
+    }
   }
   return { accepted, rejected, tooMany: false }
 }

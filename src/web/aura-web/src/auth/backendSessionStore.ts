@@ -1,6 +1,8 @@
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth'
 import { getFirebaseAuth } from '../firebase/config'
 import { BackendContextError, loadBackendContext, type BackendContext } from '../api/backendContext'
+import { clearBatchPreviews } from '../api/batchLocalPreviews'
+import { disposePersonalUploadWorkspace } from '../api/personalUploadWorkspace'
 
 export type BackendSessionState =
   | { status: 'loading'; firebaseUid: string | null }
@@ -22,6 +24,10 @@ export function createBackendSessionStore() {
   let signOutOperation: { user: User | null } | undefined
 
   function publish(next: BackendSessionState) {
+    if (state.status === 'ready' && (next.status !== 'ready' || next.context !== state.context)) {
+      clearBatchPreviews()
+      disposePersonalUploadWorkspace(state.context)
+    }
     state = next
     for (const listener of listeners) listener()
   }
