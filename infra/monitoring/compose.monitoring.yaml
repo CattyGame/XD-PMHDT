@@ -60,7 +60,9 @@ services:
     image: prometheuscommunity/postgres-exporter:v0.15.0
     container_name: aura-monitoring-postgres-exporter
     environment:
-      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/aura_dev?sslmode=disable"
+      DATA_SOURCE_URI: "postgres:5432/${POSTGRES_DB:-aura_dev}?sslmode=disable"
+      DATA_SOURCE_USER: "${POSTGRES_USER:?Set POSTGRES_USER}"
+      DATA_SOURCE_PASS: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}"
     ports:
       - "127.0.0.1:9187:9187"
     networks:

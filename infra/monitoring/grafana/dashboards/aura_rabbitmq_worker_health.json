@@ -51,12 +51,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "Prometheus" },
-          "expr": "sum(rate(rabbitmq_queue_messages_published_total[1m]))",
+          "expr": "sum(rate(rabbitmq_queue_exchange_messages_published_total{vhost=\"/aura-s3\"}[1m]))",
           "legendFormat": "Publish Rate"
         },
         {
           "datasource": { "type": "prometheus", "uid": "Prometheus" },
-          "expr": "sum(rate(rabbitmq_queue_messages_delivered_total[1m]))",
+          "expr": "sum(rate(rabbitmq_queue_messages_delivered_total{vhost=\"/aura-s3\"}[1m])) + sum(rate(rabbitmq_queue_messages_delivered_ack_total{vhost=\"/aura-s3\"}[1m]))",
           "legendFormat": "Deliver/Consume Rate"
         }
       ]
@@ -109,7 +109,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "Prometheus" },
-          "expr": "sum(rabbitmq_queue_messages_unacknowledged{vhost=\"/aura-s3\"})"
+          "expr": "sum(rabbitmq_queue_messages_unacked{vhost=\"/aura-s3\"})"
         }
       ]
     },

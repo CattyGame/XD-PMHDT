@@ -33,6 +33,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--url", required=True)
     p.add_argument("--patient", help="Fallback patient GUID when --manifest is not supplied")
+    p.add_argument("--clinic-context-id", type=uuid.UUID, help="Clinic selector verified by the API authority on every request")
     p.add_argument("--manifest", type=Path, help="JSON array of {fileName, patientId, expectedStatus} records")
     p.add_argument("--resume-batch-id", help="Resume an existing parent batch by re-reading its server inventory")
     p.add_argument("--stop-after-uploads", type=int, help="Stop before finalize after N uploads to exercise resume")
@@ -54,6 +55,8 @@ def main():
         raise ValueError("Explicit Firebase token and HTTPS (or loopback HTTP) origin required")
     if args.patient:
         uuid.UUID(args.patient)
+    if args.clinic_context_id is not None and args.clinic_context_id.int == 0:
+        raise ValueError("Clinic context cannot be the empty UUID")
     if not 1 <= args.count <= 100:
         raise ValueError("count must be 1..100")
     files = sorted(f for f in args.images.iterdir() if f.suffix.lower() in (".png", ".jpg", ".jpeg"))
@@ -79,8 +82,12 @@ def main():
         raise ValueError("Specify both expected outcome counts or neither")
     expected_succeeded = args.expected_succeeded if args.expected_succeeded is not None else args.count
     expected_failed = args.expected_failed if args.expected_failed is not None else 0
-    if expected_succeeded + expected_failed != args.count:
+    if min(expected_succeeded, expected_failed) < 0 or expected_succeeded + expected_failed != args.count:
         raise ValueError("Expected success and failure counts must add up to count")
+    if manifest and sum(x["expectedStatus"] == "SUCCEEDED" for x in manifest.values()) != expected_succeeded:
+        raise ValueError("Expected counts disagree with the per-image manifest")
+    if expected_failed and not manifest:
+        raise ValueError("Partial failure acceptance requires a per-image manifest")
     if args.stop_after_uploads is not None and not 1 <= args.stop_after_uploads < args.count:
         raise ValueError("stop-after-uploads must be between 1 and count-1")
     items = []
@@ -96,9 +103,15 @@ def main():
         items.append(dict(itemId=str(uuid.uuid4()), patientId=item["patientId"], fileName=f.name,
                           sha256=digest, modality="FUNDUS", eyeSide="unknown",
                           expectedStatus=item["expectedStatus"]))
-    evidence = {"status": "RUNNING", "declared": len(items), "samples": []}
+    evidence = {"status": "RUNNING", "declared": len(items), "samples": [],
+                "clinicContextId": str(args.clinic_context_id) if args.clinic_context_id else None,
+                "manifest": items}
     started = time.monotonic()
     base = args.url.rstrip("/")
+    def api(path, method="GET", body=None, content_type="application/json", key=None):
+        if args.clinic_context_id:
+            path += "?" + urllib.parse.urlencode({"clinicContextId": str(args.clinic_context_id)})
+        return request(base, token, path, method, body, content_type, key)
     def sample():
         result = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{json .}}", *args.containers], capture_output=True, text=True, check=True)
         rows = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
@@ -111,7 +124,7 @@ def main():
         sample()
         if args.resume_batch_id:
             batch = str(uuid.UUID(args.resume_batch_id))
-            inventory = request(base, token, f"/api/v1/analysis-upload-batches/{batch}")
+            inventory = api(f"/api/v1/analysis-upload-batches/{batch}")
             server_items = {entry["sha256"].lower(): entry for entry in inventory["items"]}
             if len(server_items) != len(items) or set(server_items) != hashes:
                 raise RuntimeError("Resume inventory does not match the selected image bytes")
@@ -122,7 +135,7 @@ def main():
                 item["itemId"] = server["itemId"]
                 item["uploadStatus"] = server["uploadStatus"]
         else:
-            inventory = request(base, token, "/api/v1/analysis-upload-batches", "POST", json.dumps({"items": [{k:v for k,v in item.items() if k != "expectedStatus"} for item in items]}).encode(), key=str(uuid.uuid4()))
+            inventory = api("/api/v1/analysis-upload-batches", "POST", json.dumps({"items": [{k:v for k,v in item.items() if k != "expectedStatus"} for item in items]}).encode(), key=str(uuid.uuid4()))
             batch = str(uuid.UUID(inventory["batchId"]))
             for item, admitted in zip(items, inventory["items"]):
                 if item["itemId"] != admitted["itemId"] or item["sha256"] != admitted["sha256"]:
@@ -137,7 +150,7 @@ def main():
             mime = "image/png" if file.suffix.lower() == ".png" else "image/jpeg"
             body = (f'--{boundary}\r\nContent-Disposition: form-data; name="image"; filename="image{file.suffix.lower()}"\r\nContent-Type: {mime}\r\n\r\n'.encode()
                     + file.read_bytes() + f"\r\n--{boundary}--\r\n".encode())
-            return request(base, token, f"/api/v1/analysis-upload-batches/{batch}/items/{item['itemId']}", "PUT", body, "multipart/form-data; boundary=" + boundary, item["itemId"])
+            return api(f"/api/v1/analysis-upload-batches/{batch}/items/{item['itemId']}", "PUT", body, "multipart/form-data; boundary=" + boundary, item["itemId"])
         pending = [(item, file) for item, file in zip(items, files) if item["uploadStatus"] == "DECLARED"]
         if args.stop_after_uploads is not None:
             pending = pending[:args.stop_after_uploads]
@@ -152,7 +165,7 @@ def main():
                 item["uploadStatus"] = receipt.get("uploadStatus", "STAGED")
                 evidence["uploaded"].append(receipt["itemId"])
         if args.stop_after_uploads is not None:
-            refreshed = request(base, token, f"/api/v1/analysis-upload-batches/{batch}")
+            refreshed = api(f"/api/v1/analysis-upload-batches/{batch}")
             evidence["inventoryAfterInterruption"] = {
                 "accepted": sum(i["uploadStatus"] == "ACCEPTED" for i in refreshed["items"]),
                 "staged": sum(i["uploadStatus"] == "STAGED" for i in refreshed["items"]),
@@ -163,15 +176,20 @@ def main():
         still_declared = [i for i in items if i["uploadStatus"] == "DECLARED"]
         if still_declared:
             raise RuntimeError("Some items remain unaccepted; re-read inventory and resume before finalize")
-        accepted = request(base, token, f"/api/v1/analysis-upload-batches/{batch}/finalize", "POST", b"{}", key=str(uuid.uuid4()))
+        accepted = api(f"/api/v1/analysis-upload-batches/{batch}/finalize", "POST", b"{}", key=str(uuid.uuid4()))
         expected_by_analysis = {}
         expected_by_name = {item["fileName"]: item["expectedStatus"] for item in items}
+        accepted_names = [item["fileName"] for item in accepted["items"] if item["uploadStatus"] == "ACCEPTED"]
+        if len(accepted_names) != args.count or set(accepted_names) != set(expected_by_name):
+            raise RuntimeError("Finalize receipts do not match every declared image exactly once")
         for receipt in accepted["items"]:
             if receipt.get("analysisId"):
                 expected_by_analysis[receipt["analysisId"]] = expected_by_name[receipt["fileName"]]
+        if len(expected_by_analysis) != args.count:
+            raise RuntimeError("Finalize did not accept exactly one analysis per declared image")
         while time.monotonic() - started < args.timeout:
             sample()
-            result = request(base, token, f"/api/v1/batches/{batch}")
+            result = api(f"/api/v1/batches/{batch}")
             evidence["outcome"] = result
             summary = result["summary"]
             if summary["total"] == len(items) and summary["active"] == 0:
@@ -195,7 +213,7 @@ def main():
                        max(l.amount) FILTER (WHERE l.entry_type='CAPTURE'),
                        max(l.amount) FILTER (WHERE l.entry_type='RELEASE'),
                        w.id::text, w.balance,
-                       (SELECT x.balance_after FROM billing.credit_ledger_entries x WHERE x.wallet_id=w.id ORDER BY x.created_at DESC,x.id DESC LIMIT 1)
+                       (SELECT COALESCE(SUM(x.amount),0) FROM billing.credit_ledger_entries x WHERE x.wallet_id=w.id)
                 FROM analysis.images i
                 LEFT JOIN billing.credit_reservations r ON r.analysis_id=i.id AND r.tenant_id=i.tenant_id
                 LEFT JOIN billing.credit_ledger_entries l ON l.reservation_id=r.id
@@ -203,35 +221,44 @@ def main():
                 WHERE i.batch_id='{batch}'::uuid
                 GROUP BY i.id,r.id,r.state,w.id,w.balance ORDER BY i.id;
             """
-            result = subprocess.run(["docker", "exec", args.postgres_container, "psql", "-X", "-A", "-t", "-F", "\\t", "-U", "aura_dev", "-d", "aura_dev", "-c", sql], capture_output=True, text=True, check=True)
-            ledger = []
-            discrepancies = []
-            for line in result.stdout.splitlines():
-                fields = line.split("\t")
-                if len(fields) != 12:
-                    continue
-                image_id, reservation_id, state, reserve_id, capture_id, release_id, reserve_amount, capture_amount, release_amount, wallet_id, balance, ledger_balance = fields
-                expected = expected_by_analysis.get(image_id)
-                row = {"analysisId": image_id, "reservationId": reservation_id or None, "state": state or None,
-                       "reserveId": reserve_id or None, "captureId": capture_id or None, "releaseId": release_id or None,
-                       "reserveAmount": int(reserve_amount) if reserve_amount else None,
-                       "captureAmount": int(capture_amount) if capture_amount else None,
-                       "releaseAmount": int(release_amount) if release_amount else None,
-                       "expectedStatus": expected,
-                       "walletId": wallet_id or None, "walletBalance": int(balance) if balance else None,
-                       "latestLedgerBalance": int(ledger_balance) if ledger_balance else None}
-                ledger.append(row)
-                if row["walletBalance"] is not None and row["walletBalance"] != row["latestLedgerBalance"]:
-                    discrepancies.append({"walletId": wallet_id, "walletBalance": row["walletBalance"], "ledgerBalance": row["latestLedgerBalance"]})
-                expected_state = "CAPTURED" if expected == "SUCCEEDED" else "RELEASED"
-                expected_amounts = (-1, 0, None) if expected_state == "CAPTURED" else (-1, None, 1)
-                actual_amounts = (row["reserveAmount"], row["captureAmount"], row["releaseAmount"])
-                if not row["reserveId"] or row["state"] != expected_state or actual_amounts != expected_amounts or (expected_state == "CAPTURED" and (not row["captureId"] or row["releaseId"])) or (expected_state == "RELEASED" and (not row["releaseId"] or row["captureId"])):
-                    discrepancies.append({"analysisId": image_id, "expectedState": expected_state, "actualState": row["state"]})
-            evidence["financialLedger"] = ledger
-            evidence["financialDiscrepancies"] = discrepancies
-            if len(ledger) != args.count or discrepancies or any(not row["reservationId"] or row["state"] not in ("CAPTURED", "RELEASED") for row in ledger):
-                raise RuntimeError("Financial ledger is incomplete or wallet balance differs from latest ledger entry")
+            # Settlement is asynchronous; analysis completion is not a financial ACK.
+            while True:
+                result = subprocess.run(["docker", "exec", args.postgres_container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-A", "-t", "-F", "\t", "-U", "aura_dev", "-d", "aura_dev", "-c", sql], capture_output=True, text=True, check=True)
+                ledger = []
+                discrepancies = []
+                for line in result.stdout.splitlines():
+                    fields = line.split("\t")
+                    if len(fields) != 12:
+                        raise RuntimeError("Unexpected ledger query output")
+                    image_id, reservation_id, state, reserve_id, capture_id, release_id, reserve_amount, capture_amount, release_amount, wallet_id, balance, ledger_balance = fields
+                    expected = expected_by_analysis.get(image_id)
+                    row = {"analysisId": image_id, "reservationId": reservation_id or None, "state": state or None,
+                           "reserveId": reserve_id or None, "captureId": capture_id or None, "releaseId": release_id or None,
+                           "reserveAmount": int(reserve_amount) if reserve_amount else None,
+                           "captureAmount": int(capture_amount) if capture_amount else None,
+                           "releaseAmount": int(release_amount) if release_amount else None,
+                           "expectedStatus": expected,
+                           "walletId": wallet_id or None, "walletBalance": int(balance) if balance else None,
+                           "netLedgerBalance": int(ledger_balance) if ledger_balance else None}
+                    ledger.append(row)
+                    if row["walletBalance"] is not None and row["walletBalance"] != row["netLedgerBalance"]:
+                        discrepancies.append({"walletId": wallet_id, "walletBalance": row["walletBalance"], "ledgerBalance": row["netLedgerBalance"]})
+                    expected_state = "CAPTURED" if expected == "SUCCEEDED" else "RELEASED"
+                    expected_amounts = (-1, 0, None) if expected_state == "CAPTURED" else (-1, None, 1)
+                    actual_amounts = (row["reserveAmount"], row["captureAmount"], row["releaseAmount"])
+                    if not row["reserveId"] or row["state"] != expected_state or actual_amounts != expected_amounts or (expected_state == "CAPTURED" and (not row["captureId"] or row["releaseId"])) or (expected_state == "RELEASED" and (not row["releaseId"] or row["captureId"])):
+                        discrepancies.append({"analysisId": image_id, "expectedState": expected_state, "actualState": row["state"]})
+                evidence["financialLedger"] = ledger
+                evidence["financialDiscrepancies"] = discrepancies
+                if any(row["analysisId"] not in expected_by_analysis for row in ledger):
+                    raise RuntimeError("Ledger contains an analysis outside the accepted manifest")
+                complete = len(ledger) == args.count and {row["analysisId"] for row in ledger} == set(expected_by_analysis) and not discrepancies and all(row["reservationId"] and row["state"] in ("CAPTURED", "RELEASED") for row in ledger)
+                if complete:
+                    break
+                if time.monotonic() - started >= args.timeout:
+                    raise TimeoutError("Financial settlement did not converge before the acceptance deadline")
+                sample()
+                time.sleep(2)
             evidence["status"] = "PASS"
     except Exception as error:
         evidence["status"] = "FAIL"

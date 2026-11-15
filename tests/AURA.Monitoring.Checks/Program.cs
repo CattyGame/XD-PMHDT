@@ -207,7 +207,7 @@ Check("AC3.5: Vượt mốc 5.000 mẫu: Bộ đệm Rolling Reservoir (4096) ti
     }
 });
 
-Check("AC3.6: Đo lường độ trễ phụ trội (Overhead Benchmark) của việc ghi nhận metrics đảm bảo < 3%", () =>
+Check("AC3.6: Microbenchmark RecordRequest < 0.3ms; không phải đo CPU overhead của scrape", () =>
 {
     var sw = System.Diagnostics.Stopwatch.StartNew();
     const int iterations = 50000;
@@ -229,7 +229,7 @@ Check("AC3.6: Đo lường độ trễ phụ trội (Overhead Benchmark) của v
 });
 
 Console.WriteLine("====================================================================");
-Console.WriteLine($"KẾT QUẢ: {passed}/13 CHECKS PASS HOÀN TOÀN! (100% AC1, AC2, AC3)");
+Console.WriteLine($"KẾT QUẢ: {passed} configuration/metrics checks passed. Live targets, alert delivery and <3% scrape CPU overhead require runtime acceptance.");
 Console.WriteLine("====================================================================");
 return 0;
 

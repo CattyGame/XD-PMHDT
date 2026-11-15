@@ -19,27 +19,27 @@ scrape_configs:
   - job_name: "api-gateway"
     metrics_path: "/metrics"
     static_configs:
-      - targets: ["api-gateway:8080", "host.docker.internal:8080"]
+      - targets: ["api-gateway:8080"]
 
   - job_name: "analysis-api"
     metrics_path: "/metrics"
     static_configs:
-      - targets: ["analysis-api:8080", "host.docker.internal:5001"]
+      - targets: ["analysis-api:8080"]
 
   - job_name: "billing-api"
     metrics_path: "/metrics"
     static_configs:
-      - targets: ["billing-api:8080", "host.docker.internal:5002"]
+      - targets: ["billing-api:8080"]
 
   - job_name: "ai-core"
     metrics_path: "/metrics"
     static_configs:
-      - targets: ["ai-core:8000", "aura-ai77-539ab735c32d401c:8000", "host.docker.internal:8000"]
+      - targets: ["ai-core:8000"]
 
   - job_name: "rabbitmq"
-    metrics_path: "/metrics"
+    metrics_path: "/metrics/per-object"
     static_configs:
-      - targets: ["rabbitmq:15692", "aura-s3-rabbitmq-1:15692", "host.docker.internal:15692"]
+      - targets: ["rabbitmq:15692"]
 
   - job_name: "postgres-exporter"
     static_configs:

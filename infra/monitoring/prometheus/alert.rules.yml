@@ -2,7 +2,7 @@ groups:
   - name: aura_microservices_alerts
     rules:
       - alert: AuraHighHttp5xxRate
-        expr: (sum(rate(http_requests_total{status=~"5.."}[2m])) / sum(rate(http_requests_total[2m])) * 100) > 2
+        expr: (sum by (job, instance) (rate(http_requests_total{status=~"5.."}[2m])) / sum by (job, instance) (rate(http_requests_total[2m])) * 100) > 2
         for: 2m
         labels:
           severity: critical
@@ -12,7 +12,7 @@ groups:
           description: "Microservices đang gặp lỗi máy chủ nội bộ HTTP 5xx cao (hiện tại: {{ $value | printf \"%.2f\" }}%)."
 
       - alert: AuraAnalysisJobQueueBacklog
-        expr: rabbitmq_queue_messages{queue="aura.s3.analysis.jobs"} > 50
+        expr: rabbitmq_queue_messages{vhost="/aura-s3",queue="aura.s3.analysis.jobs"} > 50
         for: 5m
         labels:
           severity: warning

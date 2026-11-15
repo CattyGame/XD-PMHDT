@@ -19,7 +19,18 @@ public sealed class PostgresFactAttribute : FactAttribute
 public sealed class BatchCreditReconciliationTests
 {
     [PostgresFact]
-    public async Task Large_partial_failure_batch_never_overdraws_and_charges_only_successful_images()
+    public Task Large_partial_failure_batch_never_overdraws_and_charges_only_successful_images()
+        => VerifyPartialBatchAsync(80, 100, 55);
+
+    [PostgresFact]
+    public Task Clinic_batch_100_captures_95_and_releases_5_exactly_once()
+        => VerifyPartialBatchAsync(100, 100, 95);
+
+    [PostgresFact]
+    public Task Clinic_batch_10_captures_8_and_releases_2_exactly_once()
+        => VerifyPartialBatchAsync(10, 10, 8);
+
+    private static async Task VerifyPartialBatchAsync(int initialCredits, int batchImageCount, int expectedSuccessfulImages)
     {
         var connectionString = Environment.GetEnvironmentVariable("AURA_SCRUM370_TEST_CONNECTION_STRING")!;
         await using var dataSource = NpgsqlDataSource.Create(connectionString);
@@ -28,9 +39,6 @@ public sealed class BatchCreditReconciliationTests
         var actorId = Guid.NewGuid();
         var walletId = Guid.NewGuid();
         var openingCreditKey = Guid.NewGuid();
-        const int initialCredits = 80;
-        const int batchImageCount = 100;
-        const int expectedSuccessfulImages = 55;
 
         await CreateWalletAsync(dataSource, tenantId, clinicId, walletId, openingCreditKey, initialCredits);
         try
@@ -79,9 +87,13 @@ public sealed class BatchCreditReconciliationTests
                     FailureReason: succeeded ? null : "ANALYSIS_ABORT",
                     IsMock: false));
 
-                var executed = await settlement.ExecuteAsync(resolution, Guid.NewGuid(), CancellationToken.None);
+                var settlementKey = Guid.NewGuid();
+                var executed = await settlement.ExecuteAsync(resolution, settlementKey, CancellationToken.None);
                 Assert.True(executed.Succeeded);
                 Assert.Equal(succeeded ? "CAPTURED" : "RELEASED", executed.Reservation?.State);
+                var replays = await Task.WhenAll(Enumerable.Range(0, 4)
+                    .Select(_ => settlement.ExecuteAsync(resolution, settlementKey, CancellationToken.None)));
+                Assert.All(replays, replay => Assert.True(replay.Succeeded && replay.IsReplayed));
                 return succeeded;
             });
             var outcomes = await Task.WhenAll(processingResults);
