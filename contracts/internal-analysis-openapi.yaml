@@ -1,0 +1,66 @@
+openapi: 3.1.0
+info:
+  title: AURA current internal Analysis resolvers
+  version: 1.1.0
+servers:
+- url: http://analysis-api:8080
+paths:
+  /internal/v1/analysis/settlements/resolve:
+    post:
+      description: Only billing-api, audience aura-analysis, scope analysis:reconcile.
+        Verify event binding, tenant and current generation; never trust request alone.
+      security:
+      - serviceBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../infra/sprint3/contracts/internal-resolve-request.schema.json
+      responses:
+        '200':
+          description: Authoritative resolution
+          content:
+            application/json:
+              schema:
+                $ref: ../infra/sprint3/contracts/settlement-resolution.schema.json
+        '401':
+          description: Unauthenticated
+        '403':
+          description: Wrong service/scope
+        '404':
+          description: Unknown event/resource or mismatched tenant
+        '503':
+          description: Authority unavailable; keep pending
+  /internal/v1/analysis/notification-context/resolve:
+    post:
+      description: Only notification-api, audience aura-analysis, scope analysis:notify.
+        Verify event binding, tenant and current generation; never trust request alone.
+      security:
+      - serviceBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../infra/sprint3/contracts/internal-resolve-request.schema.json
+      responses:
+        '200':
+          description: Authoritative resolution
+          content:
+            application/json:
+              schema:
+                $ref: notification-context.schema.json
+        '401':
+          description: Unauthenticated
+        '403':
+          description: Wrong service/scope
+        '404':
+          description: Unknown event/resource or mismatched tenant
+        '503':
+          description: Authority unavailable; keep pending
+components:
+  securitySchemes:
+    serviceBearer:
+      type: http
+      scheme: bearer

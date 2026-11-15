@@ -4,7 +4,7 @@ import type { BackendContext } from './backendContext'
 import { validBatchId } from './batchProgress'
 import { safeNotificationPath } from '../firebase/notificationNavigation'
 
-/** SCRUM-333: API inbox theo infra/sprint3/contracts/notification-openapi.yaml. */
+/** Current inbox API: contracts/notification-openapi.yaml; Sprint3 artifacts stay byte-pinned. */
 export type InboxNotification = Readonly<{
   notificationId: string
   eventId: string

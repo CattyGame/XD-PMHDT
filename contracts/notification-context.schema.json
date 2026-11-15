@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "analysisId",
+    "tenantId",
+    "applicable",
+    "recipientAccountIds",
+    "processingStatus",
+    "resultVersion"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "analysisId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenantId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "applicable": {
+      "type": "boolean"
+    },
+    "recipientAccountIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "processingStatus": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resultVersion": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "clinicContextId": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Optional server-resolved clinic selector for authorized analysis and batch links."
+    }
+  }
+}
