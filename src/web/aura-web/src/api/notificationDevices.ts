@@ -46,12 +46,14 @@ async function sendDeviceRequest(
   method: 'POST' | 'DELETE',
   path: string,
   body?: { deviceId: string; token: string },
+  isCurrentSession: () => boolean = () => true,
 ): Promise<Response> {
   if (isMockEnabled) {
     throw new NotificationDeviceError(0, 'ERR_MOCK_ENABLED')
   }
 
   const idToken = await getNotificationIdToken()
+  if (!isCurrentSession()) throw new NotificationDeviceError(401, 'ERR_SESSION_CHANGED')
 
   let response: Response
 
@@ -102,6 +104,7 @@ async function sendDeviceRequest(
 
 export async function registerNotificationDevice(
   fcmToken: string,
+  isCurrentSession: () => boolean = () => true,
 ): Promise<void> {
   if (
     !fcmToken ||
@@ -120,6 +123,7 @@ export async function registerNotificationDevice(
       deviceId,
       token: fcmToken,
     },
+    isCurrentSession,
   )
 
   const payload: unknown = await response.json().catch(() => null)

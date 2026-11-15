@@ -14,6 +14,18 @@ namespace AURA.M1.RegressionTests;
 public class NotificationTests
 {
     [M1PostgresFact]
+    public async Task Clinic_notification_keeps_server_resolved_selector_in_inbox_and_push()
+    {
+        await using var f=await Fixture.CreateAsync();
+        f.Authority.ClinicId=Guid.NewGuid();
+        await f.DeviceAsync("good");
+        await f.Consumer.ProcessNotificationEventAsync(f.Event("analysis.completed"),default);
+        var item=Assert.Single((await f.Inbox.GetInboxAsync(f.Account,20,null,false,default)).Items);
+        Assert.EndsWith($"?clinicContextId={f.Authority.ClinicId:D}",item.TargetPath);
+        await f.Worker.DispatchPendingAsync(default);
+        Assert.Equal(item.TargetPath,Assert.Single(f.Provider.Messages).Data["targetPath"]);
+    }
+    [M1PostgresFact]
     public async Task Malformed_or_unsupported_payment_envelopes_never_create_delivery_obligations()
     {
         await using var f=await Fixture.CreateAsync();
@@ -182,8 +194,9 @@ public class NotificationTests
         public Task<string?> ResolveFirebaseUidAsync(Guid account,CancellationToken ct)=>Task.FromResult<string?>(account==id?Uid:null);
     }
     sealed class Authority(Guid recipient):INotificationContextResolver {
+        public Guid? ClinicId {get;set;}
         public string Mismatch {get;set;}="";
-        public Task<NotificationContext> ResolveAsync(Guid e,Guid a,Guid t,CancellationToken ct)=>Task.FromResult(new NotificationContext(e,a,t,true,[recipient],"COMPLETED",1));
+        public Task<NotificationContext> ResolveAsync(Guid e,Guid a,Guid t,CancellationToken ct)=>Task.FromResult(new NotificationContext(e,a,t,true,[recipient],"COMPLETED",1,ClinicId));
         public Task<PaymentNotificationContext> ResolvePaymentAsync(Guid e,Guid o,Guid t,CancellationToken ct)=>Task.FromResult(new PaymentNotificationContext(
             Mismatch=="event"?Guid.NewGuid():e,Mismatch=="order"?Guid.NewGuid():o,Mismatch=="tenant"?Guid.NewGuid():t,recipient,Mismatch=="status"?"PENDING":"COMPLETED"));
     }

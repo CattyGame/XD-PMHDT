@@ -79,7 +79,7 @@ paths:
                           format: date-time
                         targetPath:
                           type: string
-                          pattern: ^/analyses/[0-9a-f-]{36}$
+                          pattern: '^/(?:(?:analyses|batches)/[0-9a-f-]{36}(?:\?clinicContextId=[0-9a-f-]{36})?|billing/orders/[0-9a-f-]{36})$'
                   nextCursor:
                     type:
                     - string

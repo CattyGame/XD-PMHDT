@@ -25,7 +25,7 @@ const user = { uid: 'batch-test', getIdToken: async () => 'synthetic-bearer' }
 function openBatch() {
   return render(
     <BackendSessionContext.Provider value={{ state: { status: 'ready', context }, logout: vi.fn(), retry: vi.fn() }}>
-      <MemoryRouter initialEntries={[`/batches/${batchId}`]}>
+      <MemoryRouter initialEntries={[`/batches/${batchId}${window.location.search}`]}>
         <Routes><Route path="/batches/:batchId" element={<BatchProgressPage />} /></Routes>
       </MemoryRouter>
     </BackendSessionContext.Provider>,
@@ -100,4 +100,16 @@ it('reports a network timeout when the request deadline aborts a pending read', 
   deadline.abort()
   expect((await screen.findByRole('alert')).textContent).toContain('quá thời gian chờ')
   view.unmount()
+})
+
+
+it('audit: opening a clinic case from a clinic batch must preserve clinicContextId', async () => {
+  const clinic = '20000000-0000-4000-8000-000000000009'
+  window.history.replaceState(null, '', `/batches/${batchId}?clinicContextId=${clinic}`)
+  try {
+    server.use(http.get(`*${endpoint}`, () => HttpResponse.json(snapshot(100))))
+    openBatch(); await screen.findByRole('progressbar', { name: 'Tiến độ xử lý batch' })
+    const link = screen.getAllByRole('link', { name: 'Xem kết quả chi tiết' })[0]
+    expect(link.getAttribute('href')).toContain(`clinicContextId=${clinic}`)
+  } finally { window.history.replaceState(null, '', '/') }
 })

@@ -69,10 +69,10 @@ describe('SCRUM-354: Doctor Review API', () => {
   })
 
   it('File Access kèm clinicContextId và không dùng ảnh không có quyền', async () => {
-    fetchMock.mockResolvedValueOnce(json({ url: 'https://storage.example.org/short-lived-file',
+    fetchMock.mockResolvedValueOnce(json({ url: `/api/v1/analyses/${analysisId}/files/${fileId}/content?clinicContextId=${clinicId}`,
       expiresAt: new Date(Date.now() + 60000).toISOString() }))
     const file = await getDoctorFileAccess(context, clinicId, analysisId, fileId)
-    expect(file.url).toContain('https://')
+    expect(file.url).toContain('/content?clinicContextId=' + clinicId)
     expect(fetchMock.mock.calls[0][0]).toContain('/files/' + fileId + '/access?clinicContextId=' + clinicId)
   })
 

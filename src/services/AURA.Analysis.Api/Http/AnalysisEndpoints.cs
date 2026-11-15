@@ -170,7 +170,12 @@ public static class AnalysisEndpoints
         catch(BadHttpRequestException){return Error(c,UploadFailure.Validation(new ErrorDetail("body","invalid_request")));}
         catch(InvalidDataException){return Error(c,UploadFailure.Validation(new ErrorDetail("body","invalid_multipart")));}
         catch(System.Text.Json.JsonException){return Error(c,UploadFailure.Validation(new ErrorDetail("body","invalid_json")));}
-        catch(Exception){return Error(c,UploadFailure.Dependency("Analysis dependencies"));}
+        catch(Exception error)
+        {
+            c.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("AnalysisEndpoints")
+                .LogError("Analysis dependency failure: {ExceptionType}; stack: {StackTrace}", error.GetType().Name, error.StackTrace);
+            return Error(c,UploadFailure.Dependency("Analysis dependencies"));
+        }
     }
     private static IResult Error(HttpContext c,UploadFailure e)=>Results.Json(new{error=new{
         code=e.Code,message=e.Message,correlationId=Correlation(c),retryable=e.Retryable,details=e.Details

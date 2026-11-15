@@ -19,6 +19,16 @@ public sealed class BillingPostgresFactAttribute : FactAttribute
 public sealed class PostgresBillingInvariantsTests
 {
     [BillingPostgresFact]
+    public async Task Wallet_read_is_scoped_to_owner_and_environment_and_does_not_create_a_wallet()
+    {
+        await using var f=await Fixture.CreateAsync();
+        Assert.Equal(100,await f.Orders.GetWalletBalanceAsync("ACCOUNT",f.Owner,"TEST",default));
+        Assert.Equal(0,await f.Orders.GetWalletBalanceAsync("ACCOUNT",Guid.NewGuid(),"TEST",default));
+        Assert.Equal(0,await f.Orders.GetWalletBalanceAsync("ACCOUNT",f.Owner,"LIVE",default));
+        Assert.Equal(0,await f.Orders.GetWalletBalanceAsync("CLINIC",f.Owner,"TEST",default));
+        Assert.Equal(100,await f.BalanceAsync());
+    }
+    [BillingPostgresFact]
     public async Task Inbox_accepts_legacy_and_ADR005_events_without_accepting_unknown_versions()
     {
         await using var f=await Fixture.CreateAsync();

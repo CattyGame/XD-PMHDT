@@ -45,10 +45,12 @@ describe('Đồng bộ FCM token với backend', () => {
     expect(mocks.register).toHaveBeenNthCalledWith(
       1,
       'synthetic-old-token',
+      expect.any(Function),
     )
     expect(mocks.register).toHaveBeenNthCalledWith(
       2,
       'synthetic-new-token',
+      expect.any(Function),
     )
   })
 
@@ -64,6 +66,7 @@ describe('Đồng bộ FCM token với backend', () => {
     expect(mocks.register).toHaveBeenCalledTimes(2)
     expect(mocks.register).toHaveBeenLastCalledWith(
       'synthetic-same-token',
+      expect.any(Function),
     )
   })
 

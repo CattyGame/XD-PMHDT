@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: AURA Billing API
-  version: 0.2.0
+  version: 0.3.0
   description: Sprint 2 Billing contract. Internal endpoints are service-to-service
     only and must not be routed through the public Gateway. The package catalog remains
     a compatibility view of the legacy demo catalog until official price versions
@@ -10,6 +10,43 @@ servers:
 - url: http://127.0.0.1:5002
   description: Local Development Billing API
 paths:
+  /api/v1/billing/wallets/{ownerType}/{ownerId}:
+    get:
+      operationId: getBillingWallet
+      summary: Read the current wallet balance for a server-authorized owner
+      description: Requires a real Firebase bearer and Profile BILLING_READ authorization. Environment comes from server configuration. A missing wallet has balance zero; this GET never creates one. Response is no-store.
+      security:
+      - FirebaseBearer: []
+      parameters:
+      - in: path
+        name: ownerType
+        required: true
+        schema: {type: string, enum: [ACCOUNT, CLINIC]}
+      - in: path
+        name: ownerId
+        required: true
+        schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Current balance, isolated by owner and configured environment
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ownerType, ownerId, environment, balance]
+                properties:
+                  ownerType: {type: string, enum: [ACCOUNT, CLINIC]}
+                  ownerId: {type: string, format: uuid}
+                  environment: {type: string, enum: [TEST, LIVE]}
+                  balance: {type: integer, minimum: 0}
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
   /internal/v1/billing/notification-context/resolve:
     post:
       operationId: resolvePaymentNotificationContext

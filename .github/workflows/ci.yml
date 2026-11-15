@@ -121,6 +121,31 @@ jobs:
       - name: Run tests
         run: python -m pytest tests -q
 
+  m5-browser:
+    name: M5 protected UI contract journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: src/web/aura-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: src/web/aura-web/.nvmrc
+          cache: npm
+          cache-dependency-path: src/web/aura-web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run explicit synthetic Firebase and API fixtures
+        run: npx playwright test --config playwright.m5-mock.config.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: m5-browser-failure-evidence
+          path: src/web/aura-web/test-results/m5-mock
+          retention-days: 7
+
   react:
     name: React lint test and build
     runs-on: ubuntu-latest

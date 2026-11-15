@@ -44,6 +44,11 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('SCRUM-333 — Notification Inbox client', () => {
+  it('retains a canonical clinic analysis target without accepting arbitrary query parameters', () => {
+    const targetPath = `/analyses/${analysisId}?clinicContextId=${context.accountId}`
+    expect(parseInboxPage({ items: [{ ...notification, targetPath }], nextCursor: null }).items[0].targetPath).toBe(targetPath)
+    expect(() => parseInboxPage({ items: [{ ...notification, targetPath: targetPath + '&token=unsafe' }], nextCursor: null })).toThrow(InboxError)
+  })
   it('accepts canonical payment links and rejects mixed or foreign identities', () => {
     const payment = { ...notification, analysisId: null, orderId: analysisId,
       type: 'PAYMENT_SUCCESS', targetPath: `/billing/orders/${analysisId}` }

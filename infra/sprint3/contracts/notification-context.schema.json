@@ -45,6 +45,11 @@
         "null"
       ],
       "minimum": 1
+    },
+    "clinicContextId": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Optional server-resolved clinic selector for authorized analysis and batch links."
     }
   }
 }

@@ -46,7 +46,8 @@ public sealed record NotificationContext(
     bool Applicable,
     IReadOnlyList<Guid> RecipientAccountIds,
     string ProcessingStatus,
-    int? ResultVersion);
+    int? ResultVersion,
+    Guid? ClinicContextId = null);
 
 public sealed record PaymentNotificationContext(
     Guid EventId,

@@ -127,7 +127,7 @@ public sealed class AzureBlobPrivateFileStorage : IPrivateFileStorage, IPrivateS
     {
         ct.ThrowIfCancellationRequested();
         var target = Container(container, key);
-        if (contentType is not ("image/png" or "image/jpeg" or "application/pdf" or "text/csv")
+        if (contentType is not ("image/png" or "image/jpeg" or "application/pdf" or "text/csv" or "application/zip")
             || !content.CanRead || !content.CanSeek || content.Length <= content.Position)
             throw new ArgumentException("Invalid storage content.");
         var position = content.Position;
