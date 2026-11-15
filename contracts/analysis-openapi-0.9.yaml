@@ -573,6 +573,7 @@ paths:
           description: Analysis chưa có kết quả hoặc thiếu nguồn báo cáo
   /api/v1/batches/{batchId}/reports:
     post:
+      description: Private batch export. ZIP output is limited to 64 MiB; each case PDF must remain below 1.2 MB.
       tags:
       - Reports
       operationId: createBatchReport
@@ -593,6 +594,12 @@ paths:
             schema:
               $ref: '#/components/schemas/MedicalReportExportRequest'
       responses:
+        '413':
+          description: ERR_REPORT_TOO_LARGE; download individual case PDFs instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '201':
           description: Báo cáo đã tạo
           content:
@@ -601,6 +608,7 @@ paths:
                 $ref: '#/components/schemas/ReportDownload'
         '400':
           $ref: '#/components/responses/ValidationError'
+
   /api/v1/campaigns/{campaignId}/export:
     get:
       tags:
@@ -1353,7 +1361,13 @@ components:
           type: boolean
     AnalysisResult:
       type: object
+      not:
+        required: [research]
+        properties:
+          riskAvailable:
+            enum: [true]
       required:
+      - riskAvailable
       - riskLevel
       - riskScore
       - confidenceScore
@@ -1364,13 +1378,19 @@ components:
       - disclaimer
       - version
       properties:
+        research:
+          $ref: '#/components/schemas/ResearchResults'
         riskLevel:
-          $ref: '#/components/schemas/RiskLevel'
+          type: string
+          nullable: true
+          enum: [LOW, MODERATE, HIGH, null]
         riskScore:
+          nullable: true
           type: number
           minimum: 0
           maximum: 1
         confidenceScore:
+          nullable: true
           type: number
           minimum: 0
           maximum: 1
@@ -1394,8 +1414,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileRef'
-          description: FileRef với fileId và kind. Runtime hiện chỉ tạo kind mask/overlay;
-            kind khác dự phòng, không tự sinh. Annotation khớp kích thước ảnh gốc.
+          description: Private mask/overlay and optional native A/V annotated image. DR heatmap uses a 224x224 ImageNet center crop, not native coordinates.
         configVersion:
           type: string
           description: Phiên bản cấu hình/ngưỡng áp dụng (NFR-23, ADR-008)
@@ -1418,6 +1437,9 @@ components:
           type: string
           description: Giới hạn nguồn AI; không biến mock thành kết quả thật.
         resultId: *id002
+        riskAvailable:
+          type: boolean
+          description: False means unavailable; nullable risk values are not a clinical zero.
     Analysis:
       type: object
       required:
@@ -1428,6 +1450,7 @@ components:
       - reviewStatus
       - createdAt
       - updatedAt
+      - reviewVersion
       properties:
         analysisId:
           type: string
@@ -1470,6 +1493,10 @@ components:
           type: string
           format: uuid
           description: Principal tạo request, được backend xác định.
+        reviewVersion:
+          type: integer
+          minimum: 0
+          description: Current row version; send as baseVersion when reviewing.
     AnalysisList:
       type: object
       required:
@@ -1626,14 +1653,19 @@ components:
       properties:
         vesselDensity:
           type: number
+          nullable: true
         tortuosityIndex:
           type: number
+          nullable: true
         avRatio:
           type: number
+          nullable: true
         fractalDimension:
           type: number
+          nullable: true
         branchingPoints:
           type: integer
+          nullable: true
     ReviewStatus:
       type: string
       enum:
@@ -1951,6 +1983,19 @@ components:
                 type: string
               retryable:
                 type: boolean
+          contentType:
+            type: string
+            readOnly: true
+          length:
+            type: integer
+            minimum: 0
+            readOnly: true
+          childBatchId:
+            type: string
+            format: uuid
+            readOnly: true
+          receipt:
+            $ref: '#/components/schemas/AcceptedBatchItem'
     UploadInventory:
       type: object
       required:
@@ -1984,6 +2029,115 @@ components:
             $ref: '#/components/schemas/UploadInventoryItem'
         finalizedResponse:
           $ref: '#/components/schemas/BatchResponse'
+        requesterId:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Server-owned binding; never an authorization selector.
+        tenantId:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Server-owned binding; never an authorization selector.
+        ownerId:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Server-owned binding; never an authorization selector.
+        clinicId:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Server-owned binding; never an authorization selector.
+    ResearchResults:
+      additionalProperties: false
+      properties:
+        avr:
+          $ref: '#/components/schemas/AvrResearchResult'
+        dr:
+          $ref: '#/components/schemas/DrResearchResult'
+      required:
+      - avr
+      - dr
+      type: object
+    AvrResearchResult:
+      additionalProperties: false
+      properties:
+        measurement_available:
+          title: Measurement Available
+          type: boolean
+        avr:
+          default: null
+          title: Avr
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          nullable: true
+        crae_px:
+          default: null
+          title: Crae Px
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          nullable: true
+        crve_px:
+          default: null
+          title: Crve Px
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          nullable: true
+        unavailable_reason:
+          default: null
+          title: Unavailable Reason
+          type: string
+          nullable: true
+        model_version:
+          minLength: 1
+          title: Model Version
+          type: string
+        model_sha256:
+          pattern: ^[a-f0-9]{64}$
+          title: Model Sha256
+          type: string
+      required:
+      - measurement_available
+      - model_version
+      - model_sha256
+      type: object
+    DrResearchResult:
+      additionalProperties: false
+      properties:
+        probability_dr:
+          maximum: 1
+          minimum: 0
+          title: Probability Dr
+          type: number
+        model_version:
+          minLength: 1
+          title: Model Version
+          type: string
+        checkpoint_sha256:
+          pattern: ^[a-f0-9]{64}$
+          title: Checkpoint Sha256
+          type: string
+        gradcam_method:
+          enum: [GRAD_CAM]
+          title: Gradcam Method
+          type: string
+        gradcam_geometry:
+          enum: [IMAGENET_CENTER_CROP_224]
+          title: Gradcam Geometry
+          type: string
+      required:
+      - probability_dr
+      - model_version
+      - checkpoint_sha256
+      - gradcam_method
+      - gradcam_geometry
+      type: object
+
+
   responses:
     ValidationError:
       description: Dữ liệu không hợp lệ

@@ -59,7 +59,8 @@ public static class AnalysisEndpoints
             if(!await gate.Slots.WaitAsync(0,c.RequestAborted))throw UploadRecovery.InProgress();
             try
             {
-                var form=await c.Request.ReadFormAsync(new FormOptions{MultipartBodyLengthLimit=12*1024*1024,ValueCountLimit=0,MultipartHeadersCountLimit=16,MultipartHeadersLengthLimit=8192},c.RequestAborted);
+                // ASP.NET counts file sections toward ValueCountLimit as well as form fields.
+                var form=await c.Request.ReadFormAsync(new FormOptions{MultipartBodyLengthLimit=12*1024*1024,ValueCountLimit=1,MultipartHeadersCountLimit=16,MultipartHeadersLengthLimit=8192},c.RequestAborted);
                 if(form.Files.Count!=1 || form.Files[0].Name!="image")throw UploadFailure.Validation(new ErrorDetail("image","one_image_required"));
                 var result=await c.RequestServices.GetRequiredService<ItemUploadService>().PutAsync(user.AccountId,Clinic(c),ResourceId(batchId),item,new BufferedImage(form.Files[0]),c.RequestAborted);
                 return Results.Json(result,UploadJson.Options);

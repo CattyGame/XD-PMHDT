@@ -28,12 +28,22 @@ public static class AnalysisResultMapper
                 confidence = Num(doc.RootElement, "confidenceScore", "confidence_score");
             }
         }
-        var riskAvailable = riskLevel is not null;
+        var riskAvailable = riskLevel is "LOW" or "MODERATE" or "HIGH"
+            && riskScore is >= 0 and <= 1 && confidence is >= 0 and <= 1;
+        if (!riskAvailable)
+        {
+            riskLevel = null;
+            riskScore = null;
+            confidence = null;
+        }
 
         AnalysisMetricsDetail metrics;
+        JsonElement? research = null;
         using (var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(metricsJson) ? "{}" : metricsJson))
         {
             var m = doc.RootElement;
+            if (m.TryGetProperty("research", out var extra) && extra.ValueKind == JsonValueKind.Object)
+                research = extra.Clone();
             metrics = new AnalysisMetricsDetail(
                 Num(m, "vesselDensity", "vessel_density"),
                 Num(m, "tortuosityIndex", "tortuosity_index"),
@@ -60,7 +70,7 @@ public static class AnalysisResultMapper
         return new AnalysisResultDetail(
             riskAvailable, riskLevel, riskScore, confidence, isMock,
             modelVersion, configVersion, thresholdVersion, ResearchDisclaimer, version,
-            metrics, Array.Empty<string>(), refs, warnings, processingTimeMs, limitations);
+            metrics, Array.Empty<string>(), refs, warnings, processingTimeMs, limitations) { Research = research };
     }
 
     private static string? Str(JsonElement e, params string[] names)

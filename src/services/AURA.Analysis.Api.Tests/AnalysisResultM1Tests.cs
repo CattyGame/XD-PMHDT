@@ -54,6 +54,7 @@ public sealed class AnalysisResultM1Tests
         Assert.Equal(JsonValueKind.Null, r.GetProperty("confidenceScore").ValueKind);
         Assert.Equal("frangi-v0.2", r.GetProperty("modelVersion").GetString());
         Assert.Equal(0.1428, r.GetProperty("metrics").GetProperty("vesselDensity").GetDouble());
+        Assert.Equal(JsonValueKind.Null, r.GetProperty("metrics").GetProperty("avRatio").ValueKind);
         var ann = r.GetProperty("annotations");
         Assert.Equal(2, ann.GetArrayLength());
         Assert.Equal("mask", ann[0].GetProperty("kind").GetString());
@@ -142,5 +143,37 @@ public sealed class AnalysisResultM1Tests
         Assert.Equal(0.2, r.Metrics.VesselDensity);
         Assert.Equal(10, r.Metrics.BranchingPoints);
         Assert.Empty(r.Annotations);
+    }
+
+    [Theory]
+    [InlineData("{\"risk_level\":\"RISK_UNAVAILABLE\",\"risk_score\":0,\"confidence_score\":0}")]
+    [InlineData("{\"riskLevel\":\"LOW\",\"riskScore\":null,\"confidenceScore\":null}")]
+    public void Mapper_UnavailableOrIncompleteRisk_KeepsNullAvrAndNoRisk(string riskJson)
+    {
+        var r = AnalysisResultMapper.Map(1, riskJson, "{\"av_ratio\":null}",
+            "[{\"code\":\"AVR_UNAVAILABLE\",\"message\":\"Insufficient vessels\"}]",
+            false, "m", "c", "t", 1, "research", Array.Empty<AnalysisResultMapper.AnnotationRow>());
+        Assert.False(r.RiskAvailable);
+        Assert.Null(r.RiskLevel);
+        Assert.Null(r.RiskScore);
+        Assert.Null(r.ConfidenceScore);
+        Assert.Null(r.Metrics.AvRatio);
+        Assert.Equal("AVR_UNAVAILABLE", Assert.Single(r.Warnings).Code);
+    }
+
+    [Fact]
+    public void Mapper_PreservesCanonicalResearchMetadataFromMetricsJsonb()
+    {
+        var r = AnalysisResultMapper.Map(1, "null", """
+            {"avRatio":null,"research":{"avr":{"measurement_available":false,
+            "avr":null,"unavailable_reason":"INCOMPLETE_ZONE_B","model_version":"avr-v8"},
+            "dr":{"probability_dr":0.61,"model_version":"resnet34",
+            "gradcam_geometry":"IMAGENET_CENTER_CROP_224"}}}
+            """, "[]", false, "frangi-v0.2", "c", "t", 1, "research", Array.Empty<AnalysisResultMapper.AnnotationRow>());
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(r, UploadJson.Options));
+        Assert.True(json.RootElement.TryGetProperty("research", out var research));
+        Assert.Equal(0.61, research.GetProperty("dr").GetProperty("probability_dr").GetDouble());
+        Assert.Equal("INCOMPLETE_ZONE_B", research.GetProperty("avr").GetProperty("unavailable_reason").GetString());
+        Assert.False(r.RiskAvailable);
     }
 }

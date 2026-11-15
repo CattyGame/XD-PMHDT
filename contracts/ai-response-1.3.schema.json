@@ -237,8 +237,19 @@
           "type": "string",
           "minLength": 4,
           "contentEncoding": "base64"
+        },
+        "av_overlay_base64": {
+          "type": "string",
+          "minLength": 4
+        },
+        "gradcam_base64": {
+          "type": "string",
+          "minLength": 4
         }
       }
+    },
+    "research": {
+      "$ref": "#/$defs/ResearchResults"
     }
   },
   "allOf": [
@@ -333,5 +344,150 @@
         }
       }
     }
-  ]
+  ],
+  "$defs": {
+    "AvrResearchResult": {
+      "additionalProperties": false,
+      "properties": {
+        "measurement_available": {
+          "title": "Measurement Available",
+          "type": "boolean"
+        },
+        "avr": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avr"
+        },
+        "crae_px": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Crae Px"
+        },
+        "crve_px": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Crve Px"
+        },
+        "unavailable_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unavailable Reason"
+        },
+        "model_version": {
+          "minLength": 1,
+          "title": "Model Version",
+          "type": "string"
+        },
+        "model_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Model Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "measurement_available",
+        "model_version",
+        "model_sha256"
+      ],
+      "type": "object"
+    },
+    "DrResearchResult": {
+      "additionalProperties": false,
+      "properties": {
+        "probability_dr": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Probability Dr",
+          "type": "number"
+        },
+        "model_version": {
+          "minLength": 1,
+          "title": "Model Version",
+          "type": "string"
+        },
+        "checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        },
+        "gradcam_method": {
+          "const": "GRAD_CAM",
+          "title": "Gradcam Method",
+          "type": "string"
+        },
+        "gradcam_geometry": {
+          "const": "IMAGENET_CENTER_CROP_224",
+          "title": "Gradcam Geometry",
+          "type": "string"
+        }
+      },
+      "required": [
+        "probability_dr",
+        "model_version",
+        "checkpoint_sha256",
+        "gradcam_method",
+        "gradcam_geometry"
+      ],
+      "type": "object"
+    },
+    "ResearchResults": {
+      "additionalProperties": false,
+      "properties": {
+        "avr": {
+          "$ref": "#/$defs/AvrResearchResult"
+        },
+        "dr": {
+          "$ref": "#/$defs/DrResearchResult"
+        }
+      },
+      "required": [
+        "avr",
+        "dr"
+      ],
+      "type": "object"
+    }
+  },
+  "not": {
+    "required": [
+      "research"
+    ],
+    "properties": {
+      "risk_available": {
+        "enum": [
+          true
+        ]
+      }
+    }
+  }
 }

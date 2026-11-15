@@ -61,7 +61,7 @@ def test_estimate_fov_mask(synthetic_fundus: np.ndarray) -> None:
 def test_apply_clahe_contrast_enhancement() -> None:
     # Flat gradient array
     arr = np.linspace(0.1, 0.4, 256 * 256, dtype=np.float32).reshape(256, 256)
-    enhanced = apply_clahe(arr, clip_limit=0.02, tile_grid_size=(8, 8))
+    enhanced = apply_clahe(arr, clip_limit=2.0, tile_grid_size=(8, 8))
     assert enhanced.shape == arr.shape
     assert enhanced.dtype == np.float32
     assert enhanced.min() >= 0.0

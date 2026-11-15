@@ -93,7 +93,8 @@ public class AiHttpClient : IAiHttpClient
                 };
             }
 
-            if (response.StatusCode == HttpStatusCode.ServiceUnavailable ||
+            if (response.StatusCode == HttpStatusCode.TooManyRequests ||
+                response.StatusCode == HttpStatusCode.ServiceUnavailable ||
                 response.StatusCode == HttpStatusCode.GatewayTimeout ||
                 response.StatusCode == HttpStatusCode.RequestTimeout ||
                 (int)response.StatusCode >= 500)

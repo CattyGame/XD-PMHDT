@@ -1,0 +1,22 @@
+// Container configuration must not inherit host-only Development key paths.
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { createRequire } = require('node:module');
+const root = path.resolve(__dirname, '../..');
+const yaml = createRequire(path.join(root, 'src/web/aura-web/package.json'))('js-yaml');
+const compose = yaml.load(fs.readFileSync(path.join(root, 'compose.yaml'), 'utf8'));
+const development = JSON.parse(fs.readFileSync(path.join(root, 'src/services/AURA.Billing.Api/appsettings.Development.json'), 'utf8'));
+const environment = compose.services['billing-api'].environment;
+const key = environment.ServiceAuth__PublicKeyPath ?? development.ServiceAuth?.PublicKeyPath ?? '';
+assert.ok(!/^[a-z]:[\\/]/i.test(key), 'Billing container inherits a Windows public-key path');
+assert.ok(key === '' || key.startsWith('/'), 'Container public-key path must be empty (Identity lookup) or absolute Linux path');
+assert.equal(environment.Services__Identity__BaseUrl, 'http://identity-api:8080');
+console.log('PASS: Billing container uses a portable trusted Identity public-key configuration.');
+const dependency = fs.readFileSync(path.join(root, 'src/common/AURA.Common.Cache/AURA.Common.Cache.csproj'), 'utf8');
+const frameworks = dependency.match(/<TargetFrameworks>([^<]+)<\/TargetFrameworks>/)[1].split(';');
+const requiredSdk = Math.max(...frameworks.map(value => Number(value.match(/^net(\d+)\./)[1])));
+const workerDockerfile = fs.readFileSync(path.join(root, 'src/services/Aura.Worker.Analysis/Dockerfile'), 'utf8');
+const buildSdk = Number(workerDockerfile.match(/^FROM mcr\.microsoft\.com\/dotnet\/sdk:(\d+)\./m)[1]);
+assert.ok(buildSdk >= requiredSdk, 'Worker build SDK cannot restore every Common.Cache target framework');
+console.log('PASS: Worker build SDK supports its referenced multi-target dependency.');

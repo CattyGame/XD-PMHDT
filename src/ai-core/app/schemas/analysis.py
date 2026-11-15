@@ -3,7 +3,7 @@ Analysis request and response schemas for AURA AI Service (Module M4).
 Conforms strictly to OpenAPI 1.2.0 contract and JSON schemas for Sprint 3
 (SCRUM-329, SCRUM-330, SCRUM-331) while preserving explicit mock test support.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .common import AnalysisMode, AnalysisStatus, EyeSide, RiskLevel
@@ -84,6 +84,46 @@ class SegmentationResult(BaseModel):
     mask_format: str = "png_base64"
     mask_base64: Optional[str] = None
     overlay_base64: Optional[str] = None
+    av_overlay_base64: Optional[str] = Field(None, exclude_if=lambda value: value is None)
+    gradcam_base64: Optional[str] = Field(None, exclude_if=lambda value: value is None)
+
+
+class AvrResearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    measurement_available: bool
+    avr: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    crae_px: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    crve_px: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    unavailable_reason: Optional[str] = None
+    model_version: str = Field(min_length=1)
+    model_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def validate_measurement(self):
+        values = (self.avr, self.crae_px, self.crve_px)
+        if self.measurement_available:
+            if any(value is None for value in values) or self.unavailable_reason is not None:
+                raise ValueError("Available AVR requires finite measurements and no unavailable reason.")
+            if abs(self.avr - self.crae_px / self.crve_px) > 1e-6:
+                raise ValueError("AVR must equal CRAE / CRVE.")
+        elif any(value is not None for value in values) or not self.unavailable_reason:
+            raise ValueError("Unavailable AVR requires null measurements and a reason.")
+        return self
+
+
+class DrResearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    probability_dr: float = Field(ge=0, le=1, allow_inf_nan=False)
+    model_version: str = Field(min_length=1)
+    checkpoint_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    gradcam_method: Literal["GRAD_CAM"]
+    gradcam_geometry: Literal["IMAGENET_CENTER_CROP_224"]
+
+
+class ResearchResults(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    avr: AvrResearchResult
+    dr: DrResearchResult
 
 
 class AnalysisWarning(BaseModel):
@@ -156,6 +196,7 @@ class AnalysisResponse(BaseModel):
     )
     risk_assessment: Optional[RiskAssessment] = None
     segmentation: Optional[SegmentationResult] = None
+    research: Optional[ResearchResults] = Field(None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def _validate_risk_invariants(self) -> "AnalysisResponse":
@@ -165,6 +206,10 @@ class AnalysisResponse(BaseModel):
             raise ValueError("risk_assessment must be null when risk_available is false.")
         if self.risk_available and self.risk_assessment is None:
             raise ValueError("risk_assessment is required when risk_available is true.")
+        if self.research is not None and self.risk_available:
+            raise ValueError("research results cannot provide clinical risk assessment.")
+        if self.research is not None and self.metrics.av_ratio != self.research.avr.avr:
+            raise ValueError("metrics.av_ratio must match the research AVR measurement.")
         return self
 
 

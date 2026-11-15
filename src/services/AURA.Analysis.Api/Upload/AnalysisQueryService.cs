@@ -10,7 +10,9 @@ public sealed record AnalysisJobDetail(Guid JobId, string Status, int RetryCount
 public sealed record AnalysisImageRef(Guid FileId, string Kind = "original");
 public sealed record AnalysisAnnotationRef(Guid FileId, string Kind);
 public sealed record AnalysisWarningDetail(string Code, string Message);
-public sealed record AnalysisMetricsDetail(double? VesselDensity, double? TortuosityIndex, double? AvRatio, double? FractalDimension, int? BranchingPoints);
+public sealed record AnalysisMetricsDetail(double? VesselDensity, double? TortuosityIndex,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] double? AvRatio,
+    double? FractalDimension, int? BranchingPoints);
 
 public sealed record AnalysisResultDetail(
     bool RiskAvailable,
@@ -31,6 +33,7 @@ public sealed record AnalysisResultDetail(
     string Limitations)
 {
     public Guid ResultId { get; init; }
+    public JsonElement? Research { get; init; }
 }
 
 public sealed record AnalysisErrorDetail(string Code, string Message, string? CorrelationId, bool Retryable);

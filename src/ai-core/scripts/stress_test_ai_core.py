@@ -322,6 +322,23 @@ def compute_reference_s3_mask(rgb: np.ndarray, cfg) -> np.ndarray:
     return (resp / float(resp.max())) >= cfg.threshold
 
 
+def stop_server_process(server_proc) -> None:
+    if server_proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        # A Windows venv launcher has a child Python process; terminate the owned tree.
+        subprocess.run(["taskkill", "/PID", str(server_proc.pid), "/T", "/F"],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10)
+        server_proc.wait(timeout=5)
+    else:
+        server_proc.terminate()
+        try:
+            server_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server_proc.kill()
+            server_proc.wait(timeout=5)
+
+
 def run_benchmark_and_stress_test(
     total_stress_requests: int = 100,
     max_concurrency: int = 10,
@@ -333,6 +350,12 @@ def run_benchmark_and_stress_test(
 
     v13_cfg_path = AI_CORE_DIR / "config" / "ai-frangi-v1.3.yaml"
     cfg = load_frangi_config(v13_cfg_path)
+    source_hashes = {
+        str(path.relative_to(AI_CORE_DIR)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((AI_CORE_DIR / "app").rglob("*.py"))
+    }
+    source_hashes["config/ai-frangi-v1.3.yaml"] = hashlib.sha256(v13_cfg_path.read_bytes()).hexdigest()
+    source_hashes["scripts/stress_test_ai_core.py"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
     req_schema = json.loads((CONTRACTS_DIR / "ai-request-1.3.schema.json").read_text(encoding="utf-8"))
     resp_schema = json.loads((CONTRACTS_DIR / "ai-response-1.3.schema.json").read_text(encoding="utf-8"))
@@ -436,7 +459,7 @@ def run_benchmark_and_stress_test(
         except Exception:
             time.sleep(0.1)
     if not ready_ok:
-        server_proc.terminate()
+        stop_server_process(server_proc)
         raise RuntimeError("Uvicorn server failed to reach /ready == 200")
 
     server_pid = server_proc.pid
@@ -626,11 +649,7 @@ def run_benchmark_and_stress_test(
         rss_after_load_mb, os_peak_final_mb = get_pid_rss_and_peak_mb(server_pid)
 
     finally:
-        server_proc.terminate()
-        try:
-            server_proc.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            server_proc.kill()
+        stop_server_process(server_proc)
 
     # ==========================================================================
     # Phase 3: CPython Heap & GC Leak Audit (20 Consecutive 999x960 Inferences)
@@ -701,7 +720,9 @@ def run_benchmark_and_stress_test(
     heap_retained_delta_mb = round((heap_after_bytes - heap_baseline_bytes) / (1024.0 * 1024.0), 4)
 
     report: Dict[str, Any] = {
-        "status": "SPRINT4_5_RUNTIME_API_V1_3_AND_STRESS_TEST_VERIFIED",
+        "status": "MEASURED_LOCAL_UVICORN_NOT_CONTAINER",
+        "runtime_source_sha256": source_hashes,
+        "requested_duration_seconds": duration_seconds,
         "timestamp_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "api_version": "1.3.0",
         "model_version": cfg.model_version,
@@ -742,7 +763,6 @@ def run_benchmark_and_stress_test(
         "runtime_latency_ms": {
             "scope": "live_isolated_uvicorn_http_endpoint_including_jwt_quality_frangi_tortuosity_risk_png_encode",
             "sla_target_ms": 1800.0,
-            "sprint3_v1_2_median_ms": 2516.41,
             "processing_time_mean_ms": round(float(np.mean(proc_times)), 2),
             "processing_time_median_ms": round(float(np.median(proc_times)), 2),
             "processing_time_p95_ms": round(float(np.percentile(proc_times, 95)), 2),
@@ -751,10 +771,6 @@ def run_benchmark_and_stress_test(
             "http_roundtrip_median_ms": round(float(np.median(http_times)), 2),
             "http_roundtrip_p95_ms": round(float(np.percentile(http_times, 95)), 2),
             "http_roundtrip_max_ms": round(float(np.max(http_times)), 2),
-            "speedup_vs_v1_2_percent": round(
-                (1.0 - float(np.median(proc_times)) / 2516.41) * 100.0,
-                2,
-            ),
         },
         "stress_test": {
             "server": "isolated_uvicorn_subprocess_127.0.0.1",
@@ -801,6 +817,13 @@ def run_benchmark_and_stress_test(
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    report["acceptance"] = {
+        "mean_cpu_under_1800ms": float(np.mean(proc_times)) < 1800,
+        "baseline_pixels_identical": all(s["mismatched_pixels_vs_sprint3_baseline"] == 0 for s in samples),
+        "all_requests_succeeded": failed == 0 and total_completed > 0 and server_alive_after_stress,
+        "soak_15_minutes_completed": duration_seconds >= 900 and stress_wall_s >= 900,
+        "retained_heap_within_1mb": abs(heap_retained_delta_mb) <= 1,
+    }
     output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return report
 
@@ -825,8 +848,7 @@ def main() -> None:
     print(f"Benchmark saved to: {args.output}")
     print(
         f"Sequential 6-image latency: mean={lat['processing_time_mean_ms']}ms, "
-        f"median={lat['processing_time_median_ms']}ms, max={lat['processing_time_max_ms']}ms "
-        f"(speedup vs v1.2: -{lat['speedup_vs_v1_2_percent']}%)"
+        f"median={lat['processing_time_median_ms']}ms, max={lat['processing_time_max_ms']}ms"
     )
     print(
         f"Baseline fidelity: Dice vs Sprint 3 = {report['accuracy_metrics']['mean_dice_vs_sprint3_baseline']}, "

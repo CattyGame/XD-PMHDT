@@ -5,3 +5,4 @@ numpy
 scipy
 scikit-image
 PyYAML
+opencv-python-headless

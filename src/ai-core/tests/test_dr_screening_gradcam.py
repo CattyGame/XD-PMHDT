@@ -76,7 +76,8 @@ def test_render_saliency_overlay_b64(synthetic_fundus_with_lesions: np.ndarray) 
 def test_screen_diabetic_retinopathy_pipeline(synthetic_fundus_with_lesions: np.ndarray) -> None:
     res = screen_diabetic_retinopathy(synthetic_fundus_with_lesions, generate_overlay=True)
     assert res["status"] == "SUCCESS"
-    assert res["screening_result"] in ["REFERABLE_DR", "LOW_RISK"]
+    assert res["screening_result"] in ["DR_SUSPECTED", "HEALTHY_CLASS"]
+    assert res["risk_available"] is False and "is_referable_dr" not in res
     assert 0.0 <= res["probability_dr"] <= 1.0
     assert 0.0 <= res["confidence"] <= 1.0
     # Check Master Audit disclaimer & F04 heuristic retinal saliency compliance
@@ -120,7 +121,7 @@ def test_screen_real_hrf_image_if_present() -> None:
     rgb = np.asarray(Image.open(sample_path))
     res = screen_diabetic_retinopathy(rgb, generate_overlay=True)
     assert res["status"] == "SUCCESS"
-    assert res["screening_result"] == "REFERABLE_DR"
+    assert res["screening_result"] == "DR_SUSPECTED"
     assert res["probability_dr"] > 0.50
     assert res["explainability"]["method"] == "HEURISTIC_RETINAL_SALIENCY"
     assert res["explainability"]["overlay_base64_png"] is not None

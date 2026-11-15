@@ -1,12 +1,18 @@
 import { getFirebaseAuth } from '../firebase/config'
 import { isMockEnabled } from './client'
 import type { BackendContext } from './backendContext'
-import { validBatchId } from './batchProgress'
+import { PROCESSING_STATUSES, validBatchId, type ProcessingStatus } from './batchProgress'
 
 /** SCRUM-333: GET Analysis REST v0.7. Không dùng HTTP 202 như kết quả AI. */
 export type FileKind = 'original' | 'mask' | 'overlay' | 'heatmap' | 'annotated'
 export type FileRef = Readonly<{ fileId: string; kind: FileKind }>
 export type Warning = Readonly<{ code: string; message: string }>
+export type ResearchResults = Readonly<{
+  avr: Readonly<{ measurement_available: boolean; avr: number | null; crae_px: number | null; crve_px: number | null;
+    unavailable_reason: string | null; model_version: string; model_sha256: string }>
+  dr: Readonly<{ probability_dr: number; model_version: string; checkpoint_sha256: string;
+    gradcam_method: 'GRAD_CAM'; gradcam_geometry: 'IMAGENET_CENTER_CROP_224' }>
+}>
 export type AnalysisResult = Readonly<{
   version: number
   isMock: boolean
@@ -23,6 +29,7 @@ export type AnalysisResult = Readonly<{
   indicators: readonly string[]
   annotations: readonly FileRef[]
   warnings: readonly Warning[]
+  research?: ResearchResults
 }>
 export type AnalysisDetail = Readonly<{
   analysisId: string
@@ -67,6 +74,21 @@ function fileRef(value: unknown): FileRef {
 function riskValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
 }
+function parseResearch(value: unknown): ResearchResults | undefined {
+  if (value == null) return undefined
+  if (!record(value) || !record(value.avr) || !record(value.dr)) invalid()
+  const a = value.avr, d = value.dr
+  const hash = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/i.test(v)
+  const positive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0
+  if (typeof a.measurement_available !== 'boolean' || !string(a.model_version) || !hash(a.model_sha256) ||
+    !riskValue(d.probability_dr) || !string(d.model_version) || !hash(d.checkpoint_sha256) ||
+    d.gradcam_method !== 'GRAD_CAM' || d.gradcam_geometry !== 'IMAGENET_CENTER_CROP_224') invalid()
+  if (a.measurement_available) {
+    if (!positive(a.avr) || !positive(a.crae_px) || !positive(a.crve_px) ||
+      Math.abs(a.avr - a.crae_px / a.crve_px) > 1e-6 || a.unavailable_reason !== null) invalid()
+  } else if (a.avr !== null || a.crae_px !== null || a.crve_px !== null || !string(a.unavailable_reason)) invalid()
+  return value as unknown as ResearchResults
+}
 function parseResult(value: unknown): AnalysisResult {
   if (!record(value) || !Number.isSafeInteger(value.version) || (value.version as number) < 1 ||
     typeof value.isMock !== 'boolean' || typeof value.riskAvailable !== 'boolean' ||
@@ -84,6 +106,8 @@ function parseResult(value: unknown): AnalysisResult {
     value.confidenceScore !== null || value.indicators.length !== 0) invalid()
   if (Object.values(value.metrics).some((v) => v !== null &&
     (typeof v !== 'number' || !Number.isFinite(v)))) invalid()
+  const research = parseResearch(value.research)
+  if (research && (value.riskAvailable || (value.metrics.avRatio ?? null) !== research.avr.avr)) invalid()
   const warnings: Warning[] = value.warnings.map((entry: unknown) => {
     if (!record(entry) || !string(entry.code) || !string(entry.message)) invalid()
     return { code: entry.code, message: entry.message }
@@ -104,6 +128,7 @@ function parseResult(value: unknown): AnalysisResult {
     indicators: value.indicators as string[],
     annotations: value.annotations.map(fileRef),
     warnings,
+    research,
   }
 }
 
@@ -111,7 +136,8 @@ export function parseAnalysis(value: unknown, requestedId: string): AnalysisDeta
   if (!record(value) || !validBatchId(requestedId) ||
     !string(value.analysisId) || value.analysisId.toLowerCase() !== requestedId.toLowerCase() ||
     !string(value.batchId) || !validBatchId(value.batchId) ||
-    !string(value.processingStatus) || !string(value.reviewStatus) || !date(value.updatedAt)) invalid()
+    !string(value.processingStatus) || !PROCESSING_STATUSES.includes(value.processingStatus as ProcessingStatus) ||
+    !string(value.reviewStatus) || !date(value.updatedAt)) invalid()
   const completed = value.processingStatus === 'COMPLETED'
   if (completed && !record(value.result)) invalid()
   if (!completed && value.result != null) invalid()
@@ -235,6 +261,7 @@ export function analysisErrorMessage(error: AnalysisResultError): string {
   if (error.status === 404) return 'Không tìm thấy dữ liệu trong phạm vi được cấp quyền.'
   if (error.code === 'ERR_MOCK_ENABLED') return 'Đang bật mock. Tắt mock để dùng Analysis API thật.'
   if (error.code === 'ERR_INVALID_RESPONSE') return 'Phản hồi từ Analysis API không đúng hợp đồng.'
+  if (error.code === 'ERR_STATUS_POLL_TIMEOUT') return 'Tạm dừng theo dõi tự động sau 5 phút. Điều này không có nghĩa phân tích thất bại; hãy đọc lại trạng thái bằng GET.'
   if (error.code === 'ERR_TIMEOUT') return 'Yêu cầu quá thời gian. Có thể thử lại.'
   return 'Không tải được dữ liệu Analysis API. Vui lòng thử lại.'
 }

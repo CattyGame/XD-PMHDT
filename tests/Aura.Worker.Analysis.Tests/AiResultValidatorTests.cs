@@ -1,6 +1,8 @@
 using Aura.Worker.Analysis.Processing;
 using Aura.Worker.Analysis.Services;
 using Xunit;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Aura.Worker.Analysis.Tests;
 
@@ -122,5 +124,58 @@ public class AiResultValidatorTests
 
         Assert.False(result.IsValid);
         Assert.Equal("ERR_AI_OUTPUT_INVALID", result.ErrorCode);
+    }
+
+    private AiAnalyzeResponse IntegratedResponse()
+    {
+        var json = JsonNode.Parse(JsonSerializer.Serialize(CreateValidResponse()))!;
+        json["research"] = JsonNode.Parse("""
+            {"avr":{"measurement_available":false,"avr":null,"crae_px":null,"crve_px":null,
+            "unavailable_reason":"INSUFFICIENT_SIX_VESSEL_SETS","model_version":"avr-v8",
+            "model_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+            "dr":{"probability_dr":0.61,"model_version":"resnet34",
+            "checkpoint_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "gradcam_method":"GRAD_CAM","gradcam_geometry":"IMAGENET_CENTER_CROP_224"}}
+            """);
+        json["segmentation"]!["gradcam_base64"] = "crop";
+        return JsonSerializer.Deserialize<AiAnalyzeResponse>(json.ToJsonString())!;
+    }
+
+    [Fact]
+    public void Integrated_Result_Roundtrip_PreservesResearchAndCropWithoutInventingRisk()
+    {
+        var value = IntegratedResponse();
+        Assert.True(AiResultValidator.Validate(value).IsValid);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(value));
+        Assert.True(json.RootElement.TryGetProperty("research", out var research));
+        Assert.Equal(0.61, research.GetProperty("dr").GetProperty("probability_dr").GetDouble());
+        Assert.Equal(JsonValueKind.Null, research.GetProperty("avr").GetProperty("avr").ValueKind);
+        Assert.Equal("crop", json.RootElement.GetProperty("segmentation").GetProperty("gradcam_base64").GetString());
+        Assert.False(value.RiskAvailable);
+    }
+
+    [Fact]
+    public void Integrated_MissingAvrCannotCarryStaleNumericMetric()
+    {
+        var value = IntegratedResponse();
+        value.Metrics.AvRatio = 0.6;
+        Assert.False(AiResultValidator.Validate(value).IsValid);
+    }
+
+    [Fact]
+    public void Integrated_ResearchCannotClaimLowClinicalRisk()
+    {
+        var value = IntegratedResponse();
+        value.RiskAvailable = true;
+        value.RiskAssessment = new AiRiskAssessment { RiskScore = 0.1, RiskLevel = "LOW" };
+        Assert.Equal("ERR_AI_OUTPUT_INVALID", AiResultValidator.Validate(value).ErrorCode);
+    }
+
+    [Fact]
+    public void Integrated_ExplicitNullHashIsInvalidRatherThanCrashing()
+    {
+        var value = IntegratedResponse();
+        value.Research!.Dr!.CheckpointSha256 = null!;
+        Assert.Equal("ERR_AI_OUTPUT_INVALID", AiResultValidator.Validate(value).ErrorCode);
     }
 }

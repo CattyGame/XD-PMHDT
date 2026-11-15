@@ -78,6 +78,36 @@ public class AiAnalyzeResponse
 
     [JsonPropertyName("segmentation")]
     public AiSegmentation Segmentation { get; set; } = default!;
+
+    [JsonPropertyName("research")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AiResearchResults? Research { get; set; }
+}
+
+public sealed class AiResearchResults
+{
+    [JsonPropertyName("avr")] public AiAvrResearch? Avr { get; set; }
+    [JsonPropertyName("dr")] public AiDrResearch? Dr { get; set; }
+}
+
+public sealed class AiAvrResearch
+{
+    [JsonPropertyName("measurement_available")] public bool? MeasurementAvailable { get; set; }
+    [JsonPropertyName("avr")] public double? Avr { get; set; }
+    [JsonPropertyName("crae_px")] public double? CraePx { get; set; }
+    [JsonPropertyName("crve_px")] public double? CrvePx { get; set; }
+    [JsonPropertyName("unavailable_reason")] public string? UnavailableReason { get; set; }
+    [JsonPropertyName("model_version")] public string ModelVersion { get; set; } = "";
+    [JsonPropertyName("model_sha256")] public string ModelSha256 { get; set; } = "";
+}
+
+public sealed class AiDrResearch
+{
+    [JsonPropertyName("probability_dr")] public double? ProbabilityDr { get; set; }
+    [JsonPropertyName("model_version")] public string ModelVersion { get; set; } = "";
+    [JsonPropertyName("checkpoint_sha256")] public string CheckpointSha256 { get; set; } = "";
+    [JsonPropertyName("gradcam_method")] public string GradcamMethod { get; set; } = "";
+    [JsonPropertyName("gradcam_geometry")] public string GradcamGeometry { get; set; } = "";
 }
 
 public class AiWarning
@@ -153,6 +183,14 @@ public class AiSegmentation
 
     [JsonPropertyName("overlay_base64")]
     public string OverlayBase64 { get; set; } = string.Empty;
+
+    [JsonPropertyName("av_overlay_base64")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AvOverlayBase64 { get; set; }
+
+    [JsonPropertyName("gradcam_base64")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GradcamBase64 { get; set; }
 }
 
 public class AiErrorResponse

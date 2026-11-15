@@ -59,7 +59,12 @@ public sealed class ReportSnapshotPostgresTests
         var files=new FakeFileRepo();files.Records.Add(new(image,file,tenant,patient,actor,StoredFileKind.Original,"report/original"){Sha256=imageHash});
         files.Records.Add(new(image,overlay,tenant,patient,actor,StoredFileKind.Annotation,"report/overlay"){Sha256=imageHash});
         var resultDetail=new AnalysisResultDetail(true,"MODERATE",.5,.8,false,"fixture-model","fixture-config","fixture-threshold","Research fixture",1,
-            new(.1,1.2,null,null,null),[],[new(overlay,"overlay")],[],1,"No clinical validation"){ResultId=result1};
+            new(.1,1.2,null,null,null),[],[new(overlay,"overlay")],[],1,"No clinical validation")
+            {ResultId=result1,Research=JsonSerializer.SerializeToElement(new {
+                avr=new {measurement_available=false,avr=(double?)null,crae_px=(double?)null,crve_px=(double?)null,
+                    unavailable_reason="INSUFFICIENT_SIX_VESSEL_SETS",model_version="avr-v8-test"},
+                dr=new {probability_dr=.61,model_version="resnet34-test"}
+            })};
         var detail=new AnalysisDetailResponse(image,batch,patient,"COMPLETED","REVIEWED",DateTime.UtcNow,DateTime.UtcNow,actor,actor,new(file),null,resultDetail,null,ReviewVersion:2);
         var analyses=new AnalysisQueryService(new Query(detail,new(image,batch,tenant,patient,actor)),access);
         var clock=new Clock();var reports=new AnalysisReportService(analyses,new(new PostgresBatchStatusRepository(db),access),files,storage,new(),new(),db,clock);
@@ -71,6 +76,9 @@ public sealed class ReportSnapshotPostgresTests
             using var snapshot=JsonDocument.Parse(reader.GetString(0));var root=snapshot.RootElement;
             Assert.Equal(reader.GetString(1),ReportSnapshotDigest.Compute(reader.GetString(0)));
             Assert.Equal(result1,root.GetProperty("result").GetProperty("resultId").GetGuid());
+            var research=root.GetProperty("result").GetProperty("research");
+            Assert.Equal(.61,research.GetProperty("dr").GetProperty("probability_dr").GetDouble());
+            Assert.Equal(JsonValueKind.Null,research.GetProperty("avr").GetProperty("avr").ValueKind);
             Assert.Equal(review1,root.GetProperty("review").GetProperty("reviewId").GetGuid());
             Assert.Equal("LOW",root.GetProperty("review").GetProperty("correctedRiskLevel").GetString());
             Assert.Equal(64,root.GetProperty("originalSha256").GetString()!.Length);Assert.Equal(64,reader.GetString(1).Length);
@@ -78,6 +86,10 @@ public sealed class ReportSnapshotPostgresTests
         var download=await reports.ReadDownloadContentAsync(actor,null,exported.ReportId,null,default);
         Assert.Equal("application/pdf",download.ContentType);
         await using(var stream=download.Stream)Assert.Equal('%',stream.ReadByte());
+        var otherActor=await Assert.ThrowsAsync<UploadFailure>(()=>reports.ReadDownloadAsync(Guid.NewGuid(),null,exported.ReportId,null,default));
+        Assert.Equal(404,otherActor.Status);
+        var otherClinic=await Assert.ThrowsAsync<UploadFailure>(()=>reports.ReadDownloadAsync(actor,Guid.NewGuid(),exported.ReportId,null,default));
+        Assert.Equal(404,otherClinic.Status);
 
         var batchIdentity=new BatchIdentity(batch,tenant,patient,actor);
         var batchSnapshot=new BatchStatusSnapshot(batch,DateTime.SpecifyKind(DateTime.UtcNow,DateTimeKind.Utc),
@@ -117,6 +129,16 @@ public sealed class ReportSnapshotPostgresTests
             Assert.Equal(JsonValueKind.Null,manifestItems[1].GetProperty("resultId").ValueKind);
             Assert.Equal(JsonValueKind.Null,manifestItems[1].GetProperty("pdfEntry").ValueKind);
         }
+        storage.ReadOverride=(container,key)=>container=="aura-reports"
+            ?new MemoryStream(new byte[MedicalReportPdfRenderer.MaximumPdfBytes])
+            :new MemoryStream(storage.Files[container+"/"+key]);
+        var oversized=await Assert.ThrowsAsync<UploadFailure>(()=>batchReports.CreateBatchReportAsync(actor,null,batch,"zip","oversized-archive-fixture",default));
+        Assert.Equal(413,oversized.Status);Assert.Equal("ERR_REPORT_TOO_LARGE",oversized.Code);
+        storage.ReadOverride=null;
+        var beforeExpiry=clock.Now;
+        clock.Now=new DateTimeOffset(DateTime.SpecifyKind(exported.ExpiresAt,DateTimeKind.Utc));
+        Assert.Equal(404,(await Assert.ThrowsAsync<UploadFailure>(()=>reports.ReadDownloadAsync(actor,null,exported.ReportId,null,default))).Status);
+        clock.Now=beforeExpiry;
         access.Allowed=false;
         Assert.Equal(404,(await Assert.ThrowsAsync<UploadFailure>(()=>reports.ReadDownloadAsync(actor,null,exported.ReportId,null,default))).Status);
         access.Allowed=true;clock.Now=clock.Now.AddMinutes(16);

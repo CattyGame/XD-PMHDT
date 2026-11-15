@@ -29,7 +29,7 @@ from scipy.ndimage import (
 DEFAULT_WEIGHTS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "dr_screening_weights.json"
 DISCLAIMER_TEXT = (
     "Phân loại nhị phân nguy cơ bệnh võng mạc đái tháo đường (DR Suspected vs Normal) dựa trên tập dữ liệu HRF. "
-    "DISCLAIMER: Binary Diabetic Retinopathy screening tool (Referable DR vs Low Risk). "
+    "DISCLAIMER: Experimental HRF DR-vs-healthy classifier; referable-DR severity is not labelled in HRF. "
     "NOT an ICDR 5-stage clinical diagnosis. HRF dataset lacks multi-stage ground truth. "
     "Clinical diagnosis must be confirmed by an ophthalmologist."
 )
@@ -156,8 +156,6 @@ def generate_retinal_saliency_heatmap(
     return heatmap_full, hotspots
 
 
-# Backward-compatible alias
-generate_gradcam_heatmap = generate_retinal_saliency_heatmap
 
 
 def render_saliency_overlay_b64(rgb: np.ndarray, heatmap: np.ndarray, alpha: float = 0.42) -> str:
@@ -178,8 +176,6 @@ def render_saliency_overlay_b64(rgb: np.ndarray, heatmap: np.ndarray, alpha: flo
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-# Backward-compatible alias
-render_gradcam_overlay_b64 = render_saliency_overlay_b64
 
 
 def screen_diabetic_retinopathy(
@@ -209,9 +205,9 @@ def screen_diabetic_retinopathy(
     logit = float(np.dot(feats_norm, weights) + bias)
     prob_dr = float(1.0 / (1.0 + np.exp(-np.clip(logit, -15.0, 15.0))))
 
-    is_referable = prob_dr >= threshold
-    screening_class = "REFERABLE_DR" if is_referable else "LOW_RISK"
-    confidence = round(prob_dr if is_referable else (1.0 - prob_dr), 4)
+    dr_class_predicted = prob_dr >= threshold
+    screening_class = "DR_SUSPECTED" if dr_class_predicted else "HEALTHY_CLASS"
+    confidence = round(prob_dr if dr_class_predicted else (1.0 - prob_dr), 4)
 
     # Heuristic Retinal Saliency Heatmap
     heatmap, hotspots = generate_retinal_saliency_heatmap(rgb)
@@ -221,7 +217,8 @@ def screen_diabetic_retinopathy(
         "status": "SUCCESS",
         "task": "diabetic_retinopathy_screening",
         "screening_result": screening_class,
-        "is_referable_dr": is_referable,
+        "dr_class_predicted": dr_class_predicted,
+        "risk_available": False,
         "probability_dr": round(prob_dr, 4),
         "confidence": confidence,
         "disclaimer": DISCLAIMER_TEXT,
@@ -234,13 +231,12 @@ def screen_diabetic_retinopathy(
             "top_lesion_hotspots": hotspots,
         },
         "model_metadata": {
+            "acceptance_status": "EXPERIMENTAL_LOGISTIC_BASELINE_NOT_CNN_REQUIREMENT",
+            "confidence_interpretation": "Uncalibrated class probability, not clinical confidence",
             "model_type": model["model_type"],
             "dataset_trained_on": "HRF (High-Resolution Fundus Image Database)",
-            "validation_auc_roc": model.get("validation_auc_roc", 0.8889),
+            "validation_auc_roc": model.get("validation_auc_roc"),
             "compliance_note": "Binary screening only; not 5-stage ICDR clinical grading",
-            "scope_change_note": model.get(
-                "scope_change_note",
-                "Approved CPU-optimized L2-regularized classifier with Data Augmentation for zero-GPU deterministic container execution.",
-            ),
+            "scope_change_note": "Legacy logistic research baseline; does not fulfill the CNN requirement. The CNN endpoint uses ResNet34 and gradient Grad-CAM.",
         },
     }

@@ -1,0 +1,21 @@
+engine: frangi
+allowMock: false
+modelVersion: frangi-hrf-proxy-v1
+configVersion: s5-hrf-opencv-clahe-1280-v1
+thresholdVersion: hrf-normalized-frangi-0.04-v1
+riskAvailable: false
+input:
+  modality: FUNDUS
+  color: RGB
+  maxBytes: 10485760
+  maxPixels: 16000000
+  resize: false
+  crop: false
+algorithm:
+  preprocessing: hrf-clahe-proxy-v1
+quality:
+  minLuminance: 15
+  maxLuminance: 240
+  minContrast: 8
+  minSharpness: 3.5
+  minEstimatedRegionRatio: 0.15

@@ -343,6 +343,7 @@ public class JobProcessor : IJobProcessor
 
         AnnotationDescriptor maskMetadata;
         AnnotationDescriptor overlayMetadata;
+        var extraAnnotations = new List<(AnnotationDescriptor Metadata, byte[] Bytes)>();
         try
         {
             maskMetadata=AnnotationMetadata.FromPng(maskFileId,"MASK",maskKey,maskBytes);
@@ -350,8 +351,21 @@ public class JobProcessor : IJobProcessor
             if(maskMetadata.Width!=aiResponse.ImageInfo.Width || maskMetadata.Height!=aiResponse.ImageInfo.Height
                 || overlayMetadata.Width!=aiResponse.ImageInfo.Width || overlayMetadata.Height!=aiResponse.ImageInfo.Height)
                 throw new InvalidDataException("AI annotation geometry differs from its image info.");
+            foreach (var (type, payload) in new[] { ("ANNOTATED", aiResponse.Segmentation.AvOverlayBase64), ("HEATMAP", aiResponse.Segmentation.GradcamBase64) })
+            {
+                if (payload is null) continue;
+                var bytes = Convert.FromBase64String(payload);
+                var fileId = Guid.NewGuid();
+                var key = $"{analysis.TenantId}/{analysis.BatchId}/{analysis.AnalysisId}/{type.ToLowerInvariant()}-{fileId}.png";
+                var metadata = AnnotationMetadata.FromPng(fileId, type, key, bytes);
+                var width = type == "HEATMAP" ? 224 : aiResponse.ImageInfo.Width;
+                var height = type == "HEATMAP" ? 224 : aiResponse.ImageInfo.Height;
+                if (metadata.Width != width || metadata.Height != height)
+                    throw new InvalidDataException("Research annotation geometry does not match its declared coordinate space.");
+                extraAnnotations.Add((metadata, bytes));
+            }
         }
-        catch(InvalidDataException)
+        catch(Exception error) when (error is InvalidDataException or FormatException)
         {
             var invalid=OutboxEventFactory.CreateFailedEvent(analysis.TenantId,analysis.AnalysisId,analysis.PatientId,
                 message.CorrelationId,ErrorCodes.ErrAiOutputInvalid,AnalysisStatus.Failed);
@@ -361,6 +375,8 @@ public class JobProcessor : IJobProcessor
         }
         await _blobService.UploadAnnotationAsync(maskKey, maskBytes, "image/png", cancellationToken);
         await _blobService.UploadAnnotationAsync(overlayKey, overlayBytes, "image/png", cancellationToken);
+        foreach (var extra in extraAnnotations)
+            await _blobService.UploadAnnotationAsync(extra.Metadata.ObjectKey, extra.Bytes, "image/png", cancellationToken);
 
         // 12. Build public AnalysisResult shape (camelCase per OpenAPI 0.7.0)
         var resultDto = new
@@ -381,14 +397,15 @@ public class JobProcessor : IJobProcessor
                 tortuosityIndex = aiResponse.Metrics.TortuosityIndex,
                 avRatio = aiResponse.Metrics.AvRatio,
                 fractalDimension = aiResponse.Metrics.FractalDimension,
-                branchingPoints = aiResponse.Metrics.BranchingPoints
+                branchingPoints = aiResponse.Metrics.BranchingPoints,
+                research = aiResponse.Research
             },
             indicators = new string[0],
             annotations = new[]
             {
                 new { fileId = maskFileId, kind = "mask" },
                 new { fileId = overlayFileId, kind = "overlay" }
-            },
+            }.Concat(extraAnnotations.Select(extra => new { fileId = extra.Metadata.FileId, kind = extra.Metadata.Type.ToLowerInvariant() })).ToArray(),
             warnings = aiResponse.Warnings.Select(w => new { code = w.Code, message = w.Message }).ToArray(),
             processingTimeMs = aiResponse.ProcessingTimeMs,
             limitations = aiResponse.Limitations
@@ -411,7 +428,7 @@ public class JobProcessor : IJobProcessor
             analysis.AnalysisId,
             lease,
             resultJson,
-            new[] { maskMetadata,overlayMetadata },
+            new[] { maskMetadata,overlayMetadata }.Concat(extraAnnotations.Select(extra => extra.Metadata)).ToArray(),
             completedEvt,
             cancellationToken);
 

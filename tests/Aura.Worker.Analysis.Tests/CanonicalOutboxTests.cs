@@ -9,6 +9,23 @@ namespace Aura.Worker.Analysis.Tests;
 
 public class CanonicalOutboxTests
 {
+    [Theory]
+    [InlineData("0.7","PARTIAL_COMPLETED",true)]
+    [InlineData("0.8","PARTIAL_FAILED",true)]
+    [InlineData("0.7","PARTIAL_FAILED",false)]
+    [InlineData("0.8","PARTIAL_COMPLETED",false)]
+    [InlineData("unknown","PARTIAL_FAILED",false)]
+    public void Batch_event_version_and_partial_status_must_match_the_pinned_contract(string version,string status,bool expected)
+    {
+        var row=OutboxEventFactory.CreateBatchCompletedEvent(Guid.NewGuid(),Guid.NewGuid(),Guid.NewGuid(),
+            "m2-event-fixture",status,10,8,2);
+        var payload=System.Text.Json.Nodes.JsonNode.Parse(row.PayloadJson)!;
+        payload["schemaVersion"]=version;
+        var mapped=AURA.Analysis.Api.Outbox.OutboxMessageMapper.Map(new(row.OutboxId,row.TenantId,row.EventType,
+            version,payload.ToJsonString(),new DateTimeOffset(row.OccurredAt),0),new());
+        Assert.Equal(expected,mapped.Ok);
+    }
+
     [Fact]
     public void Completed_factory_uses_same_persisted_id_and_contract_version_as_envelope()
     {

@@ -143,9 +143,10 @@ def test_inspire_avr_real_case_if_present() -> None:
     rgb = np.asarray(Image.open(case_path))
     # Verify automated end-to-end prediction without GT masks
     res_auto = calculate_avr(rgb, artery_gt_mask=None, vein_gt_mask=None, generate_visualization=True)
-    assert res_auto["status"] == "SUCCESS"
-    assert res_auto["risk_available"] is True
-    assert res_auto["avr"] is not None
-    assert res_auto["crae_px"] > 0
-    assert res_auto["crve_px"] > 0
-    assert res_auto["visualization"]["annotated_base64_png"] is not None
+    assert res_auto["status"] == "WARNING"
+    assert res_auto["risk_available"] is False
+    assert res_auto["measurement_available"] is False
+    assert res_auto["avr"] is None
+    assert res_auto["crae_px"] is None
+    assert res_auto["crve_px"] is None
+    assert res_auto["visualization"] is None

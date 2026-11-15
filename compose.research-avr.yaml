@@ -1,0 +1,21 @@
+# Optional internal research API. Merge after the existing authenticated AI configuration.
+# RRWNet weights are CC BY-NC 4.0; this profile is not a clinical/commercial release.
+services:
+  ai-core:
+    build:
+      args:
+        INSTALL_RESEARCH_CNN: "true"
+    environment:
+      MALLOC_ARENA_MAX: "2"
+      MALLOC_MMAP_THRESHOLD_: "131072"
+      MALLOC_TRIM_THRESHOLD_: "131072"
+      ONEDNN_PRIMITIVE_CACHE_CAPACITY: "128"
+      LRU_CACHE_CAPACITY: "128"
+      AURA_AVR_MODEL_PATH: /run/aura-avr/runtime.json
+      AURA_AVR_MODEL_SHA256: "${AURA_AVR_DESCRIPTOR_SHA256:?Set the downloaded runtime.json SHA-256}"
+    volumes:
+      - type: bind
+        source: "${AURA_AVR_ARTIFACT_DIR:?Set the downloaded AVR artifact directory}"
+        target: /run/aura-avr
+        read_only: true
+        bind: {create_host_path: false}

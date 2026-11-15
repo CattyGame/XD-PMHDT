@@ -98,10 +98,14 @@ public sealed class AzureBlobPrivateFileStorage : IPrivateFileStorage, IPrivateS
     private BlobContainerClient Container(string container, string key)
     {
         if (!_containers.Contains(container)) throw new ArgumentException("Unconfigured storage container.");
-        // Current Analysis object names contain server UUIDs only; no filenames or traversal syntax.
+        // Accept only server-generated UUID keys, upload staging, and the Worker's typed PNG names.
         var segments = key.Split('/');
-        if (segments.Length is < 3 or > 6 || segments.Any(s =>
-                !(Guid.TryParseExact(s, "D", out var id) || Guid.TryParseExact(s, "N", out id)) || id == Guid.Empty))
+        static bool Id(string s) => (Guid.TryParseExact(s, "D", out var id) || Guid.TryParseExact(s, "N", out id)) && id != Guid.Empty;
+        var staging = segments.Length == 3 && segments[0] == "staging" && segments.Skip(1).All(Id);
+        var annotation = Regex.Match(segments[^1], @"\A(?:mask|overlay|annotated|heatmap)-(?<id>[0-9a-fA-F-]{36})\.png\z");
+        var typedPng = segments.Length == 4 && segments.Take(3).All(Id)
+            && annotation.Success && Id(annotation.Groups["id"].Value);
+        if (!staging && !typedPng && (segments.Length is < 3 or > 6 || !segments.All(Id)))
             throw new ArgumentException("Invalid Analysis object key.");
         return _service.GetBlobContainerClient(container);
     }
