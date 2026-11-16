@@ -1,5 +1,7 @@
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth'
 import { getFirebaseAuth } from '../firebase/config'
+import { unregisterNotificationDevice } from '../api/notificationDevices'
+import { clearFcmOnLogout } from '../firebase/tokenLifecycle'
 import { BackendContextError, loadBackendContext, type BackendContext } from '../api/backendContext'
 import { clearBatchPreviews } from '../api/batchLocalPreviews'
 import { disposePersonalUploadWorkspace } from '../api/personalUploadWorkspace'
@@ -130,6 +132,10 @@ export function createBackendSessionStore() {
     currentUser = null
     publish({ status: 'loading', firebaseUid: auth.currentUser?.uid ?? null })
     try {
+      try { await unregisterNotificationDevice() } catch { /* Offline cleanup must not block logout. */ }
+      if (signOutOperation !== operation || auth.currentUser !== operation.user) return
+      try { await clearFcmOnLogout() } catch { /* Firebase may not be configured. */ }
+      if (signOutOperation !== operation || auth.currentUser !== operation.user) return
       await signOut(auth)
       if (!active || signOutOperation !== operation) return
       if (!auth.currentUser) publish({ status: 'anonymous' })

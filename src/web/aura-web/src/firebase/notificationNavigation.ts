@@ -1,0 +1,61 @@
+import type { MessagePayload } from 'firebase/messaging'
+
+const analysisRoute = /^\/analyses\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+const notificationRoute = /^\/(?:analyses|batches|billing\/orders)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const allowedTitles = new Set([
+  'Phân tích ảnh đáy mắt hoàn tất',
+  'Phân tích ảnh đáy mắt không thành công',
+  'Đợt xử lý ảnh đã kết thúc',
+  'Thanh toán thành công',
+])
+const allowedBodies = new Set([
+  'Kết quả phân tích mắt của bạn đã có! Bấm để xem chi tiết.',
+  'Không thể phân tích ảnh đáy mắt do chất lượng ảnh không đạt tiêu chuẩn.',
+  'Trạng thái đợt xử lý đã được cập nhật. Bấm để xem chi tiết.',
+  'Giao dịch thanh toán đã được xác nhận. Bấm để xem gói cước.',
+])
+
+/** Chỉ mở route AURA nội bộ đúng dạng, không chấp nhận URL tuyệt đối hoặc query. */
+export function safeAnalysisPath(path: unknown, analysisId?: unknown): string | null {
+  if (typeof path !== 'string') return null
+  const match = analysisRoute.exec(path)
+  if (!match) return null
+  if (analysisId !== undefined && (typeof analysisId !== 'string' ||
+    analysisId.toLowerCase() !== match[1].toLowerCase())) return null
+  return `/analyses/${match[1].toLowerCase()}`
+}
+
+export function safeNotificationPath(path: unknown, analysisId?: unknown): string | null {
+  if (typeof path !== 'string') return null
+  const [route, query, ...extra] = path.split('?')
+  if (extra.length || !notificationRoute.test(route)) return null
+  const target = route.toLowerCase().startsWith('/analyses/') ? safeAnalysisPath(route, analysisId) : route.toLowerCase()
+  if (!target || query === undefined) return target
+  const params = new URLSearchParams(query)
+  const clinics = params.getAll('clinicContextId')
+  if (target.startsWith('/billing/') || clinics.length !== 1 ||
+    [...params.keys()].some(key => key !== 'clinicContextId') || !analysisRoute.test('/analyses/' + clinics[0]) ||
+    clinics[0] === '00000000-0000-0000-0000-000000000000') return null
+  return `${target}?clinicContextId=${clinics[0].toLowerCase()}`
+}
+
+export type SafeForegroundToast = Readonly<{
+  id: string
+  title: string
+  body: string
+  targetPath: string | null
+}>
+
+/** Whitelist chuỗi công khai từ M3; không render payload tùy ý chứa thông tin bệnh nhân. */
+export function safeForegroundToast(payload: Partial<Pick<MessagePayload, 'messageId' | 'notification' | 'data'>>): SafeForegroundToast {
+  const proposedTitle = payload.notification?.title
+  const proposedBody = payload.notification?.body
+  return {
+    id: payload.data?.notificationId || payload.data?.eventId || payload.messageId || '',
+    title: proposedTitle && allowedTitles.has(proposedTitle)
+      ? proposedTitle : 'AURA - Có thông báo mới',
+    body: proposedBody && allowedBodies.has(proposedBody)
+      ? proposedBody : 'Mở AURA để xem chi tiết.',
+    targetPath: safeNotificationPath(payload.data?.targetPath, payload.data?.analysisId),
+  }
+}

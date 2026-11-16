@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AURA Notification inbox
-  version: 1.1.0
+  version: 1.2.0
 servers:
 - url: http://127.0.0.1:5300
 security:
@@ -84,7 +84,7 @@ paths:
                           format: date-time
                         targetPath:
                           type: string
-                          pattern: ^/(analyses|batches|billing/orders)/[0-9a-fA-F-]{36}$
+                          pattern: '^/(?:(?:analyses|batches)/[0-9a-fA-F-]{36}(?:\?clinicContextId=[0-9a-fA-F-]{36})?|billing/orders/[0-9a-fA-F-]{36})$'
                         orderId:
                           type:
                           - string

@@ -16,7 +16,7 @@ const data = {
     disclaimer: 'Chỉ hỗ trợ' },
 }
 const mocks = vi.hoisted(() => ({
-  worklist: vi.fn(), detail: vi.fn(), save: vi.fn(), file: vi.fn(),
+  worklist: vi.fn(), detail: vi.fn(), save: vi.fn(), file: vi.fn(), content: vi.fn(),
   context: { accountId: '70000000-0000-4000-8000-000000000007',
     firebaseUid: 'doctor', patientId: '80000000-0000-4000-8000-000000000008',
     personalTenantId: '90000000-0000-4000-8000-000000000009',
@@ -30,6 +30,9 @@ vi.mock('../../api/doctorReview', async (importOriginal) => {
   return { ...original, getDoctorWorklist: mocks.worklist, getDoctorAnalysis: mocks.detail,
     submitDoctorReview: mocks.save, getDoctorFileAccess: mocks.file }
 })
+vi.mock('../../api/analysisResult', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../api/analysisResult')>(), getProtectedContent: mocks.content,
+}))
 function start() {
   render(<MemoryRouter><DoctorWorkspacePage /></MemoryRouter>)
   fireEvent.change(screen.getByRole('textbox', { name: 'Clinic Context ID' }), { target: { value: clinicId } })
@@ -42,6 +45,9 @@ async function openDetail() {
 }
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:private-doctor-fixture')
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  mocks.content.mockResolvedValue(new Blob(['synthetic image'], { type: 'image/png' }))
   mocks.worklist.mockResolvedValue([data])
   mocks.detail.mockResolvedValue(data)
   mocks.file.mockResolvedValue({ url: 'https://storage.example.org/retina.png',
@@ -49,7 +55,7 @@ beforeEach(() => {
   mocks.save.mockResolvedValue({ reviewId: 'a0000000-0000-4000-8000-00000000000a', analysisId,
     version: 2, isApproved: true })
 })
-afterEach(() => cleanup())
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('SCRUM-354: Doctor workspace', () => {
   it('mở worklist qua clinicContextId, xác nhận kết quả và cập nhật ngay trạng thái', async () => {
@@ -82,4 +88,54 @@ describe('SCRUM-354: Doctor workspace', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Lọc mức nguy cơ' }), { target: { value: 'LOW' } })
     expect(screen.queryByRole('button', { name: 'Mở chi tiết' })).toBeNull()
   })
+})
+
+
+it('audit: revoked access on review must clear the old patient detail and images', async () => {
+  const { DoctorApiError } = await import('../../api/doctorReview')
+  mocks.save.mockRejectedValue(new DoctorApiError(403, 'ERR_FORBIDDEN'))
+  start(); await openDetail()
+  fireEvent.click(screen.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }))
+  await screen.findByRole('alert')
+  expect(screen.queryByRole('region', { name: 'Chi tiết ca chụp' }) === null).toBe(true)
+})
+
+it('audit: a late conflict for case A must not lock newly selected case B', async () => {
+  const { DoctorApiError } = await import('../../api/doctorReview')
+  const { act } = await import('@testing-library/react')
+  const other = { ...data, analysisId: '20000000-0000-4000-8000-00000000000b' }
+  mocks.worklist.mockResolvedValue([data, other])
+  mocks.detail.mockResolvedValueOnce(data).mockResolvedValueOnce(other)
+  let reject: (reason: unknown) => void = () => {}
+  mocks.save.mockImplementation(() => new Promise((_resolve, no) => { reject = no }))
+  start(); await screen.findAllByRole('button', { name: 'Mở chi tiết' })
+  fireEvent.click(screen.getAllByRole('button', { name: 'Mở chi tiết' })[0])
+  await screen.findByRole('heading', { name: 'Kết luận của bác sĩ' })
+  fireEvent.click(screen.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }))
+  await waitFor(() => expect(mocks.save).toHaveBeenCalledOnce())
+  fireEvent.click(screen.getAllByRole('button', { name: 'Mở chi tiết' })[1])
+  await screen.findByText(other.analysisId)
+  await act(async () => reject(new DoctorApiError(409, 'ERR_CONCURRENT_REVIEW')))
+  expect(screen.queryByRole('alertdialog') === null).toBe(true)
+})
+
+it('fetches protected bytes and revokes object URLs when the selected case changes', async () => {
+  start(); await openDetail()
+  await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(2))
+  expect(mocks.content).toHaveBeenCalledWith(expect.any(String),
+    { ...mocks.context, clinicContextId: clinicId }, expect.any(AbortSignal))
+  fireEvent.click(screen.getByRole('button', { name: 'Làm mới chi tiết' }))
+  expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
+})
+
+it('keeps the current in-memory draft after a transient save failure', async () => {
+  const { DoctorApiError } = await import('../../api/doctorReview')
+  mocks.save.mockRejectedValue(new DoctorApiError(503, 'ERR_UNAVAILABLE'))
+  start(); await openDetail()
+  const notes = screen.getByRole('textbox', { name: 'Ghi chú / khuyến nghị điều trị' })
+  fireEvent.change(notes, { target: { value: 'Synthetic draft' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }))
+  await screen.findByRole('alert')
+  expect((notes as HTMLTextAreaElement).value).toBe('Synthetic draft')
+  expect(screen.getByRole('region', { name: 'Chi tiết ca chụp' })).toBeTruthy()
 })

@@ -18,6 +18,10 @@ import DoctorWorkspacePage from '../pages/doctor/DoctorWorkspacePage'
 import ClinicMemberPage from '../pages/ClinicMemberPage'
 import ClinicPatientPage from '../pages/ClinicPatientPage'
 import BillingOrderPage from '../pages/BillingOrderPage'
+import BillingPage from '../pages/billing/BillingPage'
+import PaymentPage from '../pages/billing/PaymentPage'
+import PaymentSuccessPage from '../pages/billing/PaymentSuccessPage'
+import FcmToastHost from '../components/FcmToastHost'
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
@@ -31,6 +35,8 @@ function DemoScope({ children }: { children: ReactNode }) {
 
 export default function ApplicationRoutes() {
   return (
+    <>
+    <FcmToastHost />
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/403" element={<ForbiddenPage />} />
@@ -48,8 +54,12 @@ export default function ApplicationRoutes() {
       <Route path="/analyses/:analysisId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><NotificationInboxPage /></ProtectedRoute>}/>
       <Route path="/billing/orders/:orderId" element={<ProtectedRoute><BillingOrderPage /></ProtectedRoute>}/>
+      <Route path="/billing/packages" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
+      <Route path="/billing/pay/:orderId" element={<ProtectedRoute><PaymentPage /></ProtectedRoute>} />
+      <Route path="/billing/success/:orderId" element={<ProtectedRoute><PaymentSuccessPage /></ProtectedRoute>} />
       <Route path="/doctor/workspace" element={<ProtectedRoute><DoctorWorkspacePage /></ProtectedRoute>} />
       <Route path="/campaigns" element={<ProtectedRoute><CampaignManagementPage /></ProtectedRoute>}/>
     </Routes>
+    </>
   )
 }

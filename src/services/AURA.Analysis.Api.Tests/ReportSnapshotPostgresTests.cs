@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using AURA.Analysis.Api.Upload;
 using Npgsql;
@@ -8,6 +9,24 @@ namespace AURA.Analysis.Api.Tests;
 
 public sealed class ReportSnapshotPostgresTests
 {
+    [PostgresFact]
+    public async Task Batch_notification_does_not_require_a_legacy_analysis_request()
+    {
+        await using var db=NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("AURA_SCRUM345_TEST_CONNECTION_STRING")!);
+        var batch=Guid.NewGuid();var tenant=Guid.NewGuid();var actor=Guid.NewGuid();var clinic=Guid.NewGuid();
+        await using(var command=db.CreateCommand("INSERT INTO analysis.batches(id,tenant_id,owner_id,requester_id,patient_id,total_images,status,clinic_id) VALUES($1,$2,$3,$3,$4,1,'COMPLETED',$5)"))
+        {
+            command.Parameters.AddWithValue(batch);command.Parameters.AddWithValue(tenant);
+            command.Parameters.AddWithValue(actor);command.Parameters.AddWithValue(Guid.NewGuid());
+            command.Parameters.AddWithValue(clinic);
+            await command.ExecuteNonQueryAsync();
+        }
+        await using(var command=db.CreateCommand("INSERT INTO analysis.batch_completion_events(batch_id,event_id) VALUES($1,$1)"))
+        {command.Parameters.AddWithValue(batch);await command.ExecuteNonQueryAsync();}
+        var response=await new PostgresInternalResolversRepository(db).GetBatchNotificationAsync(new(batch,batch,tenant),default);
+        Assert.NotNull(response);Assert.Equal(actor,Assert.Single(response.RecipientAccountIds));
+        Assert.Equal(clinic,response.ClinicContextId);
+    }
     private sealed class Clock:TimeProvider
     {public DateTimeOffset Now=DateTimeOffset.UtcNow;public override DateTimeOffset GetUtcNow()=>Now;}
     private sealed class Query(AnalysisDetailResponse detail,AnalysisIdentity identity):IAnalysisQueryRepository
@@ -75,6 +94,8 @@ public sealed class ReportSnapshotPostgresTests
             read.Parameters.AddWithValue(exported.ReportId);await using var reader=await read.ExecuteReaderAsync();Assert.True(await reader.ReadAsync());
             using var snapshot=JsonDocument.Parse(reader.GetString(0));var root=snapshot.RootElement;
             Assert.Equal(reader.GetString(1),ReportSnapshotDigest.Compute(reader.GetString(0)));
+            Assert.Equal(image,root.GetProperty("analysisId").GetGuid());
+            Assert.Equal(patient,root.GetProperty("patientId").GetGuid());
             Assert.Equal(result1,root.GetProperty("result").GetProperty("resultId").GetGuid());
             var research=root.GetProperty("result").GetProperty("research");
             Assert.Equal(.61,research.GetProperty("dr").GetProperty("probability_dr").GetDouble());
@@ -85,7 +106,15 @@ public sealed class ReportSnapshotPostgresTests
         }
         var download=await reports.ReadDownloadContentAsync(actor,null,exported.ReportId,null,default);
         Assert.Equal("application/pdf",download.ContentType);
-        await using(var stream=download.Stream)Assert.Equal('%',stream.ReadByte());
+        await using(var stream=download.Stream)
+        using(var bytes=new MemoryStream())
+        {
+            await stream.CopyToAsync(bytes);
+            var pdf=Encoding.Latin1.GetString(bytes.ToArray());
+            Assert.StartsWith("%PDF-",pdf);
+            Assert.Contains("startxref",pdf);
+            Assert.EndsWith("%%EOF",pdf.TrimEnd());
+        }
         var otherActor=await Assert.ThrowsAsync<UploadFailure>(()=>reports.ReadDownloadAsync(Guid.NewGuid(),null,exported.ReportId,null,default));
         Assert.Equal(404,otherActor.Status);
         var otherClinic=await Assert.ThrowsAsync<UploadFailure>(()=>reports.ReadDownloadAsync(actor,Guid.NewGuid(),exported.ReportId,null,default));
@@ -149,6 +178,9 @@ public sealed class ReportSnapshotPostgresTests
         var contexts=new InternalResolversService(new PostgresInternalResolversRepository(db));
         Assert.Equal(404,(await Assert.ThrowsAsync<UploadFailure>(()=>contexts.ResolveNotificationContextAsync(new(Guid.NewGuid(),image,tenant),default))).Status);
         var notification=await contexts.ResolveNotificationContextAsync(new(batch,batch,tenant),default);
+        var clinicContext=Guid.NewGuid();
+        await Write("UPDATE analysis.analysis_requests SET clinic_context_id=$1 WHERE id=$2",clinicContext,batch);
+        Assert.Equal(clinicContext,(await contexts.ResolveNotificationContextAsync(new(batch,batch,tenant),default)).ClinicContextId);
         Assert.Equal(actor,Assert.Single(notification.RecipientAccountIds));
         Assert.Equal(404,(await Assert.ThrowsAsync<UploadFailure>(()=>contexts.ResolveNotificationContextAsync(new(Guid.NewGuid(),batch,tenant),default))).Status);
     }

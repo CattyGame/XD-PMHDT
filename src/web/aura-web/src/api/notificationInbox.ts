@@ -2,8 +2,9 @@ import { getFirebaseAuth } from '../firebase/config'
 import { isMockEnabled } from './client'
 import type { BackendContext } from './backendContext'
 import { validBatchId } from './batchProgress'
+import { safeNotificationPath } from '../firebase/notificationNavigation'
 
-/** SCRUM-333: API inbox theo infra/sprint3/contracts/notification-openapi.yaml. */
+/** Current inbox API: contracts/notification-openapi.yaml; Sprint3 artifacts stay byte-pinned. */
 export type InboxNotification = Readonly<{
   notificationId: string
   eventId: string
@@ -62,12 +63,14 @@ function parseNotification(value: unknown): InboxNotification {
   }
 
   const payment = value.type === 'PAYMENT_SUCCESS'
+  const target = safeNotificationPath(value.targetPath, payment ? undefined : value.analysisId)
+  if (!target) invalidResponse()
   if (payment) {
     if (value.analysisId !== null || typeof value.orderId !== 'string' || !validBatchId(value.orderId) ||
         value.targetPath !== `/billing/orders/${value.orderId}`) invalidResponse()
   } else if (typeof value.analysisId !== 'string' || !validBatchId(value.analysisId) ||
       (value.orderId !== undefined && value.orderId !== null) ||
-      ![`/analyses/${value.analysisId}`, `/batches/${value.analysisId}`].includes(String(value.targetPath))) invalidResponse()
+      ![`/analyses/${value.analysisId}`, `/batches/${value.analysisId}`].includes(target.split('?')[0])) invalidResponse()
 
   return {
     notificationId: value.notificationId as string,
@@ -79,7 +82,7 @@ function parseNotification(value: unknown): InboxNotification {
     isRead: value.isRead as boolean,
     createdAt: value.createdAt as string,
     readAt: value.readAt as string | null,
-    targetPath: value.targetPath as string,
+    targetPath: target,
   }
 }
 

@@ -192,7 +192,7 @@ function InboxViewer({ context }: { context: BackendContext }) {
               <p className="inbox-item-id">Analysis ID: <code>{notification.analysisId}</code></p>
             </div>
             <div className="inbox-item-actions">
-              <Link to={`/analyses/${notification.analysisId}`}>Xem kết quả</Link>
+              <Link to={notification.targetPath}>{notification.type === 'PAYMENT_SUCCESS' ? 'Xem thanh toán' : 'Xem kết quả'}</Link>
               {!notification.isRead && <button type="button"
                 disabled={markingId !== null}
                 onClick={() => { void markRead(notification.notificationId) }}>

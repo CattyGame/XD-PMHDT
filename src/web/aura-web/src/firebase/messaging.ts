@@ -64,12 +64,35 @@ export async function obtainFcmToken(): Promise<FcmTokenResult> {
   }
 }
 
+const listeners = new Set<(payload: MessagePayload) => void>()
+let stopFirebase: (() => void) | null = null
+let starting: Promise<boolean> | null = null
+
+async function ensureListening(): Promise<boolean> {
+  if (stopFirebase) return true
+  if (!starting) {
+    starting = (async () => {
+      const messaging = await getFirebaseMessaging()
+      if (!messaging) return false
+      stopFirebase = onMessage(messaging, payload => {
+        for (const listener of listeners) listener(payload)
+      })
+      return true
+    })().finally(() => { starting = null })
+  }
+  return starting
+}
+
+/** Share one Firebase listener across toast, batch tracking and device settings. */
 export async function listenForegroundMessages(
-  callback: (payload: MessagePayload) => void
+  callback: (payload: MessagePayload) => void,
 ): Promise<(() => void) | null> {
-  const messaging = await getFirebaseMessaging()
-
-  if (!messaging) return null
-
-  return onMessage(messaging, callback)
+  listeners.add(callback)
+  try {
+    if (!await ensureListening()) { listeners.delete(callback); return null }
+  } catch (error) { listeners.delete(callback); throw error }
+  return () => {
+    listeners.delete(callback)
+    if (listeners.size === 0) { stopFirebase?.(); stopFirebase = null }
+  }
 }

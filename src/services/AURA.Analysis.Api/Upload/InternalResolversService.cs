@@ -24,7 +24,8 @@ public sealed record NotificationContextResponse(
     bool Applicable,
     IReadOnlyList<Guid> RecipientAccountIds,
     string ProcessingStatus,
-    int? ResultVersion);
+    int? ResultVersion,
+    Guid? ClinicContextId = null);
 
 public interface IInternalResolversRepository
 {
@@ -42,7 +43,8 @@ public sealed record InternalAnalysisState(
     Guid? ReservationId,
     int? Generation,
     int? ResultVersion,
-    bool? IsMock);
+    bool? IsMock,
+    Guid? ClinicContextId = null);
 
 public sealed class PostgresInternalResolversRepository(NpgsqlDataSource dataSource) : IInternalResolversRepository
 {
@@ -55,13 +57,14 @@ public sealed class PostgresInternalResolversRepository(NpgsqlDataSource dataSou
     public async Task<NotificationContextResponse?> GetBatchNotificationAsync(InternalResolveRequest request,CancellationToken ct)
     {
         await using var command=dataSource.CreateCommand("""
-            SELECT b.requester_id,b.status FROM analysis.batches b
+            SELECT b.requester_id,b.status,COALESCE(r.clinic_context_id,b.clinic_id) FROM analysis.batches b
+            LEFT JOIN analysis.analysis_requests r ON r.id=b.id AND r.tenant_id=b.tenant_id
             JOIN analysis.batch_completion_events e ON e.batch_id=b.id
             WHERE b.tenant_id=$1 AND b.id=$2 AND e.event_id=$3
             """);
         command.Parameters.AddWithValue(request.TenantId);command.Parameters.AddWithValue(request.AnalysisId);command.Parameters.AddWithValue(request.EventId);
         await using var reader=await command.ExecuteReaderAsync(ct);if(!await reader.ReadAsync(ct))return null;
-        return new(request.EventId,request.AnalysisId,request.TenantId,true,[reader.GetGuid(0)],reader.GetString(1)=="PARTIAL_COMPLETED"?"PARTIAL_FAILED":reader.GetString(1),null);
+        return new(request.EventId,request.AnalysisId,request.TenantId,true,[reader.GetGuid(0)],reader.GetString(1)=="PARTIAL_COMPLETED"?"PARTIAL_FAILED":reader.GetString(1),null,reader.IsDBNull(2)?null:reader.GetGuid(2));
     }
     public async Task<InternalAnalysisState?> GetStateAsync(Guid analysisId, Guid tenantId, CancellationToken ct)
     {
@@ -71,7 +74,7 @@ public sealed class PostgresInternalResolversRepository(NpgsqlDataSource dataSou
         await using var command = dataSource.CreateCommand("""
             SELECT i.id, i.tenant_id, i.analysis_request_id, r.requester_id, i.processing_status,
                    cr.reservation_id, cr.generation,
-                   ar.version, ar.is_mock
+                   ar.version, ar.is_mock, r.clinic_context_id
             FROM analysis.images i
             JOIN analysis.analysis_requests r ON r.tenant_id = i.tenant_id AND r.id = i.analysis_request_id
             LEFT JOIN LATERAL (
@@ -105,7 +108,7 @@ public sealed class PostgresInternalResolversRepository(NpgsqlDataSource dataSou
 
         return new InternalAnalysisState(
             reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3),
-            reader.GetString(4), reservationId, generation, resultVersion, isMock);
+            reader.GetString(4), reservationId, generation, resultVersion, isMock, reader.IsDBNull(9)?null:reader.GetGuid(9));
     }
 }
 
@@ -188,6 +191,6 @@ public sealed class InternalResolversService(IInternalResolversRepository reposi
 
         return new NotificationContextResponse(
             request.EventId, request.AnalysisId, request.TenantId,
-            true, recipients, state.ProcessingStatus, state.ResultVersion);
+            true, recipients, state.ProcessingStatus, state.ResultVersion, state.ClinicContextId);
     }
 }

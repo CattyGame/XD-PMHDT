@@ -16,7 +16,7 @@ export async function refreshFcmToken(
     return result
   }
 
-  await registerNotificationDevice(result.token)
+  await registerNotificationDevice(result.token, isCurrentSession)
 
   if (!isCurrentSession()) {
     return { status: 'cancelled' as const }

@@ -224,6 +224,8 @@ public sealed class NotificationEventConsumer(
                 _ => "Phân tích ảnh đáy mắt không thành công"
             };
             targetPath = eventType == "batch.completed" ? $"/batches/{parsedAnalysisId:D}" : $"/analyses/{parsedAnalysisId:D}";
+            if (authority.ClinicContextId is { } clinicId && clinicId != Guid.Empty)
+                targetPath += $"?clinicContextId={clinicId:D}";
         }
 
         int totalDevicesTargeted = 0;

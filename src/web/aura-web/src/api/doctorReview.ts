@@ -1,6 +1,7 @@
 import { getFirebaseAuth } from '../firebase/config'
 import { isMockEnabled } from './client'
 import type { BackendContext } from './backendContext'
+import { AnalysisResultError, getPrivateFileAccess } from './analysisResult'
 
 // Contract: contracts/doctor-review-openapi.yaml (M2). Không tự sinh dữ liệu y khoa.
 export type RiskLevel = 'LOW' | 'MODERATE' | 'HIGH'
@@ -181,22 +182,17 @@ export async function submitDoctorReview(
 export async function getDoctorFileAccess(
   context: BackendContext, clinicId: string, analysisId: string, fileId: string, signal?: AbortSignal,
 ): Promise<PrivateDoctorFile> {
-  if (!isGuid(analysisId) || !isGuid(fileId)) throw new DoctorApiError(400, 'ERR_INVALID_FILE_ID')
-  // File Access là endpoint dùng chung, nhưng bác sĩ phải kèm clinicContextId để backend kiểm tra quyền.
-  const response = await request('/api/v1/analyses/' + analysisId + '/files/' + fileId + '/access' + clinicPath(clinicId),
-    'GET', context, undefined, signal)
-  if (response.status !== 200 || !record(response.data) || !text(response.data.url) ||
-    !text(response.data.expiresAt)) invalid()
-  let url: URL
-  try { url = new URL(response.data.url) } catch { return invalid() }
-  const expiry = Date.parse(response.data.expiresAt)
-  if (!['http:', 'https:'].includes(url.protocol) ||
-    (window.location.protocol === 'https:' && url.protocol !== 'https:') ||
-    !Number.isFinite(expiry) || expiry <= Date.now() + 5000) invalid()
-  return { url: response.data.url, expiresAt: response.data.expiresAt }
+  if (!context.roles.includes('DOCTOR')) throw new DoctorApiError(403, 'ERR_FORBIDDEN')
+  clinicPath(clinicId)
+  try {
+    return await getPrivateFileAccess(analysisId, fileId, { ...context, clinicContextId: clinicId }, signal)
+  } catch (error) {
+    if (error instanceof AnalysisResultError) throw new DoctorApiError(error.status, error.code)
+    throw error
+  }
 }
 export function doctorErrorMessage(error: unknown): string {
-  if (!(error instanceof DoctorApiError)) return 'Không thể kết nối API. Vui lòng thử lại.'
+  if (!(error instanceof DoctorApiError || error instanceof AnalysisResultError)) return 'Không thể kết nối API. Vui lòng thử lại.'
   if (error.status === 401) return 'Phiên đăng nhập không hợp lệ. Hãy đăng nhập lại.'
   if (error.status === 403) return 'Bạn không có quyền truy cập ca bệnh này tại cơ sở đã chọn.'
   if (error.status === 404) return 'Không tìm thấy ca chụp hoặc ảnh trong phạm vi được phân công.'

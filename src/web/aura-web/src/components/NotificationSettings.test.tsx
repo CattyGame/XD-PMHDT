@@ -278,6 +278,7 @@ describe('Đăng nhập và đăng ký thông báo', () => {
     expect(mocks.obtainToken).toHaveBeenCalledTimes(1)
     expect(mocks.register).toHaveBeenCalledWith(
       'private-test-fcm-token',
+      expect.any(Function),
     )
     expect(container.textContent).not.toContain(
       'private-test-fcm-token',
@@ -529,6 +530,7 @@ describe('Đồng bộ tự động khi quay lại tab', () => {
     expect(mocks.register).toHaveBeenCalledTimes(2)
     expect(mocks.register).toHaveBeenLastCalledWith(
       'synthetic-refreshed-token',
+      expect.any(Function),
     )
     expect(mocks.requestPermission).toHaveBeenCalledTimes(1)
   })

@@ -3,6 +3,7 @@ import {
   getMessaging,
   onBackgroundMessage,
 } from 'firebase/messaging/sw'
+import { safeNotificationPath } from './notificationNavigation'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting())
@@ -27,9 +28,8 @@ self.addEventListener('notificationclick', (event) => {
         (client) => new URL(client.url).origin === self.location.origin,
       )
       const data = event.notification.data?.FCM_MSG?.data ?? event.notification.data ?? {}
-      const candidate = data.targetPath ?? '/notifications'
-      const allowed = /^\/(?:analyses|batches|billing\/orders)\/[0-9a-f-]{36}$/i.test(candidate)
-      const target = new URL(allowed ? candidate : '/notifications', self.location.origin).href
+      const path = safeNotificationPath(data.targetPath, data.analysisId) ?? '/notifications'
+      const target = new URL(path, self.location.origin).href
 
       if (existing) {
         await existing.navigate(target)
@@ -60,6 +60,7 @@ if (Object.values(config).every(value => typeof value === 'string' && value.trim
     return self.registration.showNotification('AURA - Thông báo mới', {
       body: 'Bạn có thông báo mới. Mở AURA để xem chi tiết.',
       tag: 'aura-notification',
+      data: { targetPath: safeNotificationPath(payload.data?.targetPath, payload.data?.analysisId) ?? '/notifications' },
     })
   })
 
