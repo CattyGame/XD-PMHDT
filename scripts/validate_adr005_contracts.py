@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     for name in ("analysis-openapi-0.9.yaml", "billing-openapi.yaml", "profile-openapi.yaml", "identity-openapi.yaml",
-                 "ai-openapi-1.3.yaml", "ai_service_openapi.yaml", "ai_service_openapi.json"):
+                 "ai-openapi-1.3.yaml", "ai_service_openapi.yaml", "ai_service_openapi.json",
+                 "notification-openapi.yaml", "internal-analysis-openapi.yaml"):
         document, base = read_from_filename(str(ROOT / "contracts" / name))
         validate(document, base_uri=base)
         schemes = set(document.get("components", {}).get("securitySchemes", {}))
@@ -50,7 +51,21 @@ def main():
     validators["0.7"].validate(invalid)
     if validators["0.7"].is_valid(event):
         raise ValueError("Historical0.7 accepted a new0.8 envelope")
-    print("PASS ADR005: seven OpenAPI contracts; event0.8 canonical and event0.7 historical compatibility, with negative controls.")
+    current = json.loads((ROOT / "contracts/notification-context.schema.json").read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(current)
+    context = Draft202012Validator(current, format_checker=FormatChecker())
+    sample = json.loads((ROOT / "infra/sprint3/examples/notification-context.json").read_text(encoding="utf-8"))
+    context.validate(sample)
+    sample["clinicContextId"] = "55555555-5555-4555-8555-555555555555"
+    context.validate(sample)
+    invalid = deepcopy(sample)
+    invalid["clinicContextId"] = "not-a-clinic-uuid"
+    if context.is_valid(invalid):
+        raise ValueError("Current notification context accepted an invalid clinic selector")
+    historical = Draft202012Validator(json.loads((ROOT / "infra/sprint3/contracts/notification-context.schema.json").read_text(encoding="utf-8")))
+    if historical.is_valid(sample):
+        raise ValueError("Historical Sprint3 context unexpectedly changed")
+    print("PASS ADR005: nine OpenAPI contracts; event0.8 canonical, event0.7 historical compatibility and current clinic notification context, with negative controls.")
 
 
 if __name__ == "__main__":

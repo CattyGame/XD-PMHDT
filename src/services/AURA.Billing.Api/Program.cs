@@ -325,6 +325,23 @@ app.MapGet("/api/v1/billing/orders/{orderId:guid}", async Task<IResult> (
 .Produces<OrderRecord>(StatusCodes.Status200OK)
 .Produces(StatusCodes.Status404NotFound);
 
+app.MapGet("/api/v1/billing/wallets/{ownerType}/{ownerId:guid}", async Task<IResult> (
+    string ownerType, Guid ownerId, HttpContext context, BillingOwnerAuthorizer authorizer,
+    OrderRepository repository, BillingRuntimeOptions options, CancellationToken ct) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    ownerType = ownerType.ToUpperInvariant();
+    if (ownerType is not ("ACCOUNT" or "CLINIC") || ownerId == Guid.Empty)
+        return BillingError(context, 400, "ERR_VALIDATION", "Invalid billing owner.");
+    var authority = await authorizer.AuthorizeAsync(context.Request, ownerType, ownerId, false, ct);
+    if (!authority.Allowed)
+        return BillingError(context, authority.StatusCode, authority.Code, "Billing owner access denied.", authority.StatusCode == 503);
+    var balance = await repository.GetWalletBalanceAsync(ownerType, ownerId, options.Environment, ct);
+    return Results.Ok(new { ownerType, ownerId, environment = options.Environment, balance });
+})
+.WithName("GetBillingWallet")
+.WithTags("Billing Wallets");
+
 app.MapPost("/internal/v1/billing/notification-context/resolve", async Task<IResult> (
     PaymentNotificationRequest request, HttpContext context, ServiceTokenValidator tokens,
     PaymentNotificationRepository events, CancellationToken ct) =>

@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { webcrypto } from 'node:crypto'
 import { beforeEach, afterEach, it, expect, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 const m = vi.hoisted(() => ({ auth: vi.fn() }))
 vi.mock('../firebase/config', () => ({ getFirebaseAuth: m.auth }))
@@ -68,4 +68,81 @@ it('does not offer fabricated clinics when discovery is denied', async () => {
   expect((await screen.findByRole('alert')).textContent).toContain('không được truy cập')
   expect(screen.queryByLabelText('Chọn ảnh phòng khám')).toBeNull()
   expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
+it('renders 100 lazy previews on drop, rejects an overflowing selection, and releases removed and remaining previews', async () => {
+  const create = vi.fn((file: File) => `blob:${file.name}`)
+  const revoke = vi.fn()
+  const RealURL = URL
+  vi.stubGlobal('URL', class extends RealURL { static createObjectURL = create; static revokeObjectURL = revoke })
+  const view = page()
+  await screen.findByRole('option', { name: 'Clinic A' })
+  const input = screen.getByLabelText('Chọn ảnh phòng khám')
+  const files = Array.from({ length: 101 }, (_, i) => new File(['test'], `retina-${i}.png`, { type: 'image/png' }))
+  fireEvent.drop(input, { dataTransfer: { files: files.slice(0, 100) } })
+  expect(screen.getAllByAltText(/^Xem trước /)).toHaveLength(100)
+  expect(create).toHaveBeenCalledTimes(100)
+  expect(screen.getByText('100/100')).toBeTruthy()
+  fireEvent.drop(input, { dataTransfer: { files } })
+  expect(screen.getByText(/Vượt giới hạn 100 ảnh mỗi batch/)).toBeTruthy()
+  expect(screen.queryByAltText('Xem trước retina-100.png')).toBeNull()
+  fireEvent.click(screen.getByText('Xóa retina-0.png', { selector: 'button' }))
+  expect(revoke).toHaveBeenCalledWith('blob:retina-0.png')
+  expect(screen.getAllByAltText(/^Xem trước /)).toHaveLength(99)
+  view.unmount()
+  expect(revoke).toHaveBeenCalledTimes(100)
+})
+
+it('holds one submission, keeps other images after a lost connection and retries only the failed image', async () => {
+  const server = fetchMock.getMockImplementation()!
+  let failed = false
+  fetchMock.mockImplementation(async (url, init) => {
+    if (init?.method === 'PUT' && !failed) {
+      failed = true
+      throw new TypeError('Connection lost before upload')
+    }
+    return server(url, init)
+  })
+  const storage = vi.spyOn(Storage.prototype, 'setItem')
+  const view = page()
+  await screen.findByRole('option', { name: 'Clinic A' })
+  await screen.findByLabelText('Chọn ảnh phòng khám')
+  const files = [0, 1].map(i => new File([`sample-${i}`], `retina-${i}.png`, { type: 'image/png' }))
+  fireEvent.change(screen.getByLabelText('Chọn ảnh phòng khám'), { target: { files } })
+  for (const number of [1, 2]) fireEvent.change(screen.getByLabelText(`Mã bệnh nhân ảnh${number}`), { target: { value: patientA } })
+  const submit = screen.getByRole('button', { name: 'Gửi ảnh phòng khám' })
+  act(() => { submit.click(); submit.click() })
+  const retry = await screen.findByRole('button', { name: 'Thử lại retina-0.png' })
+  const progress = screen.getByRole('region', { name: 'Tiến độ tiếp nhận ảnh' })
+  expect(within(progress).getByText(/Đã tải: 1\/2 ảnh/)).toBeTruthy()
+  expect(within(progress).getByText(/Lỗi tải/)).toBeTruthy()
+  fireEvent.click(retry)
+  await screen.findByRole('heading', { name: 'Đã tiếp nhận lượt tải phòng khám' })
+  const uploadNames = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')
+    .map(([, init]) => ((init!.body as FormData).get('image') as File).name)
+  expect(uploadNames).toEqual(['retina-0.png', 'retina-1.png', 'retina-0.png'])
+  expect(fetchMock.mock.calls.filter(([url, init]) => init?.method === 'POST' && String(url).includes('analysis-upload-batches'))).toHaveLength(2)
+  expect(storage).not.toHaveBeenCalled()
+  expect(screen.queryByRole('img')).toBeNull()
+  view.unmount()
+})
+
+it('aborts a pending upload on unmount and ignores its late failure', async () => {
+  const server = fetchMock.getMockImplementation()!
+  let putSignal: AbortSignal | undefined
+  fetchMock.mockImplementation((url, init) => {
+    if (init?.method !== 'PUT') return server(url, init)
+    putSignal = init.signal ?? undefined
+    return new Promise((_resolve, reject) => putSignal?.addEventListener('abort', () => reject(putSignal?.reason)))
+  })
+  const view = page()
+  await screen.findByRole('option', { name: 'Clinic A' })
+  fireEvent.change(screen.getByLabelText('Chọn ảnh phòng khám'), { target: { files: [new File(['sample'], 'pending.png', { type: 'image/png' })] } })
+  fireEvent.change(screen.getByLabelText('Mã bệnh nhân ảnh1'), { target: { value: patientA } })
+  fireEvent.click(screen.getByRole('button', { name: 'Gửi ảnh phòng khám' }))
+  await screen.findByText(/Đang tải/, { selector: 'li' })
+  view.unmount()
+  expect(putSignal?.aborted).toBe(true)
+  await act(async () => {})
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/finalize'))).toBe(false)
 })

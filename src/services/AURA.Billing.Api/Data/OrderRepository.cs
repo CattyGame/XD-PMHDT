@@ -11,6 +11,12 @@ public sealed class OrderRepository(
     NpgsqlDataSource dataSource,
     ILogger<OrderRepository> logger)
 {
+    public async Task<int> GetWalletBalanceAsync(string ownerType, Guid ownerId, string environment, CancellationToken ct)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(ct);
+        return await GetWalletBalanceAsync(connection, null, ownerType, ownerId, environment, ct);
+    }
+
     public async Task VerifyDatabaseAsync(CancellationToken cancellationToken)
     {
         var probes = new[]

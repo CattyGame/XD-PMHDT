@@ -6,12 +6,18 @@ const patientA = '11111111-1111-4111-8111-111111111111'
 const patientB = '22222222-2222-4222-8222-222222222222'
 
 describe('SCRUM-356 file validation', () => {
-  it('allows a 50-file selection and the 100-file upper bound', () => {
-    for (const count of [50, MAX_BULK_IMAGES]) {
+  it('allows 0, 1, 50, 99 and 100 files without changing the requested batch', () => {
+    for (const count of [0, 1, 50, 99, MAX_BULK_IMAGES]) {
       const result = validateBulkFiles(Array.from({ length: count }, (_, i) => image(`fundus-${i}.png`)))
       expect(result.accepted).toHaveLength(count)
       expect(result.rejected).toHaveLength(0)
     }
+  })
+  it('reports duplicate selections while retaining different files', () => {
+    const original = image('repeat.png')
+    const result = validateBulkFiles([original, original, image('other.png')])
+    expect(result.accepted.map(file => file.name)).toEqual(['repeat.png', 'other.png'])
+    expect(result.rejected).toEqual([{ name: 'repeat.png', reason: 'Tệp này đã có trong danh sách.' }])
   })
   it('refuses 101 files instead of silently splitting a chargeable batch', () => {
     const result = validateBulkFiles(Array.from({ length: 101 }, (_, i) => image(`${i}.png`)))

@@ -11,7 +11,7 @@ vi.mock('../firebase/config', () => ({ getFirebaseAuth: mocks.getAuth }))
 vi.mock('firebase/auth', () => ({
   onAuthStateChanged: mocks.observe, signOut: mocks.signOut,
   signInWithEmailAndPassword: mocks.email, signInWithPopup: mocks.google,
-  setPersistence: mocks.persistence, browserLocalPersistence: 'local',
+  setPersistence: mocks.persistence, browserSessionPersistence: 'session',
   GoogleAuthProvider: class {},
 }))
 vi.mock('../api/backendContext', async (original) => ({
@@ -189,7 +189,7 @@ describe('M5 session-aware login and protected routes', () => {
     else await screen.findByRole('button', { name: 'Tiếp tục với Google' })
     fireEvent.click(screen.getByRole('button', { name: method === 'email' ? 'Đăng nhập bằng Email' : 'Tiếp tục với Google' }))
     await waitFor(() => expect(mocks.load).toHaveBeenCalledTimes(1))
-    expect(mocks.persistence).toHaveBeenCalledWith(auth, 'local')
+    expect(mocks.persistence).toHaveBeenCalledWith(auth, 'session')
     expect(screen.queryByText('Nội dung được bảo vệ')).toBeNull()
     await act(async () => pending.resolve(contextA))
     expect(await screen.findByText('Nội dung được bảo vệ')).toBeTruthy()

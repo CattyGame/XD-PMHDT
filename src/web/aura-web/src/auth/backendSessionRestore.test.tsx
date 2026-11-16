@@ -3,7 +3,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendContext } from '../api/backendContext'
-const mocks = vi.hoisted(() => ({ auth: vi.fn(), observe: vi.fn(), signOut: vi.fn(), load: vi.fn(), reload: vi.fn() }))
+const mocks = vi.hoisted(() => ({ auth: vi.fn(), observe: vi.fn(), signOut: vi.fn(), load: vi.fn(), reload: vi.fn(), unregister: vi.fn() }))
+vi.mock('../api/notificationDevices', () => ({ unregisterNotificationDevice: mocks.unregister }))
 vi.mock('../firebase/config', () => ({ getFirebaseAuth: mocks.auth }))
 vi.mock('firebase/auth', () => ({ onAuthStateChanged: mocks.observe, signOut: mocks.signOut }))
 vi.mock('../api/backendContext', async (original) => ({
@@ -59,6 +60,18 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); for (const root of roots) root.remove() })
 describe('Document restore must not revive a stale session', () => {
+  it('does not sign out a newer account after old device cleanup finishes late', async () => {
+    const store=createBackendSessionStore();const stop=store.start()
+    await waitFor(() => expect(store.getSnapshot().status).toBe('ready'))
+    let finish: () => void = () => {}
+    mocks.unregister.mockImplementation(() => new Promise<void>(resolve => { finish=resolve }))
+    const pending=store.logout()
+    const other={ uid:'newer-user' };auth.currentUser=other
+    for(const next of callbacks) next(other)
+    finish();await pending
+    expect(mocks.signOut).not.toHaveBeenCalled();expect(auth.currentUser).toBe(other)
+    stop()
+  })
   it('conceals before caching and removes the old profile without signing out', async () => {
     const { root } = app(); await screen.findByText(context.displayName); transition('pagehide')
     expect(root.hidden).toBe(true); expect(root.hasAttribute('inert')).toBe(true)

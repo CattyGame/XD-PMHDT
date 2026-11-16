@@ -200,12 +200,13 @@ public sealed class AnalysisQueryTests
         var analysisId = Guid.NewGuid();
         var tenantId = Guid.NewGuid();
         var ownerId = Guid.NewGuid();
+        var clinicId = Guid.NewGuid();
 
         var repo = new FakeInternalRepository
         {
             State = new InternalAnalysisState(
                 analysisId, tenantId, Guid.NewGuid(), ownerId,
-                "COMPLETED", Guid.NewGuid(), 1, 1, false)
+                "COMPLETED", Guid.NewGuid(), 1, 1, false, clinicId)
         };
 
         var service = new InternalResolversService(repo);
@@ -215,6 +216,7 @@ public sealed class AnalysisQueryTests
 
         Assert.True(response.Applicable);
         Assert.Contains(ownerId, response.RecipientAccountIds);
+        Assert.Equal(clinicId, response.ClinicContextId);
         Assert.Equal("COMPLETED", response.ProcessingStatus);
     }
 }

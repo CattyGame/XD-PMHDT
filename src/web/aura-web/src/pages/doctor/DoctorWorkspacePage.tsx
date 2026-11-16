@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useBackendSession } from '../../auth/backendSession'
 import BackendSessionNotice from '../../auth/BackendSessionNotice'
 import type { BackendContext } from '../../api/backendContext'
+import { AnalysisResultError, getProtectedContent } from '../../api/analysisResult'
 import {
   DoctorApiError, doctorErrorMessage, getDoctorAnalysis, getDoctorFileAccess,
   getDoctorWorklist, isGuid, submitDoctorReview,
@@ -45,18 +46,39 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
   const detailAbort = useRef<AbortController | null>(null)
   const imageAbort = useRef<AbortController | null>(null)
   const imageTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const imageUrls = useRef<string[]>([])
+  const selection = useRef(0)
 
   useEffect(() => () => {
     listAbort.current?.abort()
     detailAbort.current?.abort()
     imageAbort.current?.abort()
     if (imageTimer.current) clearTimeout(imageTimer.current)
+    imageUrls.current.forEach(url => URL.revokeObjectURL(url))
+    selection.current += 1
   }, [])
 
   function clearImages() {
     imageAbort.current?.abort()
     if (imageTimer.current) clearTimeout(imageTimer.current)
+    imageUrls.current.forEach(url => URL.revokeObjectURL(url))
+    imageUrls.current = []
     setImages(emptyImages)
+  }
+
+  function accessDenied(error: unknown): boolean {
+    return (error instanceof DoctorApiError || error instanceof AnalysisResultError) &&
+      [401, 403, 404].includes(error.status)
+  }
+
+  function clearDeniedAccess(error: unknown) {
+    selection.current += 1
+    listAbort.current?.abort()
+    detailAbort.current?.abort()
+    clearImages()
+    setDetail(null); setWorklist([]); setLoaded(false)
+    setStale(false); setConflictOpen(false); setDetailLoading(false); setListLoading(false)
+    setDetailError(doctorErrorMessage(error)); setSaveError('')
   }
 
   async function loadWorklist() {
@@ -64,6 +86,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
     if (!isGuid(selectedClinic)) { setListError('Nhập clinicContextId (UUID) hợp lệ của cơ sở được phân quyền.'); return }
     listAbort.current?.abort()
     detailAbort.current?.abort()
+    selection.current += 1
     clearImages()
     setDetail(null); setStale(false); setConflictOpen(false)
     setLoaded(false); setListLoading(true); setListError(''); setWorklist([])
@@ -91,22 +114,40 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
       const [original, vessel] = await Promise.all([
         getDoctorFileAccess(context, clinicId, analysis.analysisId, analysis.image.fileId, controller.signal),
         candidate ? getDoctorFileAccess(context, clinicId, analysis.analysisId, candidate.fileId, controller.signal)
-          .catch(() => null) : Promise.resolve(null),
+          .catch(error => { if (accessDenied(error)) throw error; return null }) : Promise.resolve(null),
       ])
       if (controller.signal.aborted) return
-      setImages({ original: original.url, vessel: vessel?.url ?? null,
+      const imageContext = { ...context, clinicContextId: clinicId }
+      const [originalBlob, vesselBlob] = await Promise.all([
+        getProtectedContent(original.url, imageContext, controller.signal),
+        vessel ? getProtectedContent(vessel.url, imageContext, controller.signal) : Promise.resolve(null),
+      ])
+      if (controller.signal.aborted) return
+      if ([originalBlob, vesselBlob].some(blob => blob && !['image/png', 'image/jpeg'].includes(blob.type.split(';')[0])))
+        throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
+      const expiry = Math.min(Date.parse(original.expiresAt), vessel ? Date.parse(vessel.expiresAt) : Infinity)
+      if (imageExpiryDelay(expiry) === 0) throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
+      const originalUrl = URL.createObjectURL(originalBlob)
+      const vesselUrl = vesselBlob ? URL.createObjectURL(vesselBlob) : null
+      imageUrls.current = vesselUrl ? [originalUrl, vesselUrl] : [originalUrl]
+      setImages({ original: originalUrl, vessel: vesselUrl,
         kind: vessel ? candidate?.kind as 'mask' | 'overlay' : null, loading: false,
         error: candidate && !vessel ? 'Không có quyền xem ảnh mạch máu hoặc ảnh chưa sẵn sàng.' : '' })
-      const expiry = Math.min(Date.parse(original.expiresAt), vessel ? Date.parse(vessel.expiresAt) : Infinity)
       imageTimer.current = setTimeout(() => {
-        if (!controller.signal.aborted) setImages({ ...emptyImages, error: 'URL ảnh đã hết hạn. Hãy xin lại quyền xem ảnh.' })
+        if (!controller.signal.aborted) {
+          clearImages()
+          setImages({ ...emptyImages, error: 'URL ảnh đã hết hạn. Hãy xin lại quyền xem ảnh.' })
+        }
       }, imageExpiryDelay(expiry))
     } catch (error) {
-      if (!controller.signal.aborted) setImages({ ...emptyImages, error: doctorErrorMessage(error) })
+      if (controller.signal.aborted) return
+      if (accessDenied(error)) clearDeniedAccess(error)
+      else setImages({ ...emptyImages, error: doctorErrorMessage(error) })
     }
   }
 
   async function loadDetail(analysisId: string) {
+    selection.current += 1
     detailAbort.current?.abort()
     clearImages()
     setDetail(null); setDetailError(''); setSaveError(''); setDetailLoading(true)
@@ -118,7 +159,10 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
       setDetail(fresh); setStale(false); setConflictOpen(false)
       void loadImages(fresh)
     } catch (error) {
-      if (!controller.signal.aborted) setDetailError(doctorErrorMessage(error))
+      if (!controller.signal.aborted) {
+        if (accessDenied(error)) clearDeniedAccess(error)
+        else setDetailError(doctorErrorMessage(error))
+      }
     } finally {
       if (!controller.signal.aborted) setDetailLoading(false)
     }
@@ -126,14 +170,18 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
 
   async function saveReview(review: ReviewRequest) {
     if (!detail || stale || detail.reviewStatus === 'REVIEWED') return
+    const requestSelection = selection.current
     setSaveError('')
     try {
       const saved = await submitDoctorReview(context, clinicId, detail.analysisId, review)
+      if (requestSelection !== selection.current) return
       setDetail((old) => old?.analysisId === saved.analysisId ?
         { ...old, reviewStatus: 'REVIEWED', reviewVersion: saved.version } : old)
       setWorklist((old) => old.map((item) => item.analysisId === saved.analysisId ?
         { ...item, reviewStatus: 'REVIEWED', reviewVersion: saved.version } : item))
     } catch (error) {
+      if (requestSelection !== selection.current) return
+      if (accessDenied(error)) { clearDeniedAccess(error); return }
       if (error instanceof DoctorApiError && error.status === 409) {
         setStale(true); setConflictOpen(true)
       } else {
@@ -246,5 +294,5 @@ export default function DoctorWorkspacePage() {
     return <main className={styles.workspace}><h1>403 - Không có quyền truy cập</h1>
       <p>Không gian bác sĩ chỉ dành cho tài khoản có vai trò DOCTOR.</p><Link to="/">Trang chủ</Link></main>
   }
-  return <ClinicWorkspace context={state.context} />
+  return <ClinicWorkspace key={`${state.context.firebaseUid}:${state.context.accountId}:${state.context.profileVersion}`} context={state.context} />
 }
