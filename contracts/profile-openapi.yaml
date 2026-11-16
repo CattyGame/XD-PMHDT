@@ -242,11 +242,12 @@ paths:
   /api/v1/clinics/{clinicId}/memberships/invite:
     post:
       summary: Mời Bác sĩ / Kỹ thuật viên vào phòng khám bằng email
-      description: 'Mời thành viên mới vào phòng khám bằng email và gán vai trò (ClinicManager,
-        ClinicDoctor, ClinicStaff).
+      description: 'Mời thành viên mới vào phòng khám bằng email; vai trò DOCTOR hoặc STAFF trong clinic.
 
-        Bản ghi membership được tạo ở trạng thái INVITED và sẽ tự động kích hoạt (chuyển
-        sang ACTIVE) khi người dùng có email tương ứng đăng nhập vào hệ thống.
+        Bản ghi ở trạng thái INVITED. Người nhận phải đăng nhập bằng email đã xác minh,
+        rồi POST /api/v1/clinics/invitations/{membershipId}/accept với token một lần
+        trong 72 giờ để chuyển sang ACTIVE. Đăng nhập riêng lẻ không kích hoạt lời mời;
+        membership DOCTOR không tự cấp global role DOCTOR.
 
         '
       operationId: inviteClinicMember
@@ -883,7 +884,7 @@ paths:
       tags:
       - Doctor Assignments
       security:
-      - UserBearerAuth: []
+      - BearerAuth: []
       parameters:
       - $ref: '#/components/parameters/ClinicId'
       requestBody:
@@ -924,7 +925,7 @@ paths:
       tags:
       - Doctor Assignments
       security:
-      - UserBearerAuth: []
+      - BearerAuth: []
       parameters:
       - $ref: '#/components/parameters/ClinicId'
       - name: doctorId
@@ -974,7 +975,7 @@ paths:
       tags:
       - Doctor Assignments
       security:
-      - UserBearerAuth: []
+      - BearerAuth: []
       parameters:
       - $ref: '#/components/parameters/ClinicId'
       - name: assignmentId
@@ -1361,6 +1362,7 @@ components:
         status:
           type: string
           enum:
+          - INVITED
           - ACTIVE
           - REVOKED
           example: ACTIVE

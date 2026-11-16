@@ -23,6 +23,7 @@ export default function SessionHomePage() {
           <Link to="/clinic-upload">Tải ảnh phòng khám</Link>
           <Link to="/billing/packages">Mua gói / Credit</Link>
           <Link to="/clinics/members">Thành viên phòng khám</Link>
+          <Link to="/clinics/invitations">Chấp nhận lời mời</Link>
           <Link to="/clinics/patients">Bệnh nhân phòng khám</Link>
           <Link to="/campaigns">Chiến dịch tầm soát</Link>
           {!context.roles.includes("SYSTEM_ADMIN") && <Link to="/batches">Theo dõi batch</Link>}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
@@ -13,7 +13,7 @@ import {
   linkBatchToCampaign,
   updateCampaignStatus,
   getCampaignSummary,
-  getCampaignExportUrl,
+  getCampaignExport,
   type CampaignItem,
   type CampaignSummary,
   type CampaignStatus,
@@ -48,6 +48,26 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
 
   // Summary State
   const [selectedSummary, setSelectedSummary] = useState<CampaignSummary | null>(null)
+  const scope = useRef(new AbortController())
+  const summaryRequest = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    scope.current = controller
+    setCampaigns([])
+    setSelectedSummary(null)
+    setShowCreateModal(false)
+    setLinkingCampaignId(null)
+    setLinkBatchId('')
+    setNewName('')
+    setNewLocation('')
+    setNewDesc('')
+    setError(null)
+    setSuccessMsg(null)
+    setSubmitting(false)
+    setLinking(false)
+    return () => controller.abort()
+  }, [context, selectedClinicId])
 
   // 1. Tải danh sách phòng khám của tài khoản
   useEffect(() => {
@@ -114,6 +134,7 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
     setError(null)
     setSuccessMsg(null)
     setSubmitting(true)
+    const signal = scope.current.signal
 
     try {
       await createCampaign(context, selectedClinicId, {
@@ -123,7 +144,9 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
         targetPatientCount: Number(newTarget),
         startDate: new Date(newStartDate).toISOString(),
         endDate: new Date(newEndDate).toISOString(),
-      })
+      }, signal)
+
+      if (signal.aborted) return
 
       setSuccessMsg('Tạo chiến dịch tầm soát thành công!')
       setShowCreateModal(false)
@@ -132,9 +155,10 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
       setNewDesc('')
       setReloadTrigger((v) => v + 1)
     } catch (err: any) {
+      if (signal.aborted) return
       setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : (err.message || 'Tạo chiến dịch thất bại.'))
     } finally {
-      setSubmitting(false)
+      if (!signal.aborted) setSubmitting(false)
     }
   }
 
@@ -143,12 +167,15 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
     if (!selectedClinicId) return
     setError(null)
     setSuccessMsg(null)
+    const signal = scope.current.signal
 
     try {
-      await updateCampaignStatus(context, selectedClinicId, campaignId, status)
+      await updateCampaignStatus(context, selectedClinicId, campaignId, status, signal)
+      if (signal.aborted) return
       setSuccessMsg(`Đã cập nhật chiến dịch sang trạng thái ${status}.`)
       setReloadTrigger((v) => v + 1)
     } catch (err: any) {
+      if (signal.aborted) return
       setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : (err.message || 'Cập nhật trạng thái thất bại.'))
     }
   }
@@ -161,21 +188,24 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
     setError(null)
     setSuccessMsg(null)
     setLinking(true)
+    const signal = scope.current.signal
 
     try {
-      const res = await linkBatchToCampaign(context, selectedClinicId, linkingCampaignId, linkBatchId.trim())
+      const res = await linkBatchToCampaign(context, selectedClinicId, linkingCampaignId, linkBatchId.trim(), signal)
+      if (signal.aborted) return
       setSuccessMsg(res.message || 'Gắn batch ảnh vào chiến dịch thành công!')
       setLinkingCampaignId(null)
       setLinkBatchId('')
       setReloadTrigger((v) => v + 1)
     } catch (err: any) {
+      if (signal.aborted) return
       if (err instanceof AnalysisResultError && err.code === 'ERR_CAMPAIGN_CLOSED') {
         setError('Chiến dịch đã kết thúc (CLOSED), không cho phép gắn thêm batch ảnh mới.')
       } else {
         setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : (err.message || 'Không thể liên kết batch.'))
       }
     } finally {
-      setLinking(false)
+      if (!signal.aborted) setLinking(false)
     }
   }
 
@@ -183,19 +213,38 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
   async function handleViewSummary(campaignId: string) {
     if (!selectedClinicId) return
     setError(null)
+    summaryRequest.current?.abort()
+    summaryRequest.current = new AbortController()
+    const signal = AbortSignal.any([scope.current.signal, summaryRequest.current.signal])
+    setSelectedSummary(null)
 
     try {
-      const data = await getCampaignSummary(context, selectedClinicId, campaignId)
-      setSelectedSummary(data)
+      const data = await getCampaignSummary(context, selectedClinicId, campaignId, signal)
+      if (!signal.aborted) setSelectedSummary(data)
     } catch (err: any) {
+      if (signal.aborted) return
       setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : (err.message || 'Không thể tải thống kê chiến dịch.'))
     }
   }
 
-  function handleExportCsv(campaignId: string) {
+  async function handleExportCsv(campaignId: string) {
     if (!selectedClinicId) return
-    const url = getCampaignExportUrl(selectedClinicId, campaignId)
-    window.open(url, '_blank')
+    const signal = scope.current.signal
+    setError(null)
+    try {
+      const blob = await getCampaignExport(context, selectedClinicId, campaignId, signal)
+      if (signal.aborted) return
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `aura-campaign-${campaignId}.csv`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch (err) {
+      if (!signal.aborted) setError(err instanceof AnalysisResultError ? `Lỗi: ${err.code}` : 'Không thể tải báo cáo CSV.')
+    }
   }
 
   const totalCampaigns = campaigns.length
@@ -564,5 +613,5 @@ function CampaignManagementContent({ context }: { context: BackendContext }) {
 export default function CampaignManagementPage() {
   const { state } = useBackendSession()
   if (state.status !== 'ready') return <BackendSessionNotice />
-  return <CampaignManagementContent context={state.context} />
+  return <CampaignManagementContent key={`${state.context.accountId}:${state.context.firebaseUid}:${state.context.profileVersion}`} context={state.context} />
 }

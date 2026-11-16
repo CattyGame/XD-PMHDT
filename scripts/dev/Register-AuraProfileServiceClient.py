@@ -1,7 +1,8 @@
-"""Append the dedicated Profile caller to existing local service-auth files.
+"""Register the dedicated Profile caller or add its Analysis binding scope.
 
-Default: validate only. --apply creates one client without changing existing
-keys or clients. Never emits credentials, JWTs, or registry contents.
+Default: validate only. --apply preserves existing keys, secrets and principals;
+an existing identity-only Profile registration gains analysis:binding.
+Never emits credentials, JWTs, or registry contents.
 """
 import argparse
 import base64
@@ -18,7 +19,8 @@ import uuid
 
 CLIENT_ID = "profile-api"
 PRINCIPAL = "a1000000-0000-4000-8000-000000000004"
-TARGETS = {"aura-identity": ["identity:context"]}
+LEGACY_TARGETS = {"aura-identity": ["identity:context"]}
+TARGETS = {**LEGACY_TARGETS, "aura-analysis": ["analysis:binding"]}
 
 
 class RegistrationError(Exception):
@@ -57,6 +59,44 @@ def encode(value):
     return (json.dumps(value, indent=2) + "\n").encode()
 
 
+def add_binding_scope(registry_path, credential_path, registry, credential):
+    paths = (credential_path, registry_path)
+    originals = {path: path.read_bytes() for path in paths}
+    lock = registry_path.parent.parent / ".profile-client-registration.lock"
+    write_new(lock, b"Profile binding scope upgrade in progress.\n")
+    temporary = []
+    replaced = []
+    try:
+        for client in registry["clients"]:
+            if client["clientId"] == CLIENT_ID:
+                client["allowedTargets"] = TARGETS
+        credential["allowedTargets"] = TARGETS
+        for path, value in zip(paths, (credential, registry)):
+            write_new(path.with_name(path.name + ".before-binding-" + uuid.uuid4().hex), originals[path])
+            fd, name = tempfile.mkstemp(prefix=".profile-binding-", dir=path.parent)
+            temporary.append(Path(name))
+            with os.fdopen(fd, "wb") as stream:
+                if os.name != "nt":
+                    source = path.stat()
+                    os.fchmod(stream.fileno(), stat.S_IMODE(source.st_mode))
+                    os.fchown(stream.fileno(), source.st_uid, source.st_gid)
+                stream.write(encode(value))
+                stream.flush()
+                os.fsync(stream.fileno())
+        require(all(path.read_bytes() == data for path, data in originals.items()), "Registration changed concurrently.")
+        for path, staged in zip(paths, temporary):
+            os.replace(staged, path)
+            replaced.append(path)
+    except Exception:
+        for path in reversed(replaced):
+            path.write_bytes(originals[path])
+        raise
+    finally:
+        for path in temporary:
+            path.unlink(missing_ok=True)
+        lock.unlink(missing_ok=True)
+
+
 def register(home, repo, apply=False):
     home, repo = home.resolve(), repo.resolve()
     require((repo / "AURA.sln").is_file(), "Run from the repository root.")
@@ -72,7 +112,9 @@ def register(home, repo, apply=False):
     original_bytes = registry_path.read_bytes()
     registry_stat = registry_path.stat()
     registry = json.loads(original_bytes.decode("utf-8-sig"))
-    require(registry.get("schemaVersion") == 1 and registry.get("issuer") == "aura-identity-local"
+    issuer = registry.get("issuer")
+    require(registry.get("schemaVersion") == 1 and isinstance(issuer, str)
+            and 0 < len(issuer) <= 128 and not any(c.isspace() for c in issuer)
             and registry.get("algorithm") == "RS256" and registry.get("tokenLifetimeSeconds") == 300,
             "Existing registry does not match the local service-auth contract.")
     clients = registry.get("clients")
@@ -86,18 +128,28 @@ def register(home, repo, apply=False):
         require(len(matches) == 1 and credential_path.is_file(),
                 "Partial Profile registration exists. Preserve files and review before retry.")
         registered, credential = matches[0], read(credential_path)
+        principal = str(uuid.UUID(registered["principalId"]))
+        require(uuid.UUID(principal).int != 0, "Existing Profile principal is empty.")
         for value in (registered, credential):
-            require(value.get("clientId") == CLIENT_ID and value.get("principalId") == PRINCIPAL
-                    and value.get("allowedTargets") == TARGETS, "Existing Profile client metadata differs.")
+            require(value.get("clientId") == CLIENT_ID and value.get("principalId") == principal
+                    and value.get("allowedTargets") in (LEGACY_TARGETS, TARGETS), "Existing Profile client metadata differs.")
+        require(registered["allowedTargets"] == credential["allowedTargets"], "Partial Profile scope upgrade; stop and review.")
         require(verify(credential["clientSecret"], registered["clientSecretHash"]),
                 "Existing Profile credentials do not match the issuer registry.")
+        if registered["allowedTargets"] == LEGACY_TARGETS:
+            if not apply:
+                print("READY: add analysis:binding to existing Profile registration; use --apply. Credentials unchanged.")
+                return
+            add_binding_scope(registry_path, credential_path, registry, credential)
+            print("PASS: Profile analysis:binding added; keys and secrets preserved. Restart Identity to reload.")
+            return
         print("PASS: Existing Profile client verified; keys and credentials were not changed.")
         return
     require(PRINCIPAL not in principals, "Reserved Profile principal ID is already used.")
     require(set(("analysis-api", "identity-api", "billing-api")).issubset(ids),
             "Expected existing service clients are missing.")
     if not apply:
-        print("PASS: Ready to append profile-api / aura-identity / identity:context.")
+        print("PASS: Ready to append profile-api with identity:context and analysis:binding.")
         print("CHECK ONLY: existing keys, registry and credentials were not changed.")
         return
 
@@ -141,7 +193,7 @@ def register(home, repo, apply=False):
                 "Existing keys/credentials changed concurrently; stop to review.")
         require(verify(read(credential_path)["clientSecret"], read(registry_path)["clients"][-1]["clientSecretHash"]),
                 "Published Profile registration failed verification.")
-        print("PASS: Profile client appended with identity:context only.")
+        print("PASS: Profile client appended with identity:context and analysis:binding only.")
         print("PASS: Existing signing keys and three client credential files are byte-for-byte unchanged.")
         print("PASS: Original issuer registry was backed up outside the repository.")
         print("Identity must reload its registry; Profile must load its own new client secret.")

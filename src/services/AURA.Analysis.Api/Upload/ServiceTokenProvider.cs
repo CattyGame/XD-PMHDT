@@ -14,6 +14,10 @@ public interface IServiceTokenProvider
 /// <summary>Uses Analysis's own credentials. Never substitutes a user token or a Development secret.</summary>
 public sealed class ServiceTokenProvider(IHttpClientFactory clients, IConfiguration configuration) : IServiceTokenProvider
 {
+    private readonly SemaphoreSlim refresh = new(1, 1);
+    private readonly Dictionary<(string Audience, string Scope), CachedToken> cached = new();
+    private sealed record CachedToken(string Value, string Credential, DateTimeOffset RefreshAt);
+
     public async Task<string> GetAsync(string audience, string scope, CancellationToken ct, string? correlationId = null)
     {
         ct.ThrowIfCancellationRequested();
@@ -28,6 +32,22 @@ public sealed class ServiceTokenProvider(IHttpClientFactory clients, IConfigurat
         var secret = configuration["ServiceAuth:ClientSecret"];
         if (!allowed || clientId != "analysis-api" || string.IsNullOrWhiteSpace(secret))
             throw UploadFailure.Dependency("Identity");
+        await refresh.WaitAsync(ct);
+        try
+        {
+            if (cached.TryGetValue((audience, scope), out var token) && token.Credential == secret && token.RefreshAt > DateTimeOffset.UtcNow)
+                return token.Value;
+            var (value, lifetime) = await IssueAsync(clientId, secret, audience, scope, ct, correlationId);
+            // Cache only machine credentials; every resource/account decision remains authoritative.
+            cached[(audience, scope)] = new(value, secret, DateTimeOffset.UtcNow.AddSeconds(lifetime - 30));
+            return value;
+        }
+        finally { refresh.Release(); }
+    }
+
+    private async Task<(string Value, int Lifetime)> IssueAsync(string clientId, string secret, string audience, string scope,
+        CancellationToken ct, string? correlationId)
+    {
         try
         {
             using var message = new HttpRequestMessage(HttpMethod.Post, "/internal/v1/identity/service-tokens")
@@ -42,7 +62,7 @@ public sealed class ServiceTokenProvider(IHttpClientFactory clients, IConfigurat
                 || !string.Equals(reply.TokenType, "Bearer", StringComparison.OrdinalIgnoreCase)
                 || reply.ExpiresIn is <= 0 or > 300)
                 throw UploadFailure.Dependency("Identity");
-            return reply.AccessToken!;
+            return (reply.AccessToken!, reply.ExpiresIn);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException

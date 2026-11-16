@@ -30,6 +30,7 @@ internal static class DatabaseChecks
         builder.Options="-c role=aura_profile_app";
         await using var runtime=NpgsqlDataSource.Create(builder.ConnectionString);
         var repository=new ProfileRepository(runtime,authority,bindings);
+        await ParallelAccessChecks.RunAsync(admin,connectionString,owner,clinic,patient);
         var passed=0;
         void Verify(bool condition,string name){if(!condition)throw new InvalidOperationException("DB FAIL: "+name);Console.WriteLine("DB PASS: "+name);passed++;}
 
@@ -80,7 +81,9 @@ internal static class DatabaseChecks
         Verify(!(await repository.AcceptClinicInvitationExplicitAsync(Guid.NewGuid(),second.Result.InvitedEmail,second.Result.MembershipId,second.Result.InvitationToken!)).Succeeded,"Expired invitation denied");
         var reissued=await repository.InviteClinicMemberAsync(clinic,second.Result.InvitedEmail!,"STAFF");
         Verify(reissued.Result!.InvitationToken!=second.Result.InvitationToken && !(await repository.AcceptClinicInvitationExplicitAsync(Guid.NewGuid(),second.Result.InvitedEmail,second.Result.MembershipId,second.Result.InvitationToken!)).Succeeded,"Reinvite rotates hash and invalidates old token");
-        await HttpChecks.RunAsync(repository,owner,stranger,clinic);
+        await HttpChecks.RunAsync(repository,owner,stranger,clinic,staff,patient);
+        await ConcurrencyChecks.RunAsync(admin,connectionString,clinic,owner,Guid.NewGuid());
+        await IdentityConnectionChecks.RunAsync(admin,connectionString);
         Console.WriteLine($"Profile PostgreSQL security: {passed}/{passed} PASS under aura_profile_app; Identity/Analysis authority boundaries are explicit test doubles.");
     }
     private sealed class Accounts(Dictionary<Guid,AccountAuthoritySnapshot> rows):IAccountAuthority

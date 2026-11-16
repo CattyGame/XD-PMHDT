@@ -9,6 +9,27 @@ namespace AURA.Analysis.Api.Tests;
 
 public class ServiceTokenProviderTests
 {
+    [Fact]
+    public async Task Concurrent_requests_reuse_only_the_same_target_service_token()
+    {
+        var (provider, handler, _) = Make();
+        await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => provider.GetAsync("aura-profile", "profile:resolve", default)));
+        Assert.Equal(1, handler.Calls);
+        await provider.GetAsync("aura-identity", "identity:context", default);
+        Assert.Equal(2, handler.Calls);
+    }
+
+    [Fact]
+    public async Task Token_inside_refresh_window_is_not_reused_when_issuer_fails()
+    {
+        var (provider, handler, _) = Make();
+        handler.Reply = (_, _, _) => Task.FromResult(ServiceReplyHandler.Json(
+            """{"accessToken":"short-lived","tokenType":"Bearer","expiresIn":1}"""));
+        Assert.Equal("short-lived", await provider.GetAsync("aura-profile", "profile:resolve", default));
+        handler.Reply = (_, _, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        await Assert.ThrowsAsync<UploadFailure>(() => provider.GetAsync("aura-profile", "profile:resolve", default));
+        Assert.Equal(2, handler.Calls);
+    }
     private static (ServiceTokenProvider Provider, ServiceReplyHandler Handler, ServiceHttpFactory Factory) Make(
         string? clientId = "analysis-api", string? secret = "fixture-only-secret")
     {

@@ -17,6 +17,8 @@ import ClinicUploadPage from '../pages/ClinicUploadPage'
 import DoctorWorkspacePage from '../pages/doctor/DoctorWorkspacePage'
 import ClinicMemberPage from '../pages/ClinicMemberPage'
 import ClinicPatientPage from '../pages/ClinicPatientPage'
+import PatientHistoryPage from '../pages/PatientHistoryPage'
+import ClinicInvitationPage from '../pages/ClinicInvitationPage'
 import BillingOrderPage from '../pages/BillingOrderPage'
 import BillingPage from '../pages/billing/BillingPage'
 import PaymentPage from '../pages/billing/PaymentPage'
@@ -47,6 +49,8 @@ export default function ApplicationRoutes() {
       <Route path="/clinic-upload" element={<ProtectedRoute><ClinicUploadPage /></ProtectedRoute>} />
       <Route path="/clinics/members" element={<ProtectedRoute><ClinicMemberPage /></ProtectedRoute>} />
       <Route path="/clinics/patients" element={<ProtectedRoute><ClinicPatientPage /></ProtectedRoute>} />
+      <Route path="/clinics/patients/:patientId/history" element={<ProtectedRoute><PatientHistoryPage /></ProtectedRoute>} />
+      <Route path="/clinics/invitations/:membershipId?" element={<ProtectedRoute><ClinicInvitationPage /></ProtectedRoute>} />
       <Route path="/batches" element={<ProtectedRoute><BatchProgressPage /></ProtectedRoute>} />
       <Route path="/batches/:batchId" element={<ProtectedRoute><BatchProgressPage /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute><SessionHomePage /></ProtectedRoute>} />

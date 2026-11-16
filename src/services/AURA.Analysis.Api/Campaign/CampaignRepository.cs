@@ -182,12 +182,15 @@ public sealed class CampaignRepository(NpgsqlDataSource dataSource) : ICampaignR
     public async Task LinkBatchAsync(Guid tenantId, Guid campaignId, Guid batchId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        await using var connection = await dataSource.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
 
         // 1. Kiểm tra campaign
-        await using var campCmd = dataSource.CreateCommand("""
+        // Status updates must wait until this admission has committed.
+        await using var campCmd = new NpgsqlCommand("""
             SELECT id, status FROM analysis.campaigns
-            WHERE tenant_id = $1 AND id = $2;
-            """);
+            WHERE tenant_id = $1 AND id = $2 FOR UPDATE;
+            """, connection, transaction);
         campCmd.Parameters.AddWithValue(tenantId);
         campCmd.Parameters.AddWithValue(campaignId);
 
@@ -205,10 +208,10 @@ public sealed class CampaignRepository(NpgsqlDataSource dataSource) : ICampaignR
         }
 
         // 2. Kiểm tra batch
-        await using var batchCmd = dataSource.CreateCommand("""
+        await using var batchCmd = new NpgsqlCommand("""
             SELECT id FROM analysis.batches
             WHERE tenant_id = $1 AND id = $2;
-            """);
+            """, connection, transaction);
         batchCmd.Parameters.AddWithValue(tenantId);
         batchCmd.Parameters.AddWithValue(batchId);
 
@@ -219,16 +222,18 @@ public sealed class CampaignRepository(NpgsqlDataSource dataSource) : ICampaignR
         }
 
         // 3. Cập nhật liên kết
-        await using var linkCmd = dataSource.CreateCommand("""
+        await using var linkCmd = new NpgsqlCommand("""
             UPDATE analysis.batches
             SET campaign_id = $3, updated_at = now()
             WHERE tenant_id = $1 AND id = $2;
-            """);
+            """, connection, transaction);
         linkCmd.Parameters.AddWithValue(tenantId);
         linkCmd.Parameters.AddWithValue(batchId);
         linkCmd.Parameters.AddWithValue(campaignId);
 
-        await linkCmd.ExecuteNonQueryAsync(ct);
+        if (await linkCmd.ExecuteNonQueryAsync(ct) != 1)
+            throw new UploadFailure(404, "ERR_NOT_FOUND", "Không tìm thấy batch ảnh trong phòng khám này.");
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<CampaignSummaryResponse> GetCampaignSummaryAsync(Guid tenantId, Guid campaignId, CancellationToken ct)

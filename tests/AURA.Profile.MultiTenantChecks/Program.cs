@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using AURA.Profile.Api;
 using AURA.Profile.Api.Models;
@@ -701,9 +700,8 @@ Check("TC-AC3.6: Phân loại Bệnh nhân Bất biến: Bệnh nhân PERSONAL k
         throw new Exception("Không được phép tự ý thay đổi patient_type giữa PERSONAL và CLINIC_MANAGED.");
 });
 
-Check("TC-AC3.7: Phân giải Quyền theo Analysis ID cho M2 (SLA < 5ms): ResolveAccessAsync với analysisId trả về quyết định chuẩn xác", () =>
+Check("TC-AC3.7: DTO shape for Analysis ID (not ResolveAccessAsync or an HTTP latency benchmark)", () =>
 {
-    var sw = Stopwatch.StartNew();
 
     var request = new AccessResolveRequest(
         ActorAccountId: doctor1,
@@ -728,12 +726,9 @@ Check("TC-AC3.7: Phân giải Quyền theo Analysis ID cho M2 (SLA < 5ms): Resol
         Reason: (hasActiveAssignment && isClinicActive) ? "OK" : "NO_ACTIVE_ASSIGNMENT"
     );
 
-    sw.Stop();
 
     if (!response.Allowed || response.Reason != "OK")
         throw new Exception("Quyền truy cập ca phân tích của Bác sĩ được phân công phải được duyệt.");
-    if (sw.ElapsedMilliseconds > 5)
-        throw new Exception($"SLA phân giải quyền vượt quá 5ms (thực tế: {sw.ElapsedMilliseconds}ms).");
 });
 
 // -----------------------------------------------------------------------------
@@ -743,6 +738,7 @@ Console.WriteLine("=============================================================
 Console.WriteLine($"Model checks: {passed}/38 PASS; not HTTP/DB security acceptance.");
 Console.WriteLine("====================================================================");
 
+await AuthorityChecks.RunAsync();
 if(args.Contains("--database"))
 {
     var connection=Environment.GetEnvironmentVariable("AURA_TEST_POSTGRES") ?? throw new InvalidOperationException("AURA_TEST_POSTGRES is required for isolated database checks.");

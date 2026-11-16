@@ -16,7 +16,21 @@ def main():
                  "notification-openapi.yaml", "internal-analysis-openapi.yaml"):
         document, base = read_from_filename(str(ROOT / "contracts" / name))
         validate(document, base_uri=base)
+        schemes = set(document.get("components", {}).get("securitySchemes", {}))
+        for operations in document.get("paths", {}).values():
+            for method, operation in operations.items():
+                if method not in ("get", "post", "put", "patch", "delete", "head", "options", "trace"):
+                    continue
+                for requirement in operation.get("security", document.get("security", [])):
+                    if not set(requirement) <= schemes:
+                        raise ValueError(f"{name}: undefined security scheme on {method}")
     validators = {}
+    profile, _ = read_from_filename(str(ROOT / "contracts/profile-openapi.yaml"))
+    membership = profile["components"]["schemas"]["ClinicMembershipDto"]["properties"]
+    assert set(membership["status"]["enum"]) == {"INVITED", "ACTIVE", "REVOKED"}
+    assert "invitedEmail" in membership and "invitationToken" in membership
+    invite = profile["paths"]["/api/v1/clinics/{clinicId}/memberships/invite"]["post"]["description"]
+    assert "72" in invite and "tự động kích hoạt" not in invite
     for version in ("0.7", "0.8"):
         schema = json.loads((ROOT / "contracts" / f"analysis-events-{version}.schema.json").read_text(encoding="utf-8-sig"))
         Draft202012Validator.check_schema(schema)

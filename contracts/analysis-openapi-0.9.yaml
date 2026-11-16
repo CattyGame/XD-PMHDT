@@ -21,6 +21,96 @@ tags:
 security:
 - bearerAuth: []
 paths:
+  /api/v1/analyses/patients/{patientId}/history:
+    get:
+      summary: Lịch sử phân tích theo bệnh nhân trong clinic
+      operationId: getPatientHistory
+      tags:
+      - Analyses
+      security:
+      - bearerAuth: []
+      description: Clinic context is resolved authoritatively. Staff and case-only assignments
+        cannot list longitudinal patient history. Cursor is scoped to the same tenant,
+        clinic and patient. No clinical result is inferred from a processing status.
+      parameters:
+      - in: path
+        name: patientId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: clinicContextId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: beforeId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      responses:
+        '200':
+          description: Newest first, keyset page. Explicit null nextBeforeId ends pagination.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - patientId
+                - items
+                - nextBeforeId
+                properties:
+                  patientId:
+                    type: string
+                    format: uuid
+                  nextBeforeId:
+                    type: string
+                    format: uuid
+                    nullable: true
+                  items:
+                    type: array
+                    maxItems: 100
+                    items:
+                      type: object
+                      required:
+                      - analysisId
+                      - batchId
+                      - processingStatus
+                      - reviewStatus
+                      - createdAt
+                      properties:
+                        analysisId:
+                          type: string
+                          format: uuid
+                        batchId:
+                          type: string
+                          format: uuid
+                        processingStatus:
+                          type: string
+                        reviewStatus:
+                          type: string
+                        createdAt:
+                          type: string
+                          format: date-time
+        '400':
+          description: Missing or invalid selectors/page
+        '401':
+          description: User authentication required
+        '404':
+          description: Patient not found or authority denied
+        '503':
+          description: Authoritative dependency unavailable
   /api/v1/analyses:
     post:
       tags:

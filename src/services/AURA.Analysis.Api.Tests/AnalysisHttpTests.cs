@@ -19,6 +19,38 @@ namespace AURA.Analysis.Api.Tests;
 
 public sealed class AnalysisHttpTests
 {
+    [Fact]
+    public async Task Patient_history_requires_bearer_before_reading_any_history()
+    {
+        await using var r=await Rig.Start();
+        r.Client.DefaultRequestHeaders.Authorization=null;
+        using var response=await r.Client.GetAsync($"/api/v1/analyses/patients/{Guid.NewGuid()}/history?clinicContextId={Guid.NewGuid()}");
+        await Code(response,401,"ERR_UNAUTHORIZED");
+    }
+    [Fact]
+    public async Task Patient_history_requires_explicit_clinic_selector()
+    {
+        await using var r=await Rig.Start();
+        using var response=await r.Client.GetAsync($"/api/v1/analyses/patients/{Guid.NewGuid()}/history");
+        await Code(response,400,"ERR_VALIDATION");
+    }
+    [Fact]
+    public async Task Patient_history_returns_no_store_page_and_rechecks_revocation_on_next_request()
+    {
+        await using var r=await Rig.Start();var patient=Guid.NewGuid();
+        var url=$"/api/v1/analyses/patients/{patient}/history?clinicContextId={r.Identity.Account}";
+        using(var response=await r.Client.GetAsync(url))
+        {
+            Assert.Equal(HttpStatusCode.OK,response.StatusCode);
+            Assert.Equal("no-store",response.Headers.CacheControl!.ToString());
+            var value=await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(patient,value.GetProperty("patientId").GetGuid());
+            Assert.Equal(JsonValueKind.Null,value.GetProperty("nextBeforeId").ValueKind);
+        }
+        r.Access.Allowed=false;
+        using var denied=await r.Client.GetAsync(url);await Code(denied,404,"ERR_NOT_FOUND");
+        Assert.Equal(1,r.History.Reads);
+    }
     private sealed class Identity : IAnalysisUserIdentityResolver
     {
         public readonly Guid Account=Guid.NewGuid();public string[] Roles=["PATIENT"];public long? LastLength;
@@ -49,6 +81,7 @@ public sealed class AnalysisHttpTests
     {
         public readonly Identity Identity=new();public readonly Upload Upload=new();public readonly FakeAccess Access=new();
         public readonly FakeFileRepo Files=new();public readonly FakeStorage Storage=new();public readonly Batch Batch=new();
+        public readonly HistoryRepository History=new();
         public WebApplication App=null!;public HttpClient Client=null!;
         public static async Task<Rig> Start(long imageLimit=10485760,int images=100,long total=1101004800,NpgsqlDataSource? itemDatabase=null)
         {
@@ -58,6 +91,7 @@ public sealed class AnalysisHttpTests
             b.Services.AddSingleton(new AnalysisUploadGate(1));b.Services.AddSingleton(new StorageOptions());
             b.Services.AddSingleton<IPatientAccessResolver>(r.Access);b.Services.AddSingleton<IFileAccessRepository>(r.Files);b.Services.AddSingleton<IPrivateFileStorage>(r.Storage);
             b.Services.AddSingleton<IBatchStatusRepository>(r.Batch);b.Services.AddTransient<BatchStatusService>();b.Services.AddTransient<FileAccessService>();
+            b.Services.AddSingleton<IPatientHistoryRepository>(r.History);b.Services.AddTransient<PatientHistoryService>();
             if(itemDatabase is not null)
             {b.Services.AddSingleton(itemDatabase);b.Services.AddSingleton(TimeProvider.System);b.Services.AddTransient<ItemUploadService>();}
             r.App=b.Build();r.App.MapAnalysisEndpoints();await r.App.StartAsync();r.Client=r.App.GetTestClient();r.Client.DefaultRequestHeaders.Authorization=new("Bearer","fixture-user");
@@ -70,6 +104,12 @@ public sealed class AnalysisHttpTests
             var image=new ByteArrayContent(new byte[bytes]);image.Headers.ContentType=new("image/png");form.Add(image,"images","synthetic.png");
             var request=new HttpRequestMessage(HttpMethod.Post,path){Content=form};request.Headers.Add("Idempotency-Key",Guid.NewGuid().ToString());return request;
         }
+    }
+    private sealed class HistoryRepository : IPatientHistoryRepository
+    {
+        public int Reads;
+        public Task<IReadOnlyList<PatientHistoryItem>> ListAsync(Guid tenant,Guid clinic,Guid patient,int limit,Guid? before,CancellationToken ct)
+        {Reads++;return Task.FromResult<IReadOnlyList<PatientHistoryItem>>([]);}
     }
     private static async Task Code(HttpResponseMessage response,int status,string code)
     {

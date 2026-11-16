@@ -56,6 +56,35 @@ export type ClinicPatient = Readonly<{
   updatedAt: string
 }>
 
+export type PatientHistoryItem = Readonly<{
+  analysisId: string; batchId: string; processingStatus: string; reviewStatus: string; createdAt: string
+}>
+export type PatientHistory = Readonly<{
+  patientId: string; items: readonly PatientHistoryItem[]; nextBeforeId: string | null
+}>
+
+export async function getPatientHistory(context: BackendContext, clinicId: string, patientId: string,
+  beforeId?: string, signal?: AbortSignal): Promise<PatientHistory> {
+  if (![clinicId, patientId, ...(beforeId ? [beforeId] : [])].every(validBatchId))
+    throw new AnalysisResultError(400, 'ERR_INVALID_ID')
+  const query = new URLSearchParams({ clinicContextId: clinicId, limit: '20' })
+  if (beforeId) query.set('beforeId', beforeId)
+  const response = await authorizedApiResponse(`/api/v1/analyses/patients/${patientId}/history?${query}`, context, signal)
+  const value: unknown = await response.json().catch(() => null)
+  if (!isRecord(value) || value.patientId !== patientId || !Array.isArray(value.items) || value.items.length > 20 ||
+    !(value.nextBeforeId === null || typeof value.nextBeforeId === 'string' && validBatchId(value.nextBeforeId))) invalidResponse()
+  const items = value.items.map((item): PatientHistoryItem => {
+    if (!isRecord(item) || typeof item.analysisId !== 'string' || !validBatchId(item.analysisId) ||
+      typeof item.batchId !== 'string' || !validBatchId(item.batchId) || typeof item.processingStatus !== 'string' ||
+      !item.processingStatus || typeof item.reviewStatus !== 'string' || !item.reviewStatus ||
+      typeof item.createdAt !== 'string' || !Number.isFinite(Date.parse(item.createdAt))) invalidResponse()
+    return { analysisId: item.analysisId, batchId: item.batchId, processingStatus: item.processingStatus,
+      reviewStatus: item.reviewStatus, createdAt: item.createdAt }
+  })
+  if (value.nextBeforeId !== null && (items.length === 0 || value.nextBeforeId !== items[items.length - 1].analysisId)) invalidResponse()
+  return { patientId, items, nextBeforeId: value.nextBeforeId }
+}
+
 export type RegisterClinicPatientInput = Readonly<{
   fullName: string
   dateOfBirth?: string | null
@@ -165,18 +194,18 @@ export async function inviteClinicMember(
   if (
     !isRecord(payload) ||
     typeof payload.membershipId !== 'string' ||
-    typeof payload.email !== 'string' ||
+    typeof payload.invitedEmail !== 'string' ||
     typeof payload.role !== 'string' ||
-    typeof payload.token !== 'string'
+    typeof payload.invitationToken !== 'string'
   ) {
     invalidResponse()
   }
 
   return {
     membershipId: payload.membershipId,
-    email: payload.email,
+    email: payload.invitedEmail,
     role: payload.role,
-    token: payload.token,
+    token: payload.invitationToken,
     expiresAt: String(payload.expiresAt ?? ''),
   }
 }

@@ -911,6 +911,13 @@ public partial class ProfileRepository
         Guid clinicId, Guid targetAccountId, CancellationToken cancellationToken = default)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        // Serialize admin-count changes per clinic, including concurrent cross-revocations.
+        await using (var clinicLock = new NpgsqlCommand("SELECT clinic_id FROM profile.clinics WHERE clinic_id=$1 FOR UPDATE", connection, transaction))
+        {
+            clinicLock.Parameters.AddWithValue(clinicId);
+            await clinicLock.ExecuteScalarAsync(cancellationToken);
+        }
 
         const string checkSql = @"
             SELECT role FROM profile.memberships
@@ -918,7 +925,7 @@ public partial class ProfileRepository
             LIMIT 1;";
 
         string role;
-        await using (var checkCmd = new NpgsqlCommand(checkSql, connection))
+        await using (var checkCmd = new NpgsqlCommand(checkSql, connection, transaction))
         {
             checkCmd.Parameters.AddWithValue(clinicId);
             checkCmd.Parameters.AddWithValue(targetAccountId);
@@ -936,7 +943,7 @@ public partial class ProfileRepository
                 SELECT COUNT(*) FROM profile.memberships
                 WHERE clinic_id = $1 AND role = 'CLINIC_ADMIN' AND status = 'ACTIVE';";
 
-            await using var countCmd = new NpgsqlCommand(countAdminSql, connection);
+            await using var countCmd = new NpgsqlCommand(countAdminSql, connection, transaction);
             countCmd.Parameters.AddWithValue(clinicId);
             var count = Convert.ToInt64(await countCmd.ExecuteScalarAsync(cancellationToken));
             if (count <= 1)
@@ -950,13 +957,14 @@ public partial class ProfileRepository
             SET status = 'REVOKED', updated_at = NOW()
             WHERE clinic_id = $1 AND account_id = $2 AND status = 'ACTIVE';";
 
-        await using (var revokeCmd = new NpgsqlCommand(revokeSql, connection))
+        await using (var revokeCmd = new NpgsqlCommand(revokeSql, connection, transaction))
         {
             revokeCmd.Parameters.AddWithValue(clinicId);
             revokeCmd.Parameters.AddWithValue(targetAccountId);
             var rowsAffected = await revokeCmd.ExecuteNonQueryAsync(cancellationToken);
             if (rowsAffected > 0)
             {
+                await transaction.CommitAsync(cancellationToken);
                 return (true, null, null);
             }
         }

@@ -7,6 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../../src/services/AURA.Identity.Api/IdentityRepository.cs" Link="IdentityRepository.cs" />
+    <Compile Include="../../src/services/AURA.Identity.Api/Models/IdentityModels.cs" Link="IdentityModels.cs" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
 
@@ -21,5 +23,6 @@
     <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.12" />
     <Compile Include="../../src/services/AURA.Profile.Api/UserIdentityResolver.cs" Link="UserIdentityResolver.cs" />
     <Compile Include="../../src/services/AURA.Profile.Api/ProfilePublicMembershipEndpoints.cs" Link="ProfilePublicMembershipEndpoints.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/ProfilePatientEndpoints.cs" Link="ProfilePatientEndpoints.cs" />
   </ItemGroup>
 </Project>
