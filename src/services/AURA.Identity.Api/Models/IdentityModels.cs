@@ -48,3 +48,59 @@ public sealed record ProvisionProfileRequest(
     [property: JsonPropertyName("displayName")] string DisplayName,
     [property: JsonPropertyName("email")] string? Email
 );
+
+public static class AllowedAccountStatuses
+{
+    public const string Active = "ACTIVE";
+    public const string Disabled = "DISABLED";
+
+    public static readonly HashSet<string> All = new(StringComparer.Ordinal)
+    {
+        Active,
+        Disabled
+    };
+}
+
+public static class AllowedGlobalRoles
+{
+    public const string Patient = "PATIENT";
+    public const string Doctor = "DOCTOR";
+    public const string SystemAdmin = "SYSTEM_ADMIN";
+
+    public static readonly HashSet<string> All = new(StringComparer.Ordinal)
+    {
+        Patient,
+        Doctor,
+        SystemAdmin
+    };
+}
+
+public sealed record AdminAccountDto(
+    [property: JsonPropertyName("accountId")] Guid AccountId,
+    [property: JsonPropertyName("firebaseUid")] string FirebaseUid,
+    [property: JsonPropertyName("displayName")] string DisplayName,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("accountStatus")] string AccountStatus,
+    [property: JsonPropertyName("roles")] IReadOnlyList<string> Roles,
+    [property: JsonPropertyName("version")] int Version,
+    [property: JsonPropertyName("profileProvisioningStatus")] string ProfileProvisioningStatus,
+    [property: JsonPropertyName("createdAt")] DateTimeOffset CreatedAt,
+    [property: JsonPropertyName("updatedAt")] DateTimeOffset UpdatedAt
+);
+
+public sealed record AdminAccountPageResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<AdminAccountDto> Items,
+    [property: JsonPropertyName("nextCursor")] string? NextCursor
+);
+
+public sealed record UpdateAccountStatusRequest(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("expectedVersion")] int ExpectedVersion,
+    [property: JsonPropertyName("reason")] string Reason
+);
+
+public sealed record UpdateAccountRolesRequest(
+    [property: JsonPropertyName("roles")] IReadOnlyList<string> Roles,
+    [property: JsonPropertyName("expectedVersion")] int ExpectedVersion,
+    [property: JsonPropertyName("reason")] string Reason
+);
