@@ -325,12 +325,54 @@ public static class ConsultationActions
     public const string Join = "CONSULTATION_JOIN";
     public const string Read = "CONSULTATION_READ";
     public const string Send = "CONSULTATION_SEND";
+    public const string ChatParticipate = "CHAT_PARTICIPATE";
 
     public static readonly HashSet<string> All = new(StringComparer.OrdinalIgnoreCase)
     {
-        Doctors, Create, Join, Read, Send
+        Doctors, Create, Join, Read, Send, ChatParticipate
     };
 }
+
+public static class CanonicalOperations
+{
+    public const string AnalyticsRead = "ANALYTICS_READ";
+    public const string ResearchExport = "RESEARCH_EXPORT";
+    public const string ChatParticipate = "CHAT_PARTICIPATE";
+
+    public static readonly HashSet<string> All = new(StringComparer.Ordinal)
+    {
+        AnalyticsRead,
+        ResearchExport,
+        ChatParticipate
+    };
+}
+
+public sealed record OperationAuthorityRequest(
+    [property: JsonPropertyName("actorAccountId")] Guid ActorAccountId,
+    [property: JsonPropertyName("operation")] string Operation,
+    [property: JsonPropertyName("resourceScope")] string? ResourceScope = null,
+    [property: JsonPropertyName("clinicId")] Guid? ClinicId = null,
+    [property: JsonPropertyName("patientId")] Guid? PatientId = null,
+    [property: JsonPropertyName("analysisId")] Guid? AnalysisId = null,
+    [property: JsonPropertyName("doctorAccountId")] Guid? DoctorAccountId = null,
+    [property: JsonPropertyName("purpose")] string? Purpose = null,
+    [property: JsonPropertyName("includeMasks")] bool IncludeMasks = false,
+    [property: JsonPropertyName("masksConsentGranted")] bool MasksConsentGranted = false
+);
+
+public sealed record OperationAuthorityResponse(
+    [property: JsonPropertyName("permissionVersion")] int PermissionVersion,
+    [property: JsonPropertyName("allowed")] bool Allowed,
+    [property: JsonPropertyName("revoked")] bool Revoked,
+    [property: JsonPropertyName("code")] string? Code,
+    [property: JsonPropertyName("reason")] string? Reason,
+    [property: JsonPropertyName("tenantId")] Guid? TenantId,
+    [property: JsonPropertyName("clinicId")] Guid? ClinicId,
+    [property: JsonPropertyName("patientId")] Guid? PatientId,
+    [property: JsonPropertyName("participantRole")] string? ParticipantRole,
+    [property: JsonPropertyName("authorizedPatientIds")] IReadOnlyList<Guid>? AuthorizedPatientIds,
+    [property: JsonPropertyName("includeMasksAllowed")] bool IncludeMasksAllowed
+);
 
 public sealed record ConsultationDoctorDto(
     [property: JsonPropertyName("accountId")] Guid AccountId,

@@ -1,10 +1,16 @@
 using AURA.Identity.Api;
+using AURA.Identity.Api.Models;
 using Npgsql;
 
 internal static class IdentityConnectionChecks
 {
     public static async Task RunAsync(NpgsqlDataSource admin,string connectionString)
     {
+        if (AllowedGlobalRoles.All.Count != 3
+            || !AllowedGlobalRoles.All.SetEquals(new[] { "PATIENT", "DOCTOR", "SYSTEM_ADMIN" }))
+        {
+            throw new Exception("Global Identity roles must strictly be PATIENT, DOCTOR, SYSTEM_ADMIN.");
+        }
         var id=Guid.NewGuid();var uid="m6-pool-"+id.ToString("N");
         async Task Sql(string text, params object[] values)
         {
@@ -49,6 +55,10 @@ internal static class IdentityConnectionChecks
         var doctorRoleBypass = await repository.UpdateAccountRolesAdminAsync(adminActor, secondAdmin, new[] { "PATIENT", "DOCTOR", "SYSTEM_ADMIN" }, 1, "Bypass doctor capability");
         if (doctorRoleBypass.Success || doctorRoleBypass.HttpStatus != 400 || doctorRoleBypass.ErrorCode != "ERR_DOCTOR_CAPABILITY_SEPARATED")
             throw new Exception("DOCTOR role changes must be rejected via general PATCH /roles.");
+
+        var clinicRoleInGlobal = await repository.UpdateAccountRolesAdminAsync(adminActor, secondAdmin, new[] { "CLINIC_ADMIN" }, 1, "Attempt clinic role in global roles");
+        if (clinicRoleInGlobal.Success || clinicRoleInGlobal.HttpStatus != 400 || clinicRoleInGlobal.ErrorCode != "ERR_INVALID_ROLE")
+            throw new Exception("Clinic-scoped roles like CLINIC_ADMIN must be rejected in global Identity roles.");
 
         var staleStatus = await repository.UpdateAccountStatusAdminAsync(adminActor, secondAdmin, "DISABLED", 99, "Stale version");
         if (staleStatus.Success || staleStatus.HttpStatus != 409 || staleStatus.ErrorCode != "ERR_VERSION_CONFLICT")

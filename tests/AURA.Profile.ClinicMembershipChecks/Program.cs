@@ -427,6 +427,18 @@ Check("W6-M6-01.5: AuditEventDto băm định danh tài nguyên bằng SHA-256 v
         throw new Exception("AuditEventDto không khớp định dạng chuẩn.");
 });
 
+Check("W6-M6-01.6: CanonicalOperations chỉ chuẩn hóa ANALYTICS_READ, RESEARCH_EXPORT, CHAT_PARTICIPATE (từ chối op lạ)", () =>
+{
+    if (CanonicalOperations.All.Count != 3
+        || !CanonicalOperations.All.Contains(CanonicalOperations.AnalyticsRead)
+        || !CanonicalOperations.All.Contains(CanonicalOperations.ResearchExport)
+        || !CanonicalOperations.All.Contains(CanonicalOperations.ChatParticipate)
+        || CanonicalOperations.All.Contains("DEMO_WILDCARD_EXPORT"))
+    {
+        throw new Exception("CanonicalOperations không khớp chuẩn W6-M6-01.");
+    }
+});
+
 // -----------------------------------------------------------------------------
 // NHÓM 4: KIỂM THỬ TÍCH HỢP POSTGRESQL (Nếu có cờ --database)
 // -----------------------------------------------------------------------------

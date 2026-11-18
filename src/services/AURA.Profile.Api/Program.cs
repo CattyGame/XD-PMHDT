@@ -314,16 +314,11 @@ app.MapPost("/internal/v1/profile/camera-delegation/resolve", async (
 .WithName("ResolveCameraDelegation")
 .WithTags("Internal");
 
-// 5b. POST /internal/v1/profile/consultation-access/resolve (Bảo vệ bằng Service JWT: scope profile:resolve)
-app.MapPost("/internal/v1/profile/consultation-access/resolve", async Task<IResult> (
+static async Task<IResult?> AuthorizeProfileResolveServiceAsync(
     HttpRequest request,
-    ConsultationAccessResolveRequest body,
-    ProfileRepository repository,
     ServiceTokenValidator tokenValidator,
-    CancellationToken ct) =>
+    string correlationId)
 {
-    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
-
     var authHeader = request.Headers.Authorization.FirstOrDefault();
     if (string.IsNullOrWhiteSpace(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
     {
@@ -342,6 +337,24 @@ app.MapPost("/internal/v1/profile/consultation-access/resolve", async Task<IResu
             statusCode: statusCode);
     }
 
+    return null;
+}
+
+// 5b. POST /internal/v1/profile/consultation-access/resolve (Bảo vệ bằng Service JWT: scope profile:resolve)
+app.MapPost("/internal/v1/profile/consultation-access/resolve", async Task<IResult> (
+    HttpRequest request,
+    ConsultationAccessResolveRequest body,
+    ProfileRepository repository,
+    ServiceTokenValidator tokenValidator,
+    CancellationToken ct) =>
+{
+    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
+    var authFailure = await AuthorizeProfileResolveServiceAsync(request, tokenValidator, correlationId);
+    if (authFailure is not null)
+    {
+        return authFailure;
+    }
+
     try
     {
         var response = await repository.ResolveConsultationAccessAsync(body, ct);
@@ -356,6 +369,37 @@ app.MapPost("/internal/v1/profile/consultation-access/resolve", async Task<IResu
     }
 })
 .WithName("ResolveConsultationAccess")
+.WithTags("Internal");
+
+// 5c. POST /internal/v1/profile/operations/resolve (Chuẩn hóa ANALYTICS_READ, RESEARCH_EXPORT, CHAT_PARTICIPATE; scope profile:resolve)
+app.MapPost("/internal/v1/profile/operations/resolve", async Task<IResult> (
+    HttpRequest request,
+    OperationAuthorityRequest body,
+    ProfileRepository repository,
+    ServiceTokenValidator tokenValidator,
+    CancellationToken ct) =>
+{
+    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
+    var authFailure = await AuthorizeProfileResolveServiceAsync(request, tokenValidator, correlationId);
+    if (authFailure is not null)
+    {
+        return authFailure;
+    }
+
+    try
+    {
+        var response = await repository.ResolveOperationAuthorityAsync(body, ct);
+        return Results.Ok(response);
+    }
+    catch (Exception e) when (e is HttpRequestException or IOException or System.Text.Json.JsonException or TimeoutException
+        || (e is OperationCanceledException && !ct.IsCancellationRequested))
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_DEPENDENCY_UNAVAILABLE", "Dịch vụ xác minh thẩm quyền nghiệp vụ tạm thời không khả dụng.", correlationId, true)),
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+})
+.WithName("ResolveCanonicalOperationAuthority")
 .WithTags("Internal");
 
 // --- CLINIC LIFECYCLE & MEMBERSHIP ENDPOINTS (Task W4-M6-01 / SCRUM-358) ---
@@ -402,6 +446,7 @@ app.MapGet("/api/v1/admin/clinics", async (
     string? cursor = null,
     string? status = null) =>
 {
+    request.HttpContext.Response.Headers.CacheControl = "no-store";
     var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
     var identity = await identityResolver.ResolveAsync(request, ct);
     if (!identity.Succeeded)
@@ -416,6 +461,13 @@ app.MapGet("/api/v1/admin/clinics", async (
         return Results.Json(
             new ErrorEnvelope(new ErrorDetails("ERR_FORBIDDEN", "Chỉ Quản trị viên hệ thống mới có quyền xem danh sách phòng khám.", correlationId, false)),
             statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    if (limit is < 1 or > 100)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số limit phải nằm trong khoảng 1..100.", correlationId, false)),
+            statusCode: StatusCodes.Status400BadRequest);
     }
 
     Guid? cursorClinicId = null;
@@ -447,6 +499,7 @@ app.MapGet("/api/v1/admin/audit-events", async (
     int limit = 20,
     string? cursor = null) =>
 {
+    request.HttpContext.Response.Headers.CacheControl = "no-store";
     var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
     var identity = await identityResolver.ResolveAsync(request, ct);
     if (!identity.Succeeded)
@@ -461,6 +514,13 @@ app.MapGet("/api/v1/admin/audit-events", async (
         return Results.Json(
             new ErrorEnvelope(new ErrorDetails("ERR_FORBIDDEN", "Chỉ Quản trị viên hệ thống mới có quyền xem nhật ký kiểm toán.", correlationId, false)),
             statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    if (limit is < 1 or > 100)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số limit phải nằm trong khoảng 1..100.", correlationId, false)),
+            statusCode: StatusCodes.Status400BadRequest);
     }
 
     var toTime = DateTimeOffset.UtcNow;

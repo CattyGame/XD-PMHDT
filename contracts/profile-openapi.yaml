@@ -1118,6 +1118,39 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '403':
           $ref: '#/components/responses/403Forbidden'
+  /internal/v1/profile/operations/resolve:
+    post:
+      summary: Resolve canonical versioned operations (ANALYTICS_READ, RESEARCH_EXPORT, CHAT_PARTICIPATE)
+      description: Service JWT profile:resolve; enforces canonical role namespaces,
+        active clinic/membership/assignment checks, anti-wildcard SYSTEM_ADMIN guard, and fail-closed unknown operation denial.
+      operationId: resolveCanonicalOperationAuthority
+      tags:
+      - Profile Internal
+      security:
+      - ServiceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OperationAuthorityRequest'
+      responses:
+        '200':
+          description: Versioned operation authority decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationAuthorityResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '503':
+          description: Authority or upstream dependency unavailable; fail closed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/v1/admin/clinics:
     get:
       summary: Danh sách phòng khám toàn hệ thống cho SYSTEM_ADMIN
@@ -1132,6 +1165,8 @@ paths:
         required: false
         schema:
           type: integer
+          minimum: 1
+          maximum: 100
           default: 20
       - name: cursor
         in: query
@@ -1182,6 +1217,8 @@ paths:
         required: false
         schema:
           type: integer
+          minimum: 1
+          maximum: 100
           default: 20
       - name: cursor
         in: query
@@ -1940,6 +1977,7 @@ components:
           - CONSULTATION_JOIN
           - CONSULTATION_READ
           - CONSULTATION_SEND
+          - CHAT_PARTICIPATE
         doctorAccountId:
           type: string
           format: uuid
@@ -2003,6 +2041,96 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ConsultationDoctorDto'
+    OperationAuthorityRequest:
+      type: object
+      required:
+      - actorAccountId
+      - operation
+      properties:
+        actorAccountId:
+          type: string
+          format: uuid
+        operation:
+          type: string
+          description: Canonical operation identifier (ANALYTICS_READ, RESEARCH_EXPORT, CHAT_PARTICIPATE); unknown values always deny.
+        resourceScope:
+          type: string
+          enum:
+          - PLATFORM
+          - CLINIC
+          - DOCTOR_ASSIGNMENT
+          - PATIENT
+          nullable: true
+        clinicId:
+          type: string
+          format: uuid
+          nullable: true
+        patientId:
+          type: string
+          format: uuid
+          nullable: true
+        analysisId:
+          type: string
+          format: uuid
+          nullable: true
+        doctorAccountId:
+          type: string
+          format: uuid
+          nullable: true
+        purpose:
+          type: string
+          maxLength: 500
+          nullable: true
+        includeMasks:
+          type: boolean
+          default: false
+        masksConsentGranted:
+          type: boolean
+          default: false
+    OperationAuthorityResponse:
+      type: object
+      required:
+      - permissionVersion
+      - allowed
+      - revoked
+      - includeMasksAllowed
+      properties:
+        permissionVersion:
+          type: integer
+          minimum: 1
+        allowed:
+          type: boolean
+        revoked:
+          type: boolean
+        code:
+          type: string
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+        tenantId:
+          type: string
+          format: uuid
+          nullable: true
+        clinicId:
+          type: string
+          format: uuid
+          nullable: true
+        patientId:
+          type: string
+          format: uuid
+          nullable: true
+        participantRole:
+          type: string
+          nullable: true
+        authorizedPatientIds:
+          type: array
+          nullable: true
+          items:
+            type: string
+            format: uuid
+        includeMasksAllowed:
+          type: boolean
     ClinicPatientMedicalHistoryDto:
       type: object
       properties:

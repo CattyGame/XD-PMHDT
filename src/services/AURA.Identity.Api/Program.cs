@@ -423,11 +423,32 @@ app.MapGet("/api/v1/admin/accounts", async Task<IResult> (
     int limit = 20,
     string? cursor = null,
     string? status = null,
+    string? query = null,
     string? search = null) =>
 {
+    request.HttpContext.Response.Headers.CacheControl = "no-store";
     var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
     var (allowed, _, errResult) = await AuthorizeSystemAdminAsync(request, repository, authProvider, env, ct);
     if (!allowed) return errResult!;
+
+    if (limit is < 1 or > 100)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số limit phải nằm trong khoảng 1..100.", correlationId, false)),
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    string? normalizedStatus = null;
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+        normalizedStatus = status.Trim().ToUpperInvariant();
+        if (!AllowedAccountStatuses.All.Contains(normalizedStatus))
+        {
+            return Results.Json(
+                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số status chỉ chấp nhận ACTIVE hoặc DISABLED.", correlationId, false)),
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+    }
 
     Guid? cursorId = null;
     if (!string.IsNullOrWhiteSpace(cursor))
@@ -441,7 +462,8 @@ app.MapGet("/api/v1/admin/accounts", async Task<IResult> (
         cursorId = parsed;
     }
 
-    var page = await repository.ListAccountsAdminAsync(limit, cursorId, status, search, ct);
+    var effectiveSearch = !string.IsNullOrWhiteSpace(query) ? query : search;
+    var page = await repository.ListAccountsAdminAsync(limit, cursorId, normalizedStatus, effectiveSearch, ct);
     return Results.Ok(page);
 })
 .WithName("ListAdminAccounts")

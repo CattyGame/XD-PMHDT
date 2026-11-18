@@ -116,6 +116,35 @@ internal static class DatabaseChecks
             "Audit event query returns hashed clinic resource without PHI");
         await repository.UpdateClinicStatusWithVersionAsync(stranger, clinic, "ACTIVE", "Restore clinic for HTTP checks", expectedVersion: 2);
 
+        // Canonical operation authority checks (ANALYTICS_READ, RESEARCH_EXPORT, CHAT_PARTICIPATE)
+        var unknownOp = await repository.ResolveOperationAuthorityAsync(new(owner, "ARBITRARY_OP", ClinicId: clinic));
+        Verify(!unknownOp.Allowed && unknownOp.Reason == "UNKNOWN_OPERATION" && unknownOp.PermissionVersion == 1,
+            "Unknown canonical operation always denies fail-closed");
+
+        var clinicAnalytics = await repository.ResolveOperationAuthorityAsync(new(owner, "ANALYTICS_READ", "CLINIC", clinic));
+        Verify(clinicAnalytics.Allowed && clinicAnalytics.ClinicId == clinic && clinicAnalytics.TenantId is not null,
+            "CLINIC_ADMIN allowed ANALYTICS_READ on own clinic");
+
+        var doctorAnalytics = await repository.ResolveOperationAuthorityAsync(new(doctor2, "ANALYTICS_READ", "DOCTOR_ASSIGNMENT", clinic));
+        Verify(doctorAnalytics.Allowed && doctorAnalytics.AuthorizedPatientIds is not null && doctorAnalytics.AuthorizedPatientIds.Contains(patient),
+            "Assigned doctor allowed DOCTOR_ASSIGNMENT analytics scoped to assigned patients");
+
+        var exportNoConsent = await repository.ResolveOperationAuthorityAsync(new(owner, "RESEARCH_EXPORT", ClinicId: clinic, Purpose: "Diabetic study", IncludeMasks: true, MasksConsentGranted: false));
+        Verify(!exportNoConsent.Allowed && exportNoConsent.Reason == "MASK_POLICY_CONSENT_REQUIRED",
+            "RESEARCH_EXPORT with masks requires explicit consent");
+
+        var exportWithConsent = await repository.ResolveOperationAuthorityAsync(new(owner, "RESEARCH_EXPORT", ClinicId: clinic, Purpose: "Diabetic study", IncludeMasks: true, MasksConsentGranted: true));
+        Verify(exportWithConsent.Allowed && exportWithConsent.IncludeMasksAllowed,
+            "RESEARCH_EXPORT allowed when purpose and mask consent are satisfied");
+
+        var exportAdminNoMembership = await repository.ResolveOperationAuthorityAsync(new(stranger, "RESEARCH_EXPORT", ClinicId: clinic, Purpose: "Admin export test"));
+        Verify(!exportAdminNoMembership.Allowed && exportAdminNoMembership.Reason == "ADMIN_NO_PHI_WILDCARD",
+            "SYSTEM_ADMIN without clinic membership blocked from RESEARCH_EXPORT (no wildcard PHI)");
+
+        var chatOp = await repository.ResolveOperationAuthorityAsync(new(patientAccount, "CHAT_PARTICIPATE", ClinicId: clinic, AnalysisId: caseId, DoctorAccountId: doctor2));
+        Verify(chatOp.Allowed && !chatOp.Revoked && chatOp.ParticipantRole == "PATIENT",
+            "CHAT_PARTICIPATE delegates to live consultation authority");
+
         await HttpChecks.RunAsync(repository,owner,stranger,clinic,staff,patient,caseId,doctor2,doctor,patientAccount);
         await ConcurrencyChecks.RunAsync(admin,connectionString,clinic,owner,Guid.NewGuid());
         await IdentityConnectionChecks.RunAsync(admin,connectionString);

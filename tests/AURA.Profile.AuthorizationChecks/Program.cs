@@ -564,7 +564,7 @@ Check("AC3.2 (W4): Cam kết hiệu năng SLA < 5ms: Xác thực phân quyền t
 Console.WriteLine();
 Console.WriteLine("--- [W6-M6-01] Consultation Chat Authority & Instant Revocation ---");
 
-Check("W6-M6-01.1: ConsultationActions đầy đủ 5 hành động cho SignalR Hub và REST API", () =>
+Check("W6-M6-01.1: ConsultationActions đầy đủ 6 hành động (gồm CHAT_PARTICIPATE) và CanonicalOperations có 3 operation chuẩn", () =>
 {
     var required = new[]
     {
@@ -572,10 +572,26 @@ Check("W6-M6-01.1: ConsultationActions đầy đủ 5 hành động cho SignalR 
         ConsultationActions.Create,
         ConsultationActions.Join,
         ConsultationActions.Read,
-        ConsultationActions.Send
+        ConsultationActions.Send,
+        ConsultationActions.ChatParticipate
     };
     if (required.Any(a => !ConsultationActions.All.Contains(a)))
         throw new Exception("Thiếu action chuẩn trong ConsultationActions.");
+    if (CanonicalOperations.All.Count != 3
+        || !CanonicalOperations.All.Contains(CanonicalOperations.AnalyticsRead)
+        || !CanonicalOperations.All.Contains(CanonicalOperations.ResearchExport)
+        || !CanonicalOperations.All.Contains(CanonicalOperations.ChatParticipate)
+        || CanonicalOperations.All.Contains("UNKNOWN_OP"))
+        throw new Exception("CanonicalOperations phải chỉ gồm ANALYTICS_READ, RESEARCH_EXPORT, CHAT_PARTICIPATE.");
+});
+
+Check("W6-M6-01.5: OperationAuthorityResponse fail-closed (UNKNOWN_OPERATION, ADMIN_NO_PHI_WILDCARD, MASK_POLICY_CONSENT_REQUIRED)", () =>
+{
+    var unknownDenied = new OperationAuthorityResponse(1, false, false, "UNKNOWN_OPERATION", "UNKNOWN_OPERATION", null, clinicId, null, null, null, false);
+    var wildcardDenied = new OperationAuthorityResponse(1, false, false, "ADMIN_NO_PHI_WILDCARD", "ADMIN_NO_PHI_WILDCARD", null, clinicId, null, null, null, false);
+    var maskDenied = new OperationAuthorityResponse(1, false, false, "MASK_POLICY_CONSENT_REQUIRED", "MASK_POLICY_CONSENT_REQUIRED", null, clinicId, null, null, null, false);
+    if (unknownDenied.Allowed || wildcardDenied.Allowed || maskDenied.Allowed || maskDenied.IncludeMasksAllowed)
+        throw new Exception("OperationAuthorityResponse phải từ chối operation lạ, admin wildcard PHI và mask thiếu consent.");
 });
 
 Check("W6-M6-01.2: Bệnh nhân sở hữu ca và Bác sĩ được phân công ACTIVE được phép tham gia tư vấn", () =>

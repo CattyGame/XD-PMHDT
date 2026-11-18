@@ -73,6 +73,7 @@ app.MapPost("/api/v1/clinics/invitations/{membershipId:guid}/accept", async (
             UserIdentityResolver identityResolver,
             CancellationToken ct)
         {
+            request.HttpContext.Response.Headers.CacheControl = "no-store";
             var correlationId = request.HttpContext.Items["CorrelationId"] as string ?? Guid.NewGuid().ToString("D");
             if (clinicId == Guid.Empty || analysisId == Guid.Empty)
             {
@@ -127,6 +128,7 @@ app.MapPost("/api/v1/clinics/invitations/{membershipId:guid}/accept", async (
             UserIdentityResolver identityResolver,
             CancellationToken ct) =>
         {
+            request.HttpContext.Response.Headers.CacheControl = "no-store";
             var correlationId = request.HttpContext.Items["CorrelationId"] as string ?? Guid.NewGuid().ToString("D");
             if (!request.Query.TryGetValue("clinicContextId", out var values)
                 || values.Count != 1
