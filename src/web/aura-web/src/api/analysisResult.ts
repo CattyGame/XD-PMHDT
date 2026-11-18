@@ -156,7 +156,7 @@ export function parseAnalysis(value: unknown, requestedId: string): AnalysisDeta
 
 /** Từng GET cần token của phiên hiện tại, không cache và không ghi thông tin quyền vào URL. */
 export async function authorizedApiResponse(path: string, context: BackendContext, signal?: AbortSignal,
-  method: 'GET' | 'POST' | 'DELETE' | 'PATCH' = 'GET', body?: string, timeoutMs = 15_000): Promise<Response> {
+  method: 'GET' | 'POST' | 'DELETE' | 'PATCH' | 'PUT' = 'GET', body?: string, timeoutMs = 15_000): Promise<Response> {
   if (!path.startsWith('/api/v1/') || new URL(path, window.location.origin).origin !== window.location.origin)
     throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
   if (isMockEnabled) throw new AnalysisResultError(0, 'ERR_MOCK_ENABLED')

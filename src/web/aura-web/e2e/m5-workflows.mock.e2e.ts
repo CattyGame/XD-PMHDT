@@ -84,6 +84,35 @@ async function openDoctor(page: Page) {
   await expect(page.getByRole('img', { name: 'Ảnh võng mạc gốc' }).first()).toHaveAttribute('src', /^blob:/)
 }
 
+test('MOCK: SCRUM-393 admin catalog binds the price version and reloads after conflict on mobile', async ({ page }) => {
+  await fixture(page, ['SYSTEM_ADMIN'])
+  await page.setViewportSize({ width: 390, height: 844 })
+  const packageRoot = '**/api/v1/admin/billing/packages'
+  const item = { packageId: 42, priceVersionId: id(31), displayName: 'Gói nghiên cứu giả lập', amountMinor: 25000,
+    currency: 'VND', credits: 4, status: 'ACTIVE', version: 7 }
+  await page.route(packageRoot + '?*', route => {
+    expect(route.request().headers().authorization).toBe(`Bearer ${token}`)
+    return route.fulfill({ json: { items: [item], nextCursor: null } })
+  })
+  await page.route(packageRoot + '/42/price-versions', route => {
+    expect(route.request().postDataJSON()).toEqual({ expectedVersion: 7, displayName: item.displayName, amountMinor: 30000,
+      currency: 'VND', credits: 4, reason: 'Giá kiểm thử' })
+    return route.fulfill({ status: 409, json: { error: { code: 'ERR_CONCURRENT_UPDATE' } } })
+  })
+  await page.goto('/admin/catalog')
+  await expect(page.getByRole('heading', { name: 'Quản trị hệ thống' })).toBeVisible()
+  await page.getByText('Quản lý giá', { exact: true }).click()
+  const editor = page.getByRole('group', { name: 'Tạo phiên bản giá' })
+  await editor.getByLabel('Giá theo đơn vị nhỏ nhất').fill('30000')
+  await editor.getByLabel('Lý do').fill('Giá kiểm thử')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
+  await editor.getByRole('button', { name: 'Lưu thay đổi' }).click()
+  await expect(page.getByRole('alert')).toHaveText(/Phiên bản đã thay đổi/)
+  await expect(page.getByText(item.displayName, { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Tải lại' }).click()
+  await expect(page.getByText(item.displayName, { exact: true })).toBeVisible()
+})
+
 for (const width of [1024, 1366, 1920]) {
   test(`MOCK: Doctor approves through authenticated image bytes at ${width}px`, async ({ page }, info) => {
     const state = await fixture(page)

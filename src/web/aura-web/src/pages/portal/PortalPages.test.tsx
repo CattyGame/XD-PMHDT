@@ -1,0 +1,139 @@
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AnalysisResultError } from '../../api/analysisResult'
+import type { BackendContext } from '../../api/backendContext'
+import { BackendSessionContext } from '../../auth/backendSession'
+import AdminPortalPage from './AdminPortalPage'
+import OwnerViewsPage from './OwnerViewsPage'
+
+const request = vi.hoisted(() => vi.fn())
+vi.mock('../../api/analysisResult', async importOriginal => ({
+  ...await importOriginal<typeof import('../../api/analysisResult')>(), authorizedApiResponse: request,
+}))
+const id = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+const accountId = id(1), clinicId = id(2)
+const context: BackendContext = { roles: ['SYSTEM_ADMIN'], accountId, firebaseUid: 'fixture', displayName: 'Fixture',
+  profileVersion: 1, patientId: id(3), personalTenantId: id(4) }
+const time = '2026-11-16T10:00:00Z'
+const range = { from: time, to: '2026-11-18T10:00:00Z' }
+const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 })
+const price = { packageId: 42, priceVersionId: id(5), displayName: 'Gói kiểm thử', amountMinor: 25000,
+  currency: 'VND', credits: 4, status: 'ACTIVE', version: 7 }
+
+function open(path: string, roles = context.roles) {
+  render(<BackendSessionContext.Provider value={{ state: { status: 'ready', context: { ...context, roles } },
+    retry: vi.fn(), logout: vi.fn() }}>
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/admin/:section" element={<AdminPortalPage />} />
+        <Route path="/billing/history" element={<OwnerViewsPage />} />
+        <Route path="/doctor/activity" element={<OwnerViewsPage mode="doctor" />} />
+        <Route path="/403" element={<p>403 fixture</p>} />
+      </Routes>
+    </MemoryRouter>
+  </BackendSessionContext.Provider>)
+}
+
+beforeEach(() => { request.mockReset() })
+afterEach(cleanup)
+
+describe('SCRUM-393 protected portal', () => {
+  it('blocks non-admin accounts before reading an admin endpoint', async () => {
+    open('/admin/catalog', ['PATIENT'])
+    expect(await screen.findByText('403 fixture')).toBeTruthy()
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('posts the active price version and discards a stale catalog after 409', async () => {
+    request.mockImplementation(async (_path, _context, _signal, method) => {
+      if (method === 'POST') throw new AnalysisResultError(409, 'ERR_CONCURRENT_UPDATE')
+      return json({ nextCursor: null, items: [price] })
+    })
+    open('/admin/catalog')
+    fireEvent.click(await screen.findByText('Quản lý giá'))
+    const editor = screen.getByRole('group', { name: 'Tạo phiên bản giá' })
+    fireEvent.change(within(editor).getByLabelText('Giá theo đơn vị nhỏ nhất'), { target: { value: '30000' } })
+    fireEvent.change(within(editor).getByLabelText('Lý do'), { target: { value: 'Cập nhật giá thử nghiệm' } })
+    fireEvent.click(within(editor).getByRole('button', { name: 'Lưu thay đổi' }))
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Phiên bản đã thay đổi/)
+    const call = request.mock.calls.find(([path]) => path.includes('/price-versions'))!
+    expect(call[0]).toBe('/api/v1/admin/billing/packages/42/price-versions')
+    expect(JSON.parse(call[4])).toEqual({ expectedVersion: 7, displayName: price.displayName, amountMinor: 30000,
+      currency: 'VND', credits: 4, reason: 'Cập nhật giá thử nghiệm' })
+    expect(screen.queryByText('Gói kiểm thử')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Tải lại' }))
+    expect(await screen.findByText('Gói kiểm thử')).toBeTruthy()
+  })
+
+  it('activates an AI manifest with its current version and reloads after a valid response', async () => {
+    const manifest = id(6), sha = 'a'.repeat(64)
+    const active = { artifactManifestId: manifest, thresholdConfigSha256: sha, version: 2, activatedAt: time }
+    let version = 2
+    request.mockImplementation(async (_path, _context, _signal, method) => {
+      if (method === 'PUT') version++
+      return json({ ...active, version })
+    })
+    open('/admin/ai')
+    fireEvent.change(await screen.findByLabelText('Lý do'), { target: { value: 'Activate verified artifact' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Lưu thay đổi' }))
+    await screen.findByText(/Phiên bản 3/)
+    const call = request.mock.calls.find(([, , , method]) => method === 'PUT')!
+    expect(JSON.parse(call[4])).toEqual({ expectedVersion: 2, artifactManifestId: manifest,
+      thresholdConfigSha256: sha, reason: 'Activate verified artifact' })
+  })
+
+  it('shows missing values separately from zero and keeps review risk separate from processing totals', async () => {
+    request.mockImplementation(async (path: string) => path.includes('/analytics/') ? json({
+      ...range, asOf: time, unit: 'UNIQUE_ANALYSIS', total: 3,
+      processing: { active: 1, completed: 1, failed: 1, lowQuality: 0, rejected: 0, duplicate: 0 },
+      riskSource: 'LATEST_CLINICIAN_REVIEW', reviewRisk: { low: 0, moderate: 0, high: 1, unavailable: 0, unreviewed: 2 },
+      measurementAvailable: 0, measurementUnavailable: null,
+    }) : json({ ...range, groups: [] }))
+    open('/admin/dashboard')
+    const panel = await screen.findByRole('region', { name: 'Tổng quan phân tích' })
+    expect((await within(panel).findByText('Tổng ca phân tích duy nhất')).nextElementSibling?.textContent).toBe('3')
+    expect(within(panel).getByText('Có số đo').nextElementSibling?.textContent).toBe('0')
+    expect(within(panel).getByText('Thiếu số đo').nextElementSibling?.textContent).toBe('Chưa có dữ liệu')
+    expect(await screen.findByText('Chưa có dữ liệu trong phạm vi đã chọn.')).toBeTruthy()
+  })
+
+  it('clears prior owner data before loading a clinic and renders denial without the old order', async () => {
+    const orderId = id(7)
+    request.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/clinics') return json({ items: [{ clinicId, clinicName: 'Phòng khám thử',
+        role: 'CLINIC_ADMIN', status: 'ACTIVE' }] })
+      if (path.includes('ownerType=CLINIC')) throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
+      if (path.includes('/orders?')) return json({ nextCursor: null, items: [{ orderId, ownerId: accountId,
+        ownerType: 'PERSONAL', environment: 'TEST', status: 'COMPLETED', priceVersionId: id(8),
+        amountMinor: 200, currency: 'VND', credits: 2, createdAt: time }] })
+      return json({ ...range, ownerId: accountId, ownerType: 'PERSONAL', environment: 'TEST', availableCredits: 8,
+        reservedCredits: 0, capturedCreditsInPeriod: 2, releasedCreditsInPeriod: 0, refundedCreditsInPeriod: 0 })
+    })
+    open('/billing/history', ['PATIENT'])
+    expect(await screen.findByRole('link', { name: orderId })).toBeTruthy()
+    await screen.findByRole('option', { name: 'Phòng khám thử' })
+    fireEvent.change(screen.getByLabelText('Chủ ví'), { target: { value: clinicId } })
+    expect(screen.queryByText(orderId)).toBeNull()
+    expect((await screen.findByRole('alert')).textContent).toMatch(/không có quyền/)
+    await waitFor(() => expect(request.mock.calls.some(([path]) => path.includes('ownerId=' + clinicId))).toBe(true))
+  })
+
+  it('uses the doctor clinic context from current membership for analytics', async () => {
+    request.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/clinics') return json({ items: [{ clinicId, clinicName: 'Phòng khám bác sĩ',
+        role: 'DOCTOR', status: 'ACTIVE' }] })
+      return json({ ...range, asOf: time, unit: 'UNIQUE_ANALYSIS', total: 1,
+        processing: { active: 0, completed: 1, failed: 0, lowQuality: 0, rejected: 0, duplicate: 0 },
+        riskSource: 'LATEST_CLINICIAN_REVIEW', reviewRisk: { low: 0, moderate: 0, high: 0, unavailable: 0, unreviewed: 1 },
+        measurementAvailable: 0, measurementUnavailable: 0, measurementUnknown: 1 })
+    })
+    open('/doctor/activity', ['DOCTOR'])
+    await screen.findByRole('option', { name: 'Phòng khám bác sĩ' })
+    expect(request).toHaveBeenCalledTimes(1)
+    fireEvent.change(screen.getByLabelText('Phòng khám được cấp quyền'), { target: { value: clinicId } })
+    const unknown = await screen.findByText('Chưa rõ trạng thái đo')
+    expect(unknown.nextElementSibling?.textContent).toBe('1')
+    expect(request.mock.calls[1][0]).toMatch(new RegExp('^/api/v1/doctors/me/summary\\?.*clinicContextId=' + clinicId))
+  })
+})
