@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AURA.Analysis.Api.Upload;
+using AURA.Analysis.Api.Analytics;
 using Xunit;
 
 namespace AURA.Analysis.Api.Tests;
@@ -28,11 +29,16 @@ public sealed class AnalysisContractResponseTests
         Add("private report","ReportDownload",new ReportDownloadResponse(Guid.NewGuid(),"pdf","/api/v1/reports/fixture/content",now.AddMinutes(15)));
         Add("inventory","UploadInventory",inventory);
         Add("accepted item","UploadInventoryItem",item);
+        Add("clinic analytics summary","AnalyticsSummary",new AnalyticsSummary("UNIQUE_ANALYSIS",now,now.AddDays(1),1,
+            new(0,1,0,0,0,0),"LATEST_CLINICIAN_REVIEW",new(0,1,0,0,0),1,0,0,now,
+            new("UNAVAILABLE",[],"BILLING_API_UNAVAILABLE")));
+        Add("patient analytics trends","Trends",new PatientAnalyticsTrends(patient,
+            [new(Guid.NewGuid(),now,"model-v1","config-v1","threshold-v1","ratio",1,.67m,null,true,false,null,null)],null));
         if(Environment.GetEnvironmentVariable("AURA_M2_ARTIFACTS") is {Length:>0} directory)
         {
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory,"analysis-responses.json"),JsonSerializer.Serialize(samples));
         }
-        Assert.Equal(8,samples.Count);
+        Assert.Equal(10,samples.Count);
     }
 }
