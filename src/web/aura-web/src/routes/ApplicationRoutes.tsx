@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { Link, Route, Routes } from 'react-router-dom'
 import App from '../App'
 import LoginPage from '../pages/LoginPage'
@@ -24,6 +24,7 @@ import BillingPage from '../pages/billing/BillingPage'
 import PaymentPage from '../pages/billing/PaymentPage'
 import PaymentSuccessPage from '../pages/billing/PaymentSuccessPage'
 import FcmToastHost from '../components/FcmToastHost'
+const ConsultationsPage = lazy(() => import('../pages/consultations/ConsultationsPage'))
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
@@ -57,6 +58,9 @@ export default function ApplicationRoutes() {
       <Route path="*" element={<NotFoundPage />} />
       <Route path="/analyses/:analysisId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><NotificationInboxPage /></ProtectedRoute>}/>
+      <Route path="/consultations" element={<ProtectedRoute>
+        <Suspense fallback={<p role="status">Đang tải tư vấn…</p>}><ConsultationsPage /></Suspense>
+      </ProtectedRoute>} />
       <Route path="/billing/orders/:orderId" element={<ProtectedRoute><BillingOrderPage /></ProtectedRoute>}/>
       <Route path="/billing/packages" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
       <Route path="/billing/pay/:orderId" element={<ProtectedRoute><PaymentPage /></ProtectedRoute>} />
