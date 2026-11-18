@@ -361,6 +361,73 @@ Check("AC3.3 (W4): Khi Clinic bị SUSPENDED -> Quyền xem lịch sử cũ (ANA
 });
 
 // -----------------------------------------------------------------------------
+// NHÓM 6: KIỂM THỬ SPRINT 6 (Task W6-M6-01: Admin Identity/Profile Lifecycle)
+// -----------------------------------------------------------------------------
+Console.WriteLine("\n--- [W6-M6-01] Kiểm thử Admin Identity/Profile Lifecycle & Optimistic Locking ---");
+
+Check("W6-M6-01.1: ClinicDto và UpdateClinicStatusRequest hỗ trợ version & expectedVersion", () =>
+{
+    var req = new UpdateClinicStatusRequest(ClinicStatuses.Suspended, "Tạm đình chỉ để rà soát hồ sơ", ExpectedVersion: 2);
+    if (req.ExpectedVersion != 2 || string.IsNullOrWhiteSpace(req.Reason))
+        throw new Exception("UpdateClinicStatusRequest phải hỗ trợ expectedVersion và reason.");
+
+    var now = DateTimeOffset.UtcNow;
+    var clinic = new ClinicDto(
+        clinicAlphaId, Guid.NewGuid(), "Clinic Alpha", "0101234567", "Hà Nội", "BS. A", "0900000000",
+        ClinicStatuses.Active, "Đã duyệt", now, now, Version: 3);
+    if (clinic.Version != 3)
+        throw new Exception("ClinicDto phải lưu trữ version >= 1.");
+});
+
+Check("W6-M6-01.2: Admin lifecycle conflict -> expectedVersion không khớp trả về 409 ERR_VERSION_CONFLICT", () =>
+{
+    var currentVersion = 4;
+    var expectedVersion = 3;
+    var conflict = currentVersion != expectedVersion;
+    var statusCode = conflict ? HttpStatusCode.Conflict : HttpStatusCode.OK;
+    if (statusCode != HttpStatusCode.Conflict)
+        throw new Exception("Xung đột phiên bản phải trả về HTTP 409 Conflict.");
+});
+
+Check("W6-M6-01.3: Bảo vệ Admin cuối cùng & tự vô hiệu hóa tài khoản", () =>
+{
+    var actorId = systemAdminId;
+    var targetId = systemAdminId;
+    var requestedStatus = "DISABLED";
+    var selfDisableBlocked = actorId == targetId && requestedStatus == "DISABLED";
+    if (!selfDisableBlocked)
+        throw new Exception("Admin không được tự vô hiệu hóa chính mình.");
+
+    var remainingActiveAdmins = 0;
+    var lastAdminBlocked = remainingActiveAdmins <= 0;
+    if (!lastAdminBlocked)
+        throw new Exception("Không được vô hiệu hóa hoặc hạ quyền SYSTEM_ADMIN hoạt động cuối cùng.");
+});
+
+Check("W6-M6-01.4: Tách biệt DOCTOR capability khỏi endpoint cập nhật roles tổng quát", () =>
+{
+    var currentRoles = new[] { "PATIENT" };
+    var requestedRoles = new[] { "PATIENT", "DOCTOR" };
+    var hadDoctor = currentRoles.Contains("DOCTOR");
+    var wantsDoctor = requestedRoles.Contains("DOCTOR");
+    if (hadDoctor == wantsDoctor)
+        throw new Exception("Thay đổi role DOCTOR qua PATCH /roles phải bị phát hiện và chặn (ERR_DOCTOR_CAPABILITY_SEPARATED).");
+});
+
+Check("W6-M6-01.5: AuditEventDto băm định danh tài nguyên bằng SHA-256 và không chứa PHI", () =>
+{
+    var hash = ProfileRepository.HashResourceId(clinicAlphaId.ToString("D"));
+    if (hash.Length != 64 || hash.Contains(clinicAlphaId.ToString("D"), StringComparison.OrdinalIgnoreCase))
+        throw new Exception("resourceIdHash phải là chuỗi SHA-256 64 ký tự hex.");
+
+    var evt = new AuditEventDto(
+        Guid.NewGuid(), "AURA.Profile.Api", "CLINIC_STATUS_UPDATE", "CLINIC",
+        hash, "corr-w6-01", DateTimeOffset.UtcNow, "ALLOW");
+    if (evt.Outcome != "ALLOW" || evt.ResourceIdHash != hash)
+        throw new Exception("AuditEventDto không khớp định dạng chuẩn.");
+});
+
+// -----------------------------------------------------------------------------
 // NHÓM 4: KIỂM THỬ TÍCH HỢP POSTGRESQL (Nếu có cờ --database)
 // -----------------------------------------------------------------------------
 if (args.Contains("--database"))

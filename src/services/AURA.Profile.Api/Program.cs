@@ -314,6 +314,50 @@ app.MapPost("/internal/v1/profile/camera-delegation/resolve", async (
 .WithName("ResolveCameraDelegation")
 .WithTags("Internal");
 
+// 5b. POST /internal/v1/profile/consultation-access/resolve (Bảo vệ bằng Service JWT: scope profile:resolve)
+app.MapPost("/internal/v1/profile/consultation-access/resolve", async Task<IResult> (
+    HttpRequest request,
+    ConsultationAccessResolveRequest body,
+    ProfileRepository repository,
+    ServiceTokenValidator tokenValidator,
+    CancellationToken ct) =>
+{
+    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
+
+    var authHeader = request.Headers.Authorization.FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_UNAUTHORIZED", "Thiếu service token xác thực.", correlationId, false)),
+            statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    var token = authHeader["Bearer ".Length..].Trim();
+    var (valid, _, errCode, errMsg) = await tokenValidator.ValidateTokenAsync(token, "aura-profile", "profile:resolve");
+    if (!valid)
+    {
+        var statusCode = errCode == "ERR_FORBIDDEN" ? StatusCodes.Status403Forbidden : StatusCodes.Status401Unauthorized;
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails(errCode ?? "ERR_UNAUTHORIZED", errMsg ?? "Service token không hợp lệ.", correlationId, false)),
+            statusCode: statusCode);
+    }
+
+    try
+    {
+        var response = await repository.ResolveConsultationAccessAsync(body, ct);
+        return Results.Ok(response);
+    }
+    catch (Exception e) when (e is HttpRequestException or IOException or System.Text.Json.JsonException or TimeoutException
+        || (e is OperationCanceledException && !ct.IsCancellationRequested))
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_DEPENDENCY_UNAVAILABLE", "Dịch vụ xác minh quyền tư vấn tạm thời không khả dụng.", correlationId, true)),
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+})
+.WithName("ResolveConsultationAccess")
+.WithTags("Internal");
+
 // --- CLINIC LIFECYCLE & MEMBERSHIP ENDPOINTS (Task W4-M6-01 / SCRUM-358) ---
 
 // POST /api/v1/clinics (Đăng ký phòng khám mới)
@@ -348,6 +392,124 @@ app.MapPost("/api/v1/clinics", async (
 .WithName("RegisterClinic")
 .WithTags("Clinics");
 
+// GET /api/v1/admin/clinics (Admin xem danh sách phòng khám có phân trang cursor)
+app.MapGet("/api/v1/admin/clinics", async (
+    HttpRequest request,
+    ProfileRepository repository,
+    UserIdentityResolver identityResolver,
+    CancellationToken ct,
+    int limit = 20,
+    string? cursor = null,
+    string? status = null) =>
+{
+    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
+    var identity = await identityResolver.ResolveAsync(request, ct);
+    if (!identity.Succeeded)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails(identity.Code, identity.Message, correlationId, identity.Retryable)),
+            statusCode: identity.StatusCode);
+    }
+
+    if (!identity.Roles.Contains("SYSTEM_ADMIN", StringComparer.OrdinalIgnoreCase))
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_FORBIDDEN", "Chỉ Quản trị viên hệ thống mới có quyền xem danh sách phòng khám.", correlationId, false)),
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    Guid? cursorClinicId = null;
+    if (!string.IsNullOrWhiteSpace(cursor))
+    {
+        if (!Guid.TryParse(cursor, out var parsed) || parsed == Guid.Empty)
+        {
+            return Results.Json(
+                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Con trỏ phân trang (cursor) không hợp lệ.", correlationId, false)),
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+        cursorClinicId = parsed;
+    }
+
+    var page = await repository.ListClinicsAdminAsync(limit, cursorClinicId, status, ct);
+    return Results.Ok(page);
+})
+.WithName("ListAdminClinics")
+.WithTags("Admin");
+
+// GET /api/v1/admin/audit-events (Admin xem nhật ký kiểm toán không chứa PHI)
+app.MapGet("/api/v1/admin/audit-events", async (
+    HttpRequest request,
+    ProfileRepository repository,
+    UserIdentityResolver identityResolver,
+    CancellationToken ct,
+    string? from = null,
+    string? to = null,
+    int limit = 20,
+    string? cursor = null) =>
+{
+    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
+    var identity = await identityResolver.ResolveAsync(request, ct);
+    if (!identity.Succeeded)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails(identity.Code, identity.Message, correlationId, identity.Retryable)),
+            statusCode: identity.StatusCode);
+    }
+
+    if (!identity.Roles.Contains("SYSTEM_ADMIN", StringComparer.OrdinalIgnoreCase))
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_FORBIDDEN", "Chỉ Quản trị viên hệ thống mới có quyền xem nhật ký kiểm toán.", correlationId, false)),
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    var toTime = DateTimeOffset.UtcNow;
+    if (!string.IsNullOrWhiteSpace(to))
+    {
+        if (!DateTimeOffset.TryParse(to, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out toTime))
+        {
+            return Results.Json(
+                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số thời gian 'to' không hợp lệ.", correlationId, false)),
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+    }
+
+    var fromTime = toTime.AddDays(-30);
+    if (!string.IsNullOrWhiteSpace(from))
+    {
+        if (!DateTimeOffset.TryParse(from, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out fromTime))
+        {
+            return Results.Json(
+                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số thời gian 'from' không hợp lệ.", correlationId, false)),
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+    }
+
+    if (fromTime > toTime)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Khoảng thời gian 'from' phải nhỏ hơn hoặc bằng 'to'.", correlationId, false)),
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    Guid? cursorEventId = null;
+    if (!string.IsNullOrWhiteSpace(cursor))
+    {
+        if (!Guid.TryParse(cursor, out var parsed) || parsed == Guid.Empty)
+        {
+            return Results.Json(
+                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Con trỏ phân trang (cursor) không hợp lệ.", correlationId, false)),
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+        cursorEventId = parsed;
+    }
+
+    var page = await repository.ListAuditEventsAdminAsync(fromTime, toTime, limit, cursorEventId, ct);
+    return Results.Ok(page);
+})
+.WithName("ListAdminAuditEvents")
+.WithTags("Admin");
+
 // PATCH /api/v1/admin/clinics/{clinicId:guid}/status (Admin xét duyệt trạng thái phòng khám)
 app.MapPatch("/api/v1/admin/clinics/{clinicId:guid}/status", async (
     Guid clinicId,
@@ -381,12 +543,36 @@ app.MapPatch("/api/v1/admin/clinics/{clinicId:guid}/status", async (
             statusCode: StatusCodes.Status400BadRequest);
     }
 
-    var updatedClinic = await repository.UpdateClinicStatusAsync(identity.AccountId, clinicId, normalizedStatus, body.Reason?.Trim(), ct);
-    if (updatedClinic == null)
+    var cleanReason = body.Reason?.Trim();
+    if (string.IsNullOrWhiteSpace(cleanReason) || cleanReason.Length > 1000)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Lý do xét duyệt phòng khám là bắt buộc (1..1000 ký tự).", correlationId, false)),
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    if (body.ExpectedVersion is < 1)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Phiên bản expectedVersion phải >= 1.", correlationId, false)),
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    var (updatedClinic, notFound, versionConflict) = await repository.UpdateClinicStatusWithVersionAsync(
+        identity.AccountId, clinicId, normalizedStatus, cleanReason, body.ExpectedVersion, correlationId, ct);
+
+    if (notFound)
     {
         return Results.Json(
             new ErrorEnvelope(new ErrorDetails("ERR_CLINIC_NOT_FOUND", "Không tìm thấy phòng khám.", correlationId, false)),
             statusCode: StatusCodes.Status404NotFound);
+    }
+
+    if (versionConflict)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_VERSION_CONFLICT", "Phiên bản phòng khám đã thay đổi. Vui lòng tải lại trước khi cập nhật.", correlationId, false)),
+            statusCode: StatusCodes.Status409Conflict);
     }
 
     return Results.Ok(updatedClinic);

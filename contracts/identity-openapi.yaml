@@ -231,6 +231,158 @@ paths:
           description: Missing scope
         '404':
           description: Missing account
+  /api/v1/admin/accounts:
+    get:
+      summary: Danh sách tài khoản toàn hệ thống cho SYSTEM_ADMIN
+      operationId: listAdminAccounts
+      tags:
+      - Identity Admin
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 20
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - DISABLED
+          - ALL
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+      - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: Trang danh sách tài khoản quản trị.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountPageResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: Chỉ SYSTEM_ADMIN được phép truy cập.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/admin/accounts/{accountId}/status:
+    patch:
+      summary: Kích hoạt hoặc vô hiệu hóa tài khoản kèm optimistic locking và audit
+      operationId: updateAdminAccountStatus
+      tags:
+      - Identity Admin
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: accountId
+        in: path
+        required: true
+        schema: *id001
+      - $ref: '#/components/parameters/CorrelationIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountStatusRequest'
+      responses:
+        '200':
+          description: Cập nhật trạng thái thành công.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountDto'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: Chỉ SYSTEM_ADMIN được phép truy cập.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Không tìm thấy tài khoản.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Xung đột phiên bản expectedVersion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/admin/accounts/{accountId}/roles:
+    patch:
+      summary: Cập nhật vai trò toàn cục (PATIENT, SYSTEM_ADMIN) kèm optimistic locking và audit
+      description: Quyền DOCTOR phải được cấp/thu hồi qua endpoint doctor-capability.
+      operationId: updateAdminAccountRoles
+      tags:
+      - Identity Admin
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: accountId
+        in: path
+        required: true
+        schema: *id001
+      - $ref: '#/components/parameters/CorrelationIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountRolesRequest'
+      responses:
+        '200':
+          description: Cập nhật vai trò thành công.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountDto'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: Chỉ SYSTEM_ADMIN được phép truy cập.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Không tìm thấy tài khoản.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Xung đột phiên bản expectedVersion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /internal/v1/identity/directory/resolve:
     post:
       summary: Resolve a current ACTIVE account for Notification
@@ -383,6 +535,114 @@ components:
             type: string
           example:
           - PATIENT
+    AdminAccountDto:
+      type: object
+      required:
+      - accountId
+      - firebaseUid
+      - displayName
+      - status
+      - accountStatus
+      - roles
+      - version
+      - profileProvisioningStatus
+      - createdAt
+      - updatedAt
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        firebaseUid:
+          type: string
+        displayName:
+          type: string
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - DISABLED
+        accountStatus:
+          type: string
+          enum:
+          - ACTIVE
+          - DISABLED
+        roles:
+          type: array
+          items:
+            type: string
+            enum:
+            - PATIENT
+            - DOCTOR
+            - SYSTEM_ADMIN
+        version:
+          type: integer
+          minimum: 1
+        profileProvisioningStatus:
+          type: string
+          enum:
+          - PENDING
+          - READY
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AdminAccountPageResponse:
+      type: object
+      required:
+      - items
+      - nextCursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAccountDto'
+        nextCursor:
+          type: string
+          nullable: true
+    UpdateAccountStatusRequest:
+      type: object
+      required:
+      - status
+      - expectedVersion
+      - reason
+      properties:
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - DISABLED
+        expectedVersion:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+    UpdateAccountRolesRequest:
+      type: object
+      required:
+      - roles
+      - expectedVersion
+      - reason
+      properties:
+        roles:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum:
+            - PATIENT
+            - DOCTOR
+            - SYSTEM_ADMIN
+        expectedVersion:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
     ErrorEnvelope:
       type: object
       required:

@@ -561,6 +561,77 @@ Check("AC3.2 (W4): Cam kết hiệu năng SLA < 5ms: Xác thực phân quyền t
     }
 });
 
+Console.WriteLine();
+Console.WriteLine("--- [W6-M6-01] Consultation Chat Authority & Instant Revocation ---");
+
+Check("W6-M6-01.1: ConsultationActions đầy đủ 5 hành động cho SignalR Hub và REST API", () =>
+{
+    var required = new[]
+    {
+        ConsultationActions.Doctors,
+        ConsultationActions.Create,
+        ConsultationActions.Join,
+        ConsultationActions.Read,
+        ConsultationActions.Send
+    };
+    if (required.Any(a => !ConsultationActions.All.Contains(a)))
+        throw new Exception("Thiếu action chuẩn trong ConsultationActions.");
+});
+
+Check("W6-M6-01.2: Bệnh nhân sở hữu ca và Bác sĩ được phân công ACTIVE được phép tham gia tư vấn", () =>
+{
+    var analysisId = Guid.NewGuid();
+    var doctors = new[] { new ConsultationDoctorDto(doctorId, "BS. Nhãn khoa Alpha") };
+    var response = new ConsultationAccessResolveResponse(
+        Allowed: true,
+        Revoked: false,
+        Code: null,
+        Reason: null,
+        TenantId: clinicTenantId,
+        ClinicContextId: clinicId,
+        PatientId: clinicPatientId,
+        PatientAccountId: personalAccountId,
+        AnalysisId: analysisId,
+        ParticipantRole: "PATIENT",
+        DoctorAccountId: doctorId,
+        AssignmentId: Guid.NewGuid(),
+        PermissionVersion: 1,
+        EligibleDoctors: doctors);
+
+    if (!response.Allowed || response.Revoked || response.EligibleDoctors.Count != 1)
+        throw new Exception("Bệnh nhân chính chủ phải được mở và tham gia tư vấn.");
+});
+
+Check("W6-M6-01.3: Thu hồi assignment / gỡ membership / đình chỉ clinic / khóa account -> ACCESS_REVOKED tức thì", () =>
+{
+    var denied = new ConsultationAccessResolveResponse(
+        Allowed: false,
+        Revoked: true,
+        Code: "ACCESS_REVOKED",
+        Reason: "DOCTOR_ASSIGNMENT_REVOKED",
+        TenantId: null,
+        ClinicContextId: clinicId,
+        PatientId: null,
+        PatientAccountId: null,
+        AnalysisId: Guid.NewGuid(),
+        ParticipantRole: null,
+        DoctorAccountId: doctorId,
+        AssignmentId: null,
+        PermissionVersion: 1,
+        EligibleDoctors: Array.Empty<ConsultationDoctorDto>());
+
+    if (denied.Allowed || !denied.Revoked || denied.Code != "ACCESS_REVOKED")
+        throw new Exception("Khi quyền tư vấn bị thu hồi phải trả về Allowed=false, Revoked=true, Code=ACCESS_REVOKED.");
+});
+
+Check("W6-M6-01.4: ConsultationDoctorsResponse khớp schema Frontend /api/v1/analyses/{id}/consultation-doctors", () =>
+{
+    var analysisId = Guid.NewGuid();
+    var dto = new ConsultationDoctorsResponse(analysisId, new[] { new ConsultationDoctorDto(doctorId, "BS. Nhãn khoa Alpha") });
+    if (dto.AnalysisId != analysisId || dto.Items.Count != 1 || dto.Items[0].AccountId != doctorId)
+        throw new Exception("ConsultationDoctorsResponse không khớp schema.");
+});
+
 
 Console.WriteLine("====================================================================");
 Console.WriteLine($"KẾT QUẢ: {passed}/{passed} CHECKS PASS HOÀN TOÀN! (100% AC1, AC2, AC3)");

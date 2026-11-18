@@ -70,7 +70,9 @@ public partial class ProfileRepository
     private async Task<AccessResolveResponse> ResolvePatientAccessCoreAsync(Guid actor, Guid patient, Guid? clinic, string action, Guid? analysis, CancellationToken ct)
     {
         AccessResolveResponse Deny(string reason) => new(false, null, patient, null, null, null, null, 1, reason);
-        if (actor == Guid.Empty || patient == Guid.Empty || action is not ("ANALYSIS_CREATE" or "ANALYSIS_READ" or "ANALYSIS_FILE_READ" or "DOCTOR_REVIEW")) return Deny("INVALID_REQUEST");
+        var isConsultation = action is "CONSULTATION_CREATE" or "CONSULTATION_JOIN" or "CONSULTATION_READ" or "CONSULTATION_SEND";
+        if (actor == Guid.Empty || patient == Guid.Empty || (!isConsultation && action is not ("ANALYSIS_CREATE" or "ANALYSIS_READ" or "ANALYSIS_FILE_READ" or "DOCTOR_REVIEW")))
+            return Deny("INVALID_REQUEST");
         // These independent reads overlap; both live authorities must complete before any grant.
         var accountRead=AccountAsync(actor,ct);
         var scopeRead=ReadPatientScopeAsync(actor,patient,clinic,analysis,ct);
@@ -82,11 +84,21 @@ public partial class ProfileRepository
         var (tenant,linked,owner,clinicTenant,status,role,assigned)=scope;
         if(clinic is null)
         {
-            if(action=="DOCTOR_REVIEW" || owner!=actor || linked!=actor)return Deny("NOT_OWNER");
+            if(isConsultation || action=="DOCTOR_REVIEW" || owner!=actor || linked!=actor)return Deny("NOT_OWNER");
             return new(true,"ACTIVE",patient,tenant,"PERSONAL",actor,new BillingOwnerDto("ACCOUNT",actor),1);
         }
-        if(clinicTenant is null || role is null)return Deny("NOT_A_MEMBER");
-        if(tenant!=clinicTenant || owner!=clinic.Value)return Deny("WRONG_CLINIC");
+        if (clinicTenant is null) return Deny("NOT_A_MEMBER");
+        var isPatientParticipant = linked.HasValue && linked.Value == actor && account.Roles.Contains("PATIENT", StringComparer.Ordinal);
+        if (!isConsultation && role is null) return Deny("NOT_A_MEMBER");
+        if (isConsultation && !isPatientParticipant && role is null) return Deny("NOT_ASSIGNED");
+        if (tenant != clinicTenant || owner != clinic.Value) return Deny("WRONG_CLINIC");
+        if (isConsultation)
+        {
+            if (status != "ACTIVE") return Deny(status == "SUSPENDED" ? "CLINIC_SUSPENDED" : "CLINIC_INACTIVE");
+            var isAssignedDoctor = role == "DOCTOR" && account.Roles.Contains("DOCTOR", StringComparer.Ordinal) && assigned;
+            if (!isPatientParticipant && !isAssignedDoctor) return Deny("NOT_ASSIGNED");
+            return new(true, "ACTIVE", patient, tenant, "CLINIC", clinic.Value, new BillingOwnerDto("CLINIC", clinic.Value), 1);
+        }
         var reading=action is "ANALYSIS_READ" or "ANALYSIS_FILE_READ";
         if(status!="ACTIVE" && !(status=="SUSPENDED" && reading))return Deny("CLINIC_INACTIVE");
         var allowed=role=="CLINIC_ADMIN" && action!="DOCTOR_REVIEW";
@@ -96,6 +108,247 @@ public partial class ProfileRepository
             allowed=action=="ANALYSIS_CREATE" || assigned;
         }
         return allowed?new(true,"ACTIVE",patient,tenant,"CLINIC",clinic.Value,new BillingOwnerDto("CLINIC",clinic.Value),1):Deny("NOT_ASSIGNED");
+    }
+
+    public async Task<ConsultationAccessResolveResponse> ResolveConsultationAccessAsync(
+        ConsultationAccessResolveRequest request,
+        CancellationToken ct = default)
+    {
+        ConsultationAccessResolveResponse Deny(string reason, bool revoked) => new(
+            Allowed: false,
+            Revoked: revoked,
+            Code: revoked ? "ACCESS_REVOKED" : reason,
+            Reason: reason,
+            TenantId: null,
+            ClinicContextId: request.ClinicContextId == Guid.Empty ? null : request.ClinicContextId,
+            PatientId: request.PatientId,
+            PatientAccountId: null,
+            AnalysisId: request.AnalysisId == Guid.Empty ? null : request.AnalysisId,
+            ParticipantRole: null,
+            DoctorAccountId: request.DoctorAccountId,
+            AssignmentId: null,
+            PermissionVersion: 1,
+            EligibleDoctors: Array.Empty<ConsultationDoctorDto>());
+
+        if (request.ActorAccountId == Guid.Empty
+            || request.ClinicContextId == Guid.Empty
+            || request.AnalysisId == Guid.Empty
+            || string.IsNullOrWhiteSpace(request.Action)
+            || !ConsultationActions.All.Contains(request.Action.Trim()))
+        {
+            return Deny("INVALID_REQUEST", false);
+        }
+
+        var bindingTask = (_analysisBindingAuthority ?? throw new InvalidOperationException("Analysis binding authority not configured."))
+            .GetAsync(request.AnalysisId, ct);
+        var actorTask = AccountAsync(request.ActorAccountId, ct);
+        await Task.WhenAll(bindingTask, actorTask);
+
+        var actorAccount = await actorTask;
+        if (actorAccount?.AccountStatus != "ACTIVE")
+        {
+            return Deny("ACCOUNT_DISABLED", true);
+        }
+
+        await using var connection = await _dataSource.OpenConnectionAsync(ct);
+
+        Guid clinicTenantId;
+        string clinicStatus;
+        string? actorClinicRole = null;
+        const string clinicSql = @"
+            SELECT c.tenant_id, c.status, m.role
+            FROM profile.clinics c
+            LEFT JOIN profile.memberships m
+              ON m.clinic_id = c.clinic_id
+             AND m.account_id = $2
+             AND m.status = 'ACTIVE'
+            WHERE c.clinic_id = $1
+            LIMIT 1;";
+
+        await using (var clinicCmd = new NpgsqlCommand(clinicSql, connection))
+        {
+            clinicCmd.Parameters.AddWithValue(request.ClinicContextId);
+            clinicCmd.Parameters.AddWithValue(request.ActorAccountId);
+            await using var reader = await clinicCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                return Deny("CLINIC_NOT_FOUND", false);
+            }
+
+            clinicTenantId = reader.GetGuid(0);
+            clinicStatus = reader.GetString(1);
+            actorClinicRole = reader.IsDBNull(2) ? null : reader.GetString(2);
+        }
+
+        var binding = await bindingTask;
+        if (binding is null)
+        {
+            // Non-members must receive a generic authorization denial rather than probing analysis existence.
+            if (actorClinicRole is null)
+            {
+                return Deny("NOT_AUTHORIZED_PARTICIPANT", true);
+            }
+            return Deny("ANALYSIS_NOT_FOUND", false);
+        }
+
+        if (request.PatientId.HasValue && request.PatientId.Value != binding.PatientId)
+        {
+            return Deny("PATIENT_MISMATCH", false);
+        }
+
+        Guid patientTenantId;
+        Guid patientOwnerId;
+        Guid? patientLinkedAccountId;
+
+        const string patientSql = @"
+            SELECT tenant_id, owner_principal_id, linked_account_id
+            FROM profile.patients
+            WHERE patient_id = $1 AND status = 'ACTIVE'
+            LIMIT 1;";
+
+        await using (var patientCmd = new NpgsqlCommand(patientSql, connection))
+        {
+            patientCmd.Parameters.AddWithValue(binding.PatientId);
+            await using var reader = await patientCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                return actorClinicRole is null
+                    ? Deny("NOT_AUTHORIZED_PARTICIPANT", true)
+                    : Deny("PATIENT_OR_CLINIC_NOT_FOUND", false);
+            }
+
+            patientTenantId = reader.GetGuid(0);
+            patientOwnerId = reader.GetGuid(1);
+            patientLinkedAccountId = reader.IsDBNull(2) ? null : reader.GetGuid(2);
+        }
+
+        var isLinkedPatient = patientLinkedAccountId.HasValue
+            && patientLinkedAccountId.Value == request.ActorAccountId
+            && actorAccount.Roles.Contains("PATIENT", StringComparer.Ordinal);
+
+        if (!isLinkedPatient && actorClinicRole is null)
+        {
+            return Deny("NOT_AUTHORIZED_PARTICIPANT", true);
+        }
+
+        if (clinicTenantId != binding.TenantId || patientTenantId != clinicTenantId || patientOwnerId != request.ClinicContextId)
+        {
+            return Deny("WRONG_CLINIC", false);
+        }
+
+        if (!string.Equals(clinicStatus, ClinicStatuses.Active, StringComparison.Ordinal))
+        {
+            return Deny(clinicStatus == ClinicStatuses.Suspended ? "CLINIC_SUSPENDED" : "CLINIC_INACTIVE", true);
+        }
+
+        const string assignSql = @"
+            SELECT da.assignment_id, da.doctor_account_id, COALESCE(pr.display_name, 'Bác sĩ')
+            FROM profile.doctor_assignments da
+            JOIN profile.memberships m
+              ON m.clinic_id = da.clinic_id
+             AND m.account_id = da.doctor_account_id
+             AND m.role = 'DOCTOR'
+             AND m.status = 'ACTIVE'
+            LEFT JOIN profile.profiles pr ON pr.account_id = da.doctor_account_id
+            WHERE da.clinic_id = $1
+              AND da.patient_id = $2
+              AND da.status = 'ACTIVE'
+              AND (da.analysis_id IS NULL OR da.analysis_id = $3)
+            ORDER BY da.assigned_at DESC, da.doctor_account_id ASC;";
+
+        var candidates = new List<(Guid AssignmentId, Guid DoctorId, string DisplayName)>();
+        await using (var assignCmd = new NpgsqlCommand(assignSql, connection))
+        {
+            assignCmd.Parameters.AddWithValue(request.ClinicContextId);
+            assignCmd.Parameters.AddWithValue(binding.PatientId);
+            assignCmd.Parameters.AddWithValue(binding.AnalysisId);
+            await using var reader = await assignCmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                candidates.Add((reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2)));
+            }
+        }
+
+        var eligibleDoctors = new List<ConsultationDoctorDto>();
+        var assignmentIdByDoctor = new Dictionary<Guid, Guid>();
+        var doctorAccountChecks = new Dictionary<Guid, bool>();
+
+        foreach (var (assignmentId, doctorId, displayName) in candidates)
+        {
+            if (assignmentIdByDoctor.ContainsKey(doctorId))
+            {
+                continue;
+            }
+
+            if (!doctorAccountChecks.TryGetValue(doctorId, out var doctorCapable))
+            {
+                var docSnapshot = doctorId == request.ActorAccountId
+                    ? actorAccount
+                    : await AccountAsync(doctorId, ct);
+                doctorCapable = docSnapshot?.AccountStatus == "ACTIVE"
+                    && docSnapshot.Roles.Contains("DOCTOR", StringComparer.Ordinal);
+                doctorAccountChecks[doctorId] = doctorCapable;
+            }
+
+            if (!doctorCapable)
+            {
+                continue;
+            }
+
+            assignmentIdByDoctor[doctorId] = assignmentId;
+            eligibleDoctors.Add(new ConsultationDoctorDto(doctorId, displayName));
+        }
+
+        var isPatient = patientLinkedAccountId.HasValue
+            && patientLinkedAccountId.Value == request.ActorAccountId
+            && actorAccount.Roles.Contains("PATIENT", StringComparer.Ordinal);
+        var isAssignedDoctor = assignmentIdByDoctor.ContainsKey(request.ActorAccountId);
+
+        if (!isPatient && !isAssignedDoctor)
+        {
+            return Deny("NOT_AUTHORIZED_PARTICIPANT", true);
+        }
+
+        var participantRole = isAssignedDoctor ? "DOCTOR" : "PATIENT";
+        Guid? resolvedDoctorId = isAssignedDoctor ? request.ActorAccountId : null;
+        Guid? resolvedAssignmentId = isAssignedDoctor ? assignmentIdByDoctor[request.ActorAccountId] : null;
+
+        if (request.DoctorAccountId.HasValue)
+        {
+            if (request.DoctorAccountId.Value == Guid.Empty)
+            {
+                return Deny("INVALID_DOCTOR", false);
+            }
+
+            if (isAssignedDoctor && request.DoctorAccountId.Value != request.ActorAccountId)
+            {
+                return Deny("DOCTOR_MISMATCH", true);
+            }
+
+            if (!assignmentIdByDoctor.TryGetValue(request.DoctorAccountId.Value, out var matchedAssignmentId))
+            {
+                return Deny("DOCTOR_ASSIGNMENT_REVOKED", true);
+            }
+
+            resolvedDoctorId = request.DoctorAccountId.Value;
+            resolvedAssignmentId = matchedAssignmentId;
+        }
+
+        return new ConsultationAccessResolveResponse(
+            Allowed: true,
+            Revoked: false,
+            Code: null,
+            Reason: null,
+            TenantId: binding.TenantId,
+            ClinicContextId: request.ClinicContextId,
+            PatientId: binding.PatientId,
+            PatientAccountId: patientLinkedAccountId,
+            AnalysisId: binding.AnalysisId,
+            ParticipantRole: participantRole,
+            DoctorAccountId: resolvedDoctorId,
+            AssignmentId: resolvedAssignmentId,
+            PermissionVersion: 1,
+            EligibleDoctors: eligibleDoctors);
     }
 
     public async Task<(bool Success,ClinicPatientListResponse? Response,string? ErrorCode,string? ErrorMessage)> GetClinicPatientsForActorAsync(

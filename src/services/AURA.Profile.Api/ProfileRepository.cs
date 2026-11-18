@@ -448,7 +448,7 @@ public partial class ProfileRepository
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         const string sql = @"
-            SELECT clinic_id, tenant_id, name, tax_id, address, representative_name, phone, status, audit_reason, created_at, updated_at
+            SELECT clinic_id, tenant_id, name, tax_id, address, representative_name, phone, status, audit_reason, created_at, updated_at, version
             FROM profile.clinics
             WHERE clinic_id = $1
             LIMIT 1;";
@@ -472,7 +472,8 @@ public partial class ProfileRepository
             reader.GetString(7),
             reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.GetFieldValue<DateTimeOffset>(9),
-            reader.GetFieldValue<DateTimeOffset>(10)
+            reader.GetFieldValue<DateTimeOffset>(10),
+            reader.GetInt32(11)
         );
     }
 
@@ -483,37 +484,59 @@ public partial class ProfileRepository
         string? reason,
         CancellationToken cancellationToken = default)
     {
+        var (clinic, _, _) = await UpdateClinicStatusWithVersionAsync(
+            adminAccountId, clinicId, newStatus, reason, null, null, cancellationToken);
+        return clinic;
+    }
+
+    public async Task<(ClinicDto? Clinic, bool NotFound, bool VersionConflict)> UpdateClinicStatusWithVersionAsync(
+        Guid adminAccountId,
+        Guid clinicId,
+        string newStatus,
+        string? reason,
+        int? expectedVersion = null,
+        string? correlationId = null,
+        CancellationToken cancellationToken = default)
+    {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
         try
         {
             const string selectSql = @"
-                SELECT status FROM profile.clinics
+                SELECT status, version FROM profile.clinics
                 WHERE clinic_id = $1
                 FOR UPDATE;";
 
             string? previousStatus = null;
+            int currentVersion = 1;
             await using (var selectCmd = new NpgsqlCommand(selectSql, connection, transaction))
             {
                 selectCmd.Parameters.AddWithValue(clinicId);
-                var prevObj = await selectCmd.ExecuteScalarAsync(cancellationToken);
-                if (prevObj is string prev)
+                await using var reader = await selectCmd.ExecuteReaderAsync(cancellationToken);
+                if (await reader.ReadAsync(cancellationToken))
                 {
-                    previousStatus = prev;
+                    previousStatus = reader.GetString(0);
+                    currentVersion = reader.GetInt32(1);
                 }
             }
 
             if (previousStatus == null)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return null;
+                return (null, true, false);
+            }
+
+            if (expectedVersion.HasValue && currentVersion != expectedVersion.Value)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return (null, false, true);
             }
 
             var now = DateTimeOffset.UtcNow;
             const string updateSql = @"
                 UPDATE profile.clinics
-                SET status = $1, audit_reason = $2, updated_at = $3
+                SET status = $1, audit_reason = $2, updated_at = $3, version = version + 1
                 WHERE clinic_id = $4;";
 
             await using (var updateCmd = new NpgsqlCommand(updateSql, connection, transaction))
@@ -542,9 +565,24 @@ public partial class ProfileRepository
                 await logCmd.ExecuteNonQueryAsync(cancellationToken);
             }
 
+            const string auditEventSql = @"
+                INSERT INTO profile.audit_events (
+                    source_service, actor_account_id, action, resource_type, resource_id_hash, correlation_id, outcome, occurred_at
+                ) VALUES ('AURA.Profile.Api', $1, 'CLINIC_STATUS_UPDATE', 'CLINIC', $2, $3, 'ALLOW', $4);";
+
+            await using (var auditEventCmd = new NpgsqlCommand(auditEventSql, connection, transaction))
+            {
+                auditEventCmd.Parameters.AddWithValue(adminAccountId);
+                auditEventCmd.Parameters.AddWithValue(HashResourceId(clinicId.ToString("D")));
+                auditEventCmd.Parameters.AddWithValue(string.IsNullOrWhiteSpace(correlationId) ? Guid.NewGuid().ToString("D") : correlationId);
+                auditEventCmd.Parameters.AddWithValue(now);
+                await auditEventCmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+
             await transaction.CommitAsync(cancellationToken);
 
-            return await GetClinicByIdAsync(clinicId, cancellationToken);
+            var updated = await GetClinicByIdAsync(clinicId, cancellationToken);
+            return (updated, false, false);
         }
         catch
         {
@@ -552,6 +590,153 @@ public partial class ProfileRepository
             throw;
         }
     }
+
+    public async Task<AdminClinicListResponse> ListClinicsAdminAsync(
+        int limit,
+        Guid? cursorClinicId = null,
+        string? statusFilter = null,
+        CancellationToken cancellationToken = default)
+    {
+        var clampedLimit = Math.Clamp(limit, 1, 100);
+        var cleanStatus = string.IsNullOrWhiteSpace(statusFilter) || statusFilter.Equals("ALL", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : statusFilter.Trim().ToUpperInvariant();
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        const string sql = @"
+            SELECT clinic_id, tenant_id, name, tax_id, address, representative_name, phone, status, audit_reason, created_at, updated_at, version
+            FROM profile.clinics
+            WHERE ($1::uuid IS NULL OR clinic_id > $1)
+              AND ($2::text IS NULL OR status = $2)
+            ORDER BY clinic_id ASC
+            LIMIT $3;";
+
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue((object?)cursorClinicId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)cleanStatus ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(clampedLimit + 1);
+
+        var items = new List<ClinicDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            items.Add(new ClinicDto(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.GetFieldValue<DateTimeOffset>(9),
+                reader.GetFieldValue<DateTimeOffset>(10),
+                reader.GetInt32(11)
+            ));
+        }
+
+        string? nextCursor = null;
+        if (items.Count > clampedLimit)
+        {
+            items.RemoveAt(clampedLimit);
+            nextCursor = items[^1].ClinicId.ToString("D");
+        }
+
+        return new AdminClinicListResponse(items, nextCursor);
+    }
+
+    public async Task RecordAuditEventAsync(
+        Guid? actorAccountId,
+        string action,
+        string resourceType,
+        string resourceId,
+        string? correlationId,
+        string outcome,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        const string sql = @"
+            INSERT INTO profile.audit_events (
+                source_service, actor_account_id, action, resource_type, resource_id_hash, correlation_id, outcome, occurred_at
+            ) VALUES ('AURA.Profile.Api', $1, $2, $3, $4, $5, $6, NOW());";
+
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue((object?)actorAccountId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(action);
+        cmd.Parameters.AddWithValue(resourceType);
+        cmd.Parameters.AddWithValue(HashResourceId(resourceId));
+        cmd.Parameters.AddWithValue(string.IsNullOrWhiteSpace(correlationId) ? Guid.NewGuid().ToString("D") : correlationId);
+        cmd.Parameters.AddWithValue(outcome);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<AuditEventPageResponse> ListAuditEventsAdminAsync(
+        DateTimeOffset from,
+        DateTimeOffset to,
+        int limit,
+        Guid? cursorEventId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var clampedLimit = Math.Clamp(limit, 1, 100);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+
+        DateTimeOffset? cursorTime = null;
+        if (cursorEventId.HasValue)
+        {
+            const string cursorSql = "SELECT occurred_at FROM profile.audit_events WHERE event_id = $1 LIMIT 1;";
+            await using var cursorCmd = new NpgsqlCommand(cursorSql, connection);
+            cursorCmd.Parameters.AddWithValue(cursorEventId.Value);
+            var timeObj = await cursorCmd.ExecuteScalarAsync(cancellationToken);
+            if (timeObj is DateTimeOffset ts)
+            {
+                cursorTime = ts;
+            }
+        }
+
+        const string sql = @"
+            SELECT event_id, source_service, action, resource_type, resource_id_hash, correlation_id, occurred_at, outcome
+            FROM profile.audit_events
+            WHERE occurred_at >= $1 AND occurred_at <= $2
+              AND ($3::timestamptz IS NULL OR (occurred_at, event_id) < ($3, $4::uuid))
+            ORDER BY occurred_at DESC, event_id DESC
+            LIMIT $5;";
+
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue(from);
+        cmd.Parameters.AddWithValue(to);
+        cmd.Parameters.AddWithValue((object?)cursorTime ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)cursorEventId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(clampedLimit + 1);
+
+        var items = new List<AuditEventDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            items.Add(new AuditEventDto(
+                EventId: reader.GetGuid(0),
+                SourceService: reader.GetString(1),
+                Action: reader.GetString(2),
+                ResourceType: reader.GetString(3),
+                ResourceIdHash: reader.GetString(4),
+                CorrelationId: reader.GetString(5),
+                OccurredAt: reader.GetFieldValue<DateTimeOffset>(6),
+                Outcome: reader.GetString(7)
+            ));
+        }
+
+        string? nextCursor = null;
+        if (items.Count > clampedLimit)
+        {
+            items.RemoveAt(clampedLimit);
+            nextCursor = items[^1].EventId.ToString("D");
+        }
+
+        return new AuditEventPageResponse(items, nextCursor);
+    }
+
+    public static string HashResourceId(string rawResourceId)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawResourceId))).ToLowerInvariant();
 
     public async Task<(ClinicMembershipDto? Result, string? ErrorCode)> InviteClinicMemberAsync(
         Guid clinicId,
