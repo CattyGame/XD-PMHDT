@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendContext } from './backendContext'
 import {
   DoctorApiError, getDoctorAnalysis, getDoctorFileAccess, getDoctorWorklist,
-  submitDoctorReview,
+  parseDoctorAnalysis, submitDoctorFeedback, submitDoctorReview,
 } from './doctorReview'
 
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), mock: false }))
@@ -66,6 +66,19 @@ describe('SCRUM-354: Doctor Review API', () => {
     fetchMock.mockResolvedValueOnce(json({ error: { code: 'ERR_REVIEW_VERSION_CONFLICT' } }, 409))
     await expect(submitDoctorReview(context, clinicId, analysisId, { isApproved: true, baseVersion: 2 }))
       .rejects.toMatchObject({ status: 409, code: 'ERR_REVIEW_VERSION_CONFLICT' })
+  })
+
+  it('binds append-only feedback to the result, model and review versions of the open case', async () => {
+    const resultId = fileId
+    const feedbackCase = parseDoctorAnalysis({ ...item, result: { ...item.result, resultId, modelVersion: 'frangi-v2' } })
+    fetchMock.mockResolvedValueOnce(json({ id: patientId, status: 'CREATED', version: 1 }, 201))
+    await submitDoctorFeedback(context, clinicId, feedbackCase, 'SEGMENTATION', '  Synthetic note  ')
+    expect(fetchMock.mock.calls[0][0]).toBe(`/api/v1/analyses/${analysisId}/feedback?clinicContextId=${clinicId}`)
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      resultId, modelVersion: 'frangi-v2', reviewVersion: 2, feedbackType: 'SEGMENTATION', comment: 'Synthetic note',
+    })
+    fetchMock.mockResolvedValueOnce(json({ error: { code: 'ERR_CONCURRENT_REVIEW' } }, 409))
+    await expect(submitDoctorFeedback(context, clinicId, feedbackCase, 'QUALITY', 'Synthetic note')).rejects.toMatchObject({ status: 409 })
   })
 
   it('File Access kèm clinicContextId và không dùng ảnh không có quyền', async () => {

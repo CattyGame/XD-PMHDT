@@ -36,6 +36,7 @@ export type AnalysisDetail = Readonly<{
   batchId: string
   processingStatus: string
   reviewStatus: string
+  reviewVersion?: number
   updatedAt: string
   image: FileRef | null
   result: AnalysisResult | null
@@ -74,7 +75,7 @@ function fileRef(value: unknown): FileRef {
 function riskValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
 }
-function parseResearch(value: unknown): ResearchResults | undefined {
+export function parseResearch(value: unknown): ResearchResults | undefined {
   if (value == null) return undefined
   if (!record(value) || !record(value.avr) || !record(value.dr)) invalid()
   const a = value.avr, d = value.dr
@@ -148,6 +149,8 @@ export function parseAnalysis(value: unknown, requestedId: string): AnalysisDeta
     batchId: value.batchId,
     processingStatus: value.processingStatus,
     reviewStatus: value.reviewStatus,
+    ...(typeof value.reviewVersion === 'number' && Number.isSafeInteger(value.reviewVersion) &&
+      value.reviewVersion >= 0 ? { reviewVersion: value.reviewVersion } : {}),
     updatedAt: value.updatedAt,
     image,
     result: completed ? parseResult(value.result) : null,

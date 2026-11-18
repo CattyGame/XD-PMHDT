@@ -1,13 +1,19 @@
 import { getFirebaseAuth } from '../firebase/config'
 import { isMockEnabled } from './client'
 import type { BackendContext } from './backendContext'
-import { AnalysisResultError, getPrivateFileAccess } from './analysisResult'
+import { AnalysisResultError, getPrivateFileAccess, parseResearch, type ResearchResults } from './analysisResult'
 
 // Contract: contracts/doctor-review-openapi.yaml (M2). Không tự sinh dữ liệu y khoa.
 export type RiskLevel = 'LOW' | 'MODERATE' | 'HIGH'
 export type ReviewStatus = 'NOT_REQUIRED' | 'PENDING' | 'IN_REVIEW' | 'REVIEWED' | 'CORRECTION_REQUIRED'
 export type DoctorFile = Readonly<{ fileId: string; kind: string }>
 export type DoctorResult = Readonly<{
+  resultId?: string
+  version?: number
+  modelVersion?: string
+  configVersion?: string
+  thresholdVersion?: string
+  research?: ResearchResults
   riskAvailable: boolean
   riskLevel: RiskLevel | null
   isMock: boolean
@@ -35,6 +41,17 @@ export type DoctorReview = Readonly<{
   isApproved: boolean
 }>
 export type PrivateDoctorFile = Readonly<{ url: string; expiresAt: string }>
+export const feedbackTypes = {
+  SEGMENTATION: 'Phân vùng mạch máu',
+  VESSEL_TYPE: 'Phân loại động mạch / tĩnh mạch',
+  CALIBER: 'Đo đường kính mạch',
+  QUALITY: 'Chất lượng ảnh',
+  OTHER: 'Khác',
+} as const
+export type FeedbackType = keyof typeof feedbackTypes
+type FeedbackRequest = Readonly<{
+  resultId: string; modelVersion: string; reviewVersion: number; feedbackType: FeedbackType; comment: string
+}>
 
 export class DoctorApiError extends Error {
   readonly status: number
@@ -69,6 +86,13 @@ function parseResult(value: unknown): DoctorResult | null {
   const riskLevel = level === 'LOW' || level === 'MODERATE' || level === 'HIGH' ? level : null
   if (!Array.isArray(value.annotations)) invalid()
   return {
+    ...(text(value.resultId) && isGuid(value.resultId) ? { resultId: value.resultId } : {}),
+    ...(typeof value.version === 'number' && Number.isSafeInteger(value.version) && value.version > 0
+      ? { version: value.version } : {}),
+    ...(text(value.modelVersion) ? { modelVersion: value.modelVersion } : {}),
+    ...(text(value.configVersion) ? { configVersion: value.configVersion } : {}),
+    ...(text(value.thresholdVersion) ? { thresholdVersion: value.thresholdVersion } : {}),
+    ...(value.research != null ? { research: parseResearch(value.research) } : {}),
     riskAvailable: value.riskAvailable === true && riskLevel !== null,
     riskLevel,
     isMock: value.isMock === true,
@@ -100,7 +124,7 @@ export function parseDoctorAnalysis(value: unknown): DoctorAnalysis {
 
 async function request(
   path: string, method: 'GET' | 'POST', context: BackendContext,
-  body?: ReviewRequest, signal?: AbortSignal,
+  body?: ReviewRequest | FeedbackRequest, signal?: AbortSignal,
 ): Promise<{ status: number; data: unknown }> {
   if (isMockEnabled) throw new DoctorApiError(0, 'ERR_MOCK_ENABLED')
   if (!context.roles.includes('DOCTOR')) throw new DoctorApiError(403, 'ERR_FORBIDDEN')
@@ -191,10 +215,31 @@ export async function getDoctorFileAccess(
     throw error
   }
 }
+
+export async function submitDoctorFeedback(
+  context: BackendContext, clinicId: string, analysis: DoctorAnalysis,
+  feedbackType: FeedbackType, comment: string, signal?: AbortSignal,
+): Promise<void> {
+  const { analysisId, result, reviewVersion } = analysis
+  if (!isGuid(analysisId) || !result?.resultId || !isGuid(result.resultId) || !text(result.modelVersion) ||
+    result.isMock || analysis.processingStatus !== 'COMPLETED' ||
+    !Number.isSafeInteger(reviewVersion) || reviewVersion < 0 ||
+    !Object.hasOwn(feedbackTypes, feedbackType) || !comment.trim() || comment.trim().length > 4000) {
+    throw new DoctorApiError(400, 'ERR_INVALID_FEEDBACK')
+  }
+  const response = await request('/api/v1/analyses/' + analysisId + '/feedback' + clinicPath(clinicId),
+    'POST', context, { resultId: result.resultId, modelVersion: result.modelVersion, reviewVersion,
+      feedbackType, comment: comment.trim() }, signal)
+  if (response.status !== 201 || !record(response.data) || !text(response.data.id) ||
+    !isGuid(response.data.id) || !text(response.data.status) ||
+    typeof response.data.version !== 'number' ||
+    !Number.isSafeInteger(response.data.version) || response.data.version < 1) invalid()
+}
 export function doctorErrorMessage(error: unknown): string {
   if (!(error instanceof DoctorApiError || error instanceof AnalysisResultError)) return 'Không thể kết nối API. Vui lòng thử lại.'
   if (error.status === 401) return 'Phiên đăng nhập không hợp lệ. Hãy đăng nhập lại.'
   if (error.status === 403) return 'Bạn không có quyền truy cập ca bệnh này tại cơ sở đã chọn.'
+  if (error.code === 'ERR_FEEDBACK_UNAVAILABLE') return 'Máy chủ chưa cung cấp chức năng gửi phản hồi AI.'
   if (error.status === 404) return 'Không tìm thấy ca chụp hoặc ảnh trong phạm vi được phân công.'
   if (error.code === 'ERR_MOCK_ENABLED') return 'Đang bật mock. Tắt VITE_ENABLE_MOCK để gọi API Doctor Review thật.'
   if (error.code === 'ERR_INVALID_RESPONSE') return 'Dữ liệu trả về không khớp hợp đồng Doctor Review API.'
