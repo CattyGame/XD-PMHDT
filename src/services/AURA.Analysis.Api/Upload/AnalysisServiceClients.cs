@@ -1,3 +1,4 @@
+using AURA.Analysis.Api.Analytics;
 using AURA.Analysis.Api.Auth;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,9 @@ public static class AnalysisServiceClients
         services.AddHttpClient<IClinicAccessResolver,ProfileClinicAccessClient>(client=>Configure(client,"Profile"))
             .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false})
             .RedactLoggedHeaders(new[]{"Authorization"});
+        services.AddHttpClient<IAnalyticsAccessResolver, ProfileAnalyticsAccessClient>(client => Configure(client, "Profile"))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            .RedactLoggedHeaders(new[] { "Authorization" });
         services.AddTransient<IAnalysisUserIdentityResolver, AnalysisUserIdentityResolver>();
         services.AddHttpClient("AnalysisIdentity", client => Configure(client, "Identity"))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
