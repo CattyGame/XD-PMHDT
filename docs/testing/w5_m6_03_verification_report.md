@@ -191,3 +191,4 @@ KẾT QUẢ: 43/43 CHECKS PASS HOÀN TOÀN! (100% AC1, AC2, AC3, Security & Mult
    - Không xuất hiện bất kỳ ngoại lệ `500 Internal Server Error` nào trong suốt chuỗi kiểm thử HTTP.
    - Sạch 100% lỗi khoảng trắng và ký tự trống cuối dòng.
 3. **Sẵn sàng Tích hợp Toàn diện**: M1, M2 và M5 có thể tham chiếu ngay các hợp đồng và kết quả kiểm thử tại `docs/design/campaign_management_sequence.md` để kết nối vào luồng tiếp nhận batch lớn và hiển thị giao diện bác sĩ.
+
