@@ -68,22 +68,40 @@ internal static class IdentityConnectionChecks
         if (!okDisable.Success || okDisable.Account?.Version != 2 || okDisable.Account.Status != "DISABLED")
             throw new Exception("Valid status update must bump version and persist DISABLED.");
 
-        // Confirm sole-admin protection: isolate test by temporarily disabling any other SYSTEM_ADMIN accounts in fixture DB?
-        // Only assert if adminActor is the sole remaining ACTIVE SYSTEM_ADMIN, otherwise verify non-self disable of another sole admin fails when count=1.
-        await using var countAdmins = admin.CreateCommand("SELECT COUNT(*) FROM identity.accounts a JOIN identity.account_roles ar ON ar.account_id=a.account_id AND ar.role_name='SYSTEM_ADMIN' WHERE a.account_status='ACTIVE'");
-        var activeAdminCount = Convert.ToInt64(await countAdmins.ExecuteScalarAsync());
-        if (activeAdminCount == 1)
+        var disabledActorDemote = await repository.UpdateAccountRolesAdminAsync(secondAdmin, adminActor, new[] { "PATIENT" }, 1, "Disabled admin must fail closed");
+        if (disabledActorDemote.Success || disabledActorDemote.HttpStatus != 403 || disabledActorDemote.ErrorCode != "ERR_FORBIDDEN")
+            throw new Exception("Disabled SYSTEM_ADMIN actor must be rejected fail-closed with 403 ERR_FORBIDDEN.");
+
+        // Concurrent cross-disable race check: two active SYSTEM_ADMINs concurrently disabling each other cannot leave zero active admins.
+        var raceAdmin1 = Guid.NewGuid();
+        var raceAdmin2 = Guid.NewGuid();
+        await Sql("INSERT INTO identity.accounts(account_id,firebase_uid,display_name,account_status,profile_provisioning_status,version) VALUES($1,$2,'Race Admin 1','ACTIVE','READY',1),($3,$4,'Race Admin 2','ACTIVE','READY',1)",
+            raceAdmin1, "m6-race1-" + raceAdmin1.ToString("N"), raceAdmin2, "m6-race2-" + raceAdmin2.ToString("N"));
+        await Sql("INSERT INTO identity.account_roles(account_id,role_name) VALUES($1,'PATIENT'),($1,'SYSTEM_ADMIN'),($2,'PATIENT'),($2,'SYSTEM_ADMIN')",
+            raceAdmin1, raceAdmin2);
+
+        var raceConn = new NpgsqlConnectionStringBuilder(connectionString) { Options = "-c role=aura_identity_app", MaxPoolSize = 4, Timeout = 5 };
+        await using (var raceRuntime = NpgsqlDataSource.Create(raceConn.ConnectionString))
         {
-            var lastAdminDemote = await repository.UpdateAccountRolesAdminAsync(secondAdmin, adminActor, new[] { "PATIENT" }, 1, "Try remove last admin");
-            if (lastAdminDemote.Success || lastAdminDemote.ErrorCode != "ERR_LAST_SYSTEM_ADMIN")
-                throw new Exception("Removing the last active SYSTEM_ADMIN must be rejected.");
+            var raceRepo = new IdentityRepository(raceRuntime);
+            var race1Task = raceRepo.UpdateAccountStatusAdminAsync(raceAdmin1, raceAdmin2, "DISABLED", 1, "Race cross disable 1");
+            var race2Task = raceRepo.UpdateAccountStatusAdminAsync(raceAdmin2, raceAdmin1, "DISABLED", 1, "Race cross disable 2");
+            var raceResults = await Task.WhenAll(race1Task, race2Task);
+            if (raceResults.Count(r => r.Success) != 1 || raceResults.Count(r => !r.Success && r.HttpStatus == 403) != 1)
+                throw new Exception("Concurrent cross-disable between two SYSTEM_ADMINs must allow exactly one and deny the second.");
         }
+
+        await using var raceAliveCmd = admin.CreateCommand("SELECT COUNT(*) FROM identity.accounts WHERE account_id IN ($1, $2) AND account_status='ACTIVE'");
+        raceAliveCmd.Parameters.AddWithValue(raceAdmin1);
+        raceAliveCmd.Parameters.AddWithValue(raceAdmin2);
+        if (Convert.ToInt64(await raceAliveCmd.ExecuteScalarAsync()) != 1)
+            throw new Exception("Concurrent admin race must preserve one surviving ACTIVE admin.");
 
         await using var auditCmd = runtime.CreateCommand("SELECT count(*) FROM identity.account_lifecycle_audit WHERE target_account_id=$1 AND action='ACCOUNT_STATUS_UPDATE'");
         auditCmd.Parameters.AddWithValue(secondAdmin);
         if (Convert.ToInt64(await auditCmd.ExecuteScalarAsync()) < 1)
             throw new Exception("Account lifecycle audit row must be recorded under aura_identity_app.");
 
-        Console.WriteLine("Identity DB PASS: by-id lookup, admin lifecycle, optimistic concurrency and append-only audit (aura_identity_app).");
+        Console.WriteLine("Identity DB PASS: by-id lookup, admin lifecycle, concurrent last-admin race guard and append-only audit (aura_identity_app).");
     }
 }

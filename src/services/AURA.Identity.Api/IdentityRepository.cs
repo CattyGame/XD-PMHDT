@@ -312,6 +312,31 @@ public class IdentityRepository
         return new AdminAccountPageResponse(items, nextCursor);
     }
 
+    private static async Task<bool> AcquireAdminGuardAndCheckActorAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction tx,
+        Guid actorAccountId,
+        CancellationToken cancellationToken)
+    {
+        await using (var lockCmd = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('identity.system_admin_guard'));",
+            connection, tx))
+        {
+            await lockCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var actorCmd = new NpgsqlCommand(@"
+            SELECT EXISTS(
+                SELECT 1
+                FROM identity.accounts a
+                JOIN identity.account_roles ar ON ar.account_id = a.account_id AND ar.role_name = 'SYSTEM_ADMIN'
+                WHERE a.account_id = $1 AND a.account_status = 'ACTIVE'
+            );",
+            connection, tx);
+        actorCmd.Parameters.AddWithValue(actorAccountId);
+        return Convert.ToBoolean(await actorCmd.ExecuteScalarAsync(cancellationToken));
+    }
+
     public async Task<(bool Success, AdminAccountDto? Account, int HttpStatus, string? ErrorCode, string? ErrorMessage)> UpdateAccountStatusAdminAsync(
         Guid actorAccountId,
         Guid targetAccountId,
@@ -336,6 +361,12 @@ public class IdentityRepository
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var tx = await connection.BeginTransactionAsync(cancellationToken);
+
+        if (!await AcquireAdminGuardAndCheckActorAsync(connection, tx, actorAccountId, cancellationToken))
+        {
+            await tx.RollbackAsync(cancellationToken);
+            return (false, null, 403, "ERR_FORBIDDEN", "Chỉ Quản trị viên hệ thống (SYSTEM_ADMIN) đang hoạt động mới có quyền thực hiện.");
+        }
 
         string currentStatus;
         int currentVersion;
@@ -456,6 +487,12 @@ public class IdentityRepository
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var tx = await connection.BeginTransactionAsync(cancellationToken);
+
+        if (!await AcquireAdminGuardAndCheckActorAsync(connection, tx, actorAccountId, cancellationToken))
+        {
+            await tx.RollbackAsync(cancellationToken);
+            return (false, null, 403, "ERR_FORBIDDEN", "Chỉ Quản trị viên hệ thống (SYSTEM_ADMIN) đang hoạt động mới có quyền thực hiện.");
+        }
 
         string currentStatus;
         int currentVersion;
