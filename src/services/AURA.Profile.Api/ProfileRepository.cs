@@ -444,9 +444,15 @@ public partial class ProfileRepository
         }
     }
 
-    public async Task<ClinicDto?> GetClinicByIdAsync(Guid clinicId, CancellationToken cancellationToken = default)
+    public async Task<ClinicDto?> GetClinicByIdAsync(
+        Guid clinicId,
+        CancellationToken cancellationToken = default,
+        NpgsqlConnection? existingConnection = null)
     {
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var ownedConnection = existingConnection is null
+            ? await _dataSource.OpenConnectionAsync(cancellationToken)
+            : null;
+        var connection = existingConnection ?? ownedConnection!;
         const string sql = @"
             SELECT clinic_id, tenant_id, name, tax_id, address, representative_name, phone, status, audit_reason, created_at, updated_at, version
             FROM profile.clinics
@@ -581,7 +587,7 @@ public partial class ProfileRepository
 
             await transaction.CommitAsync(cancellationToken);
 
-            var updated = await GetClinicByIdAsync(clinicId, cancellationToken);
+            var updated = await GetClinicByIdAsync(clinicId, cancellationToken, connection);
             return (updated, false, false);
         }
         catch

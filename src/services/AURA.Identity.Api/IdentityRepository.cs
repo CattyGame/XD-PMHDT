@@ -420,7 +420,7 @@ public class IdentityRepository
 
         await tx.CommitAsync(cancellationToken);
 
-        var updated = await GetAdminAccountByIdAsync(targetAccountId, cancellationToken);
+        var updated = await GetAdminAccountByIdAsync(targetAccountId, cancellationToken, connection);
         return (true, updated, 200, null, null);
     }
 
@@ -571,13 +571,19 @@ public class IdentityRepository
 
         await tx.CommitAsync(cancellationToken);
 
-        var updated = await GetAdminAccountByIdAsync(targetAccountId, cancellationToken);
+        var updated = await GetAdminAccountByIdAsync(targetAccountId, cancellationToken, connection);
         return (true, updated, 200, null, null);
     }
 
-    public async Task<AdminAccountDto?> GetAdminAccountByIdAsync(Guid accountId, CancellationToken cancellationToken = default)
+    public async Task<AdminAccountDto?> GetAdminAccountByIdAsync(
+        Guid accountId,
+        CancellationToken cancellationToken = default,
+        NpgsqlConnection? existingConnection = null)
     {
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var ownedConnection = existingConnection is null
+            ? await _dataSource.OpenConnectionAsync(cancellationToken)
+            : null;
+        var connection = existingConnection ?? ownedConnection!;
         const string sql = @"
             SELECT a.account_id, a.firebase_uid,
                    CASE WHEN btrim(COALESCE(a.display_name, '')) = '' THEN a.firebase_uid ELSE a.display_name END,

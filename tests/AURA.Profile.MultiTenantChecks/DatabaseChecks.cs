@@ -5,9 +5,9 @@ internal static class DatabaseChecks
 {
     public static async Task RunAsync(string connectionString)
     {
-        var builder=new NpgsqlConnectionStringBuilder(connectionString);
+        var builder=new NpgsqlConnectionStringBuilder(connectionString){ MaxPoolSize = 4 };
         if(!builder.Database!.Contains("test",StringComparison.OrdinalIgnoreCase) && !(builder.Database=="aura_dev" && builder.Host=="127.0.0.1" && builder.Port==55432 && Environment.GetEnvironmentVariable("AURA_TEST_ALLOW_DATABASE")=="aura_dev"))throw new InvalidOperationException("Database checks require an isolated test database.");
-        await using var admin=NpgsqlDataSource.Create(connectionString);
+        await using var admin=NpgsqlDataSource.Create(builder.ConnectionString);
         var tenant=Guid.NewGuid();var clinic=Guid.NewGuid();var otherTenant=Guid.NewGuid();var otherClinic=Guid.NewGuid();
         var owner=Guid.NewGuid();var doctor=Guid.NewGuid();var doctor2=Guid.NewGuid();var pendingDoctor=Guid.NewGuid();var staff=Guid.NewGuid();var stranger=Guid.NewGuid();
         var patient=Guid.NewGuid();var unassigned=Guid.NewGuid();var caseId=Guid.NewGuid();var patientAccount=Guid.NewGuid();
