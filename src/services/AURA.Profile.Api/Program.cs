@@ -193,15 +193,24 @@ app.MapPatch("/api/v1/profiles/me", async (
             statusCode: StatusCodes.Status400BadRequest);
     }
 
-    if (string.IsNullOrWhiteSpace(body.DisplayName))
+    var cleanDisplayName = body.DisplayName?.Trim();
+    if (string.IsNullOrWhiteSpace(cleanDisplayName) || cleanDisplayName.Length > 120)
     {
         return Results.Json(
-            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "DisplayName không được để trống.", correlationId, false)),
+            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "DisplayName phải có từ 1 đến 120 ký tự.", correlationId, false)),
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    var cleanPhone = string.IsNullOrWhiteSpace(body.Phone) ? null : body.Phone.Trim();
+    if (cleanPhone is not null && (cleanPhone.Length > 32 || !System.Text.RegularExpressions.Regex.IsMatch(cleanPhone, @"^[0-9+\-\s().]{6,32}$")))
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Số điện thoại không hợp lệ (6..32 ký tự số hoặc +, -, khoảng trắng).", correlationId, false)),
             statusCode: StatusCodes.Status400BadRequest);
     }
 
     var (success, updated, conflict) = await repository.UpdateProfileAsync(
-        identity.AccountId, body.DisplayName.Trim(), body.Phone?.Trim(), expectedVersion, ct);
+        identity.AccountId, cleanDisplayName, cleanPhone, expectedVersion, ct);
 
     if (conflict)
     {
