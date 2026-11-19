@@ -11,14 +11,18 @@ public sealed record AnalyticsAccessRequest(
     string ResourceScope,
     Guid? ClinicId,
     Guid? PatientId,
-    string? CorrelationId);
+    string? CorrelationId,
+    string? Purpose = null,
+    bool IncludeMasks = false,
+    bool MasksConsentGranted = false);
 
 public sealed record AnalyticsAccessGrant(
     Guid? TenantId,
     Guid? ClinicId,
     Guid? PatientId,
     IReadOnlyCollection<Guid>? AuthorizedPatientIds,
-    long PermissionVersion);
+    long PermissionVersion,
+    bool IncludeMasksAllowed = false);
 
 public interface IAnalyticsAccessResolver
 {
@@ -49,7 +53,10 @@ public sealed class ProfileAnalyticsAccessClient(HttpClient http, IServiceTokenP
                     operation = request.Operation,
                     resourceScope = request.ResourceScope,
                     clinicId = request.ClinicId,
-                    patientId = request.PatientId
+                    patientId = request.PatientId,
+                    purpose = request.Purpose,
+                    includeMasks = request.IncludeMasks,
+                    masksConsentGranted = request.MasksConsentGranted
                 })
             };
 
@@ -80,7 +87,8 @@ public sealed class ProfileAnalyticsAccessClient(HttpClient http, IServiceTokenP
                     throw UploadFailure.Validation(new ErrorDetail("authority", "invalid_request"));
                 }
 
-                throw new UploadFailure(403, "ERR_FORBIDDEN", "Không có quyền thực hiện thao tác phân tích này.");
+                throw new UploadFailure(403, "ERR_FORBIDDEN", "Không có quyền thực hiện thao tác phân tích này.",
+                    details: reply.Reason == "ROLE_DENIED" ? [new ErrorDetail("authority", "ROLE_DENIED")] : null);
             }
 
             return new AnalyticsAccessGrant(
@@ -88,7 +96,8 @@ public sealed class ProfileAnalyticsAccessClient(HttpClient http, IServiceTokenP
                 reply.ClinicId,
                 reply.PatientId,
                 reply.AuthorizedPatientIds,
-                reply.PermissionVersion);
+                reply.PermissionVersion,
+                reply.IncludeMasksAllowed);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -114,7 +123,8 @@ public sealed class ProfileAnalyticsAccessClient(HttpClient http, IServiceTokenP
         Guid? ClinicId,
         Guid? PatientId,
         string? ParticipantRole,
-        IReadOnlyList<Guid>? AuthorizedPatientIds);
+        IReadOnlyList<Guid>? AuthorizedPatientIds,
+        bool IncludeMasksAllowed);
 }
 
 /// <summary>

@@ -1,6 +1,9 @@
 using System.Text.Json;
 using AURA.Analysis.Api.Upload;
 using AURA.Analysis.Api.Analytics;
+using AURA.Analysis.Api.Exports;
+using AURA.Analysis.Api.Alerts;
+using AURA.Analysis.Api.Feedback;
 using Xunit;
 
 namespace AURA.Analysis.Api.Tests;
@@ -34,11 +37,15 @@ public sealed class AnalysisContractResponseTests
             new("UNAVAILABLE",[],"BILLING_API_UNAVAILABLE")));
         Add("patient analytics trends","Trends",new PatientAnalyticsTrends(patient,
             [new(Guid.NewGuid(),now,"model-v1","config-v1","threshold-v1","ratio",1,.67m,null,true,false,null,null)],null));
+        Add("protected export receipt","ExportReceipt",new ExportReceipt(Guid.NewGuid(),"COMPLETED","/api/v1/reports/11111111-1111-4111-8111-111111111111?clinicContextId=22222222-2222-4222-8222-222222222222",now.AddDays(7)));
+        var alert=new AlertResponse(Guid.NewGuid(),Guid.NewGuid(),Guid.NewGuid(),0,"scrum385-v1","RESEARCH_NOTICE","OPEN",1);
+        Add("alert page","AlertsPage",new AlertsPage([alert],null));
+        Add("feedback receipt","FeedbackReceipt",new FeedbackReceipt(Guid.NewGuid(),"ACCEPTED",0));
         if(Environment.GetEnvironmentVariable("AURA_M2_ARTIFACTS") is {Length:>0} directory)
         {
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory,"analysis-responses.json"),JsonSerializer.Serialize(samples));
         }
-        Assert.Equal(10,samples.Count);
+        Assert.Equal(13,samples.Count);
     }
 }

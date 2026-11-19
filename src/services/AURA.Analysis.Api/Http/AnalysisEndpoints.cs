@@ -1,4 +1,5 @@
 using AURA.Analysis.Api.Auth;
+using AURA.Analysis.Api.Exports;
 using AURA.Analysis.Api.Upload;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.WebUtilities;
@@ -36,7 +37,14 @@ public static class AnalysisEndpoints
         }));
         app.MapGet("/api/v1/reports/{reportId}/content",(HttpContext c,string reportId)=>Handle(c,async()=>
         {
-            var user=await User(c);var content=await c.RequestServices.GetRequiredService<AnalysisReportService>().ReadDownloadContentAsync(user.AccountId,Clinic(c),ResourceId(reportId),Correlation(c),c.RequestAborted);
+            var user=await User(c);var id=ResourceId(reportId);var clinic=Clinic(c);
+            PrivateContent content;
+            var exports=c.RequestServices.GetRequiredService<ExportService>();
+            if(await exports.HasSnapshotAsync(id,c.RequestAborted))
+            {
+                content=await exports.OpenContentAsync(user.AccountId,clinic??throw UploadFailure.Validation(new ErrorDetail("clinicContextId","required")),id,Correlation(c),c.RequestAborted);
+            }
+            else content=await c.RequestServices.GetRequiredService<AnalysisReportService>().ReadDownloadContentAsync(user.AccountId,clinic,id,Correlation(c),c.RequestAborted);
             c.Response.Headers["X-Content-Type-Options"]="nosniff";return Results.Stream(content.Stream,content.ContentType);
         }));
         app.MapGet("/api/v1/analyses/{analysisId}/files/{fileId}/content",(HttpContext c,string analysisId,string fileId)=>Handle(c,async()=>

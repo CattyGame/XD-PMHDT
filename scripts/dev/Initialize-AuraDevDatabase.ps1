@@ -31,6 +31,7 @@ $migrations = @(
     "infra/postgres/migrations/analysis/009_upload_sessions.sql",
     "infra/postgres/migrations/analysis/010_report_snapshots.sql",
     "infra/postgres/migrations/analysis/011_research_annotations.sql",
+    "infra/postgres/migrations/analysis/012_scrum385_alert_feedback_exports.sql",
     "infra/postgres/migrations/005_camera_grants.sql",
     "infra/postgres/migrations/005_notification_inbox.sql",
     "infra/postgres/migrations/006_billing_settlement_inbox.sql",

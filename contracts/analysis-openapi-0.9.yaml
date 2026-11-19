@@ -21,6 +21,89 @@ tags:
 security:
 - bearerAuth: []
 paths:
+  /api/v1/clinics/{clinicId}/alerts:
+    get:
+      operationId: listClinicAlerts
+      tags: [Alerts]
+      parameters:
+      - name: clinicId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - name: cursor
+        in: query
+        schema: { type: string }
+      responses:
+        '200':
+          description: Current clinic/doctor assignment scope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertsPage' }
+        '401': { description: Authentication required }
+        '403': { description: Access denied }
+        '404': { description: Clinic outside scope }
+        '503': { description: Profile authority unavailable; fail closed }
+  /api/v1/clinics/{clinicId}/alerts/{alertId}:
+    patch:
+      operationId: changeAlertState
+      tags: [Alerts]
+      parameters:
+      - name: clinicId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: alertId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertStateChange' }
+      responses:
+        '200':
+          description: State changed with optimistic concurrency.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Alert' }
+        '400': { description: Invalid state change }
+        '403': { description: Access denied }
+        '404': { description: Alert outside current assignment }
+        '409': { description: Stale version or invalid transition }
+        '503': { description: Profile authority unavailable; fail closed }
+  /api/v1/analyses/{analysisId}/feedback:
+    post:
+      operationId: submitDoctorFeedback
+      tags: [Analyses]
+      parameters:
+      - name: analysisId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: clinicContextId
+        in: query
+        required: true
+        schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FeedbackCreate' }
+      responses:
+        '201':
+          description: Feedback appended against the current result/review version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FeedbackReceipt' }
+        '400': { description: Invalid feedback }
+        '401': { description: Authentication required }
+        '404': { description: Analysis outside current doctor assignment }
+        '409': { description: Result or review changed }
+        '503': { description: Profile authority unavailable; fail closed }
   /api/v1/analyses/patients/{patientId}/history:
     get:
       summary: Lịch sử phân tích theo bệnh nhân trong clinic
@@ -1092,6 +1175,82 @@ paths:
           description: Bearer required
         '404':
           description: Missing, expired or unauthorized
+  /api/v1/reports/{reportId}:
+    get:
+      operationId: getProtectedExportStatus
+      tags: [Reports]
+      parameters:
+      - name: reportId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: clinicContextId
+        in: query
+        required: true
+        schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Current authorization was checked; export is complete.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportReceipt' }
+        '401': { description: Authentication required }
+        '403': { description: Current authority denied }
+        '404': { description: Missing, expired, or outside scope }
+        '503': { description: Authority unavailable; fail closed }
+  /api/v1/campaigns/{campaignId}/reports:
+    post:
+      operationId: createCampaignReport
+      tags: [Reports]
+      parameters:
+      - name: campaignId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: clinicContextId
+        in: query
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CampaignReportRequest' }
+      responses:
+        '202':
+          description: Report was generated and stored privately.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportReceipt' }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Current authority denied }
+        '404': { description: Campaign outside scope }
+        '409': { description: Idempotency key payload conflict }
+        '503': { description: Authority or storage unavailable; fail closed }
+  /api/v1/research/exports:
+    post:
+      operationId: createResearchExport
+      tags: [Reports]
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResearchExportRequest' }
+      responses:
+        '202':
+          description: De-identified export was generated and stored privately.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportReceipt' }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Current authority denied or masks lack consent }
+        '409': { description: Idempotency key payload conflict }
+        '503': { description: Authority or storage unavailable; fail closed }
   /api/v1/analyses/{analysisId}/files/{fileId}/content:
     get:
       operationId: readAnalysisFileBytes
@@ -1406,6 +1565,82 @@ components:
         expiresAt:
           type: string
           format: date-time
+    CampaignReportRequest:
+      type: object
+      additionalProperties: false
+      required: [format]
+      properties:
+        format:
+          type: string
+          enum: [CSV, PDF]
+    Alert:
+      type: object
+      additionalProperties: false
+      required: [alertId, analysisId, resultId, reviewVersion, ruleVersion, kind, status, version]
+      properties:
+        alertId: { type: string, format: uuid }
+        analysisId: { type: string, format: uuid }
+        resultId: { type: string, format: uuid }
+        reviewVersion: { type: integer, minimum: 0 }
+        ruleVersion: { type: string }
+        kind: { type: string, enum: [CLINICIAN_REVIEW_HIGH, RESEARCH_NOTICE] }
+        status: { type: string, enum: [OPEN, ACKNOWLEDGED, CLOSED] }
+        version: { type: integer, minimum: 1 }
+    AlertsPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/Alert' }
+        nextCursor: { type: string, nullable: true }
+    AlertStateChange:
+      type: object
+      additionalProperties: false
+      required: [status, expectedVersion, reason]
+      properties:
+        status: { type: string, enum: [ACKNOWLEDGED, CLOSED] }
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+    FeedbackCreate:
+      type: object
+      additionalProperties: false
+      required: [resultId, modelVersion, reviewVersion, feedbackType, comment]
+      properties:
+        resultId: { type: string, format: uuid }
+        modelVersion: { type: string, minLength: 1, maxLength: 100 }
+        reviewVersion: { type: integer, minimum: 0 }
+        feedbackType: { type: string, enum: [SEGMENTATION, VESSEL_TYPE, CALIBER, QUALITY, OTHER] }
+        comment: { type: string, minLength: 1, maxLength: 4000 }
+    FeedbackReceipt:
+      type: object
+      additionalProperties: false
+      required: [feedbackId, status, version]
+      properties:
+        feedbackId: { type: string, format: uuid }
+        status: { type: string, enum: [ACCEPTED] }
+        version: { type: integer, minimum: 0 }
+    ResearchExportRequest:
+      type: object
+      additionalProperties: false
+      required: [clinicContextId, campaignId, purpose, format, includeMasks]
+      properties:
+        clinicContextId: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid, nullable: true }
+        purpose: { type: string, minLength: 1, maxLength: 500 }
+        format: { type: string, enum: [CSV, PDF] }
+        includeMasks: { type: boolean, default: false }
+    ExportReceipt:
+      type: object
+      additionalProperties: false
+      required: [reportId, status, statusUrl, expiresAt]
+      properties:
+        reportId: { type: string, format: uuid }
+        status: { type: string, enum: [PENDING, COMPLETED, FAILED] }
+        statusUrl: { type: string }
+        expiresAt: { type: string, format: date-time, nullable: true }
     DoctorReviewRequest:
       type: object
       required:
