@@ -52,9 +52,14 @@ public sealed class AnalysisHttpTests
         Assert.Equal(r.Camera.Actor, r.Upload.Last!.RequesterId);
         Assert.Equal(key.ToString("D"), r.Upload.Last.CorrelationId);
         Assert.Equal(tenant, r.Upload.Last.Camera!.TenantId);
+        var acceptedCommand = r.Upload.Last;
         using var changedDevice = await Send("device-2");
         Assert.Equal(HttpStatusCode.Forbidden, changedDevice.StatusCode);
-        Assert.Equal(2, r.Camera.Calls);
+        r.Camera.Revoked = true;
+        using var revokedReplay = await Send("device-1");
+        Assert.Equal(HttpStatusCode.Forbidden, revokedReplay.StatusCode);
+        Assert.Same(acceptedCommand, r.Upload.Last);
+        Assert.Equal(3, r.Camera.Calls);
         Assert.Equal(10, r.Upload.Length);
     }
 
@@ -63,11 +68,12 @@ public sealed class AnalysisHttpTests
         public readonly Guid Actor = Guid.NewGuid();
         private readonly Guid grant = Guid.NewGuid();
         public int Calls;
+        public bool Revoked;
         public Task<CameraGrant> ResolveAsync(System.Net.Http.Headers.AuthenticationHeaderValue bearer,
             Guid patient, Guid tenant, Guid? clinic, string device, CancellationToken ct)
         {
             Calls++;
-            if (device != "device-1") throw new UploadFailure(403, "ERR_FORBIDDEN", "Denied");
+            if (Revoked || device != "device-1") throw new UploadFailure(403, "ERR_FORBIDDEN", "Denied");
             return Task.FromResult(new CameraGrant(true, Actor, patient, tenant, "PERSONAL", Actor,
                 new("ACCOUNT", Actor), grant, clinic));
         }

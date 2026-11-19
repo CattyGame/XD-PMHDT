@@ -1,6 +1,7 @@
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.nio.charset.StandardCharsets
+import org.apache.nifi.processor.exception.ProcessException
 import org.apache.nifi.processor.io.InputStreamCallback
 import org.apache.nifi.processor.io.OutputStreamCallback
 
@@ -25,14 +26,18 @@ def readJson = { conn ->
 }
 def requiredOrigin = { String key ->
     def url = new URI(System.getenv(key) ?: '')
-    if (!(url.scheme in ['http', 'https']) || !url.host || url.userInfo || url.query || url.fragment || !(url.path in ['', '/']))
-        throw new IOException('Configured origin required')
+    boolean secure = url.scheme == 'https'
+    boolean legacyHttp = url.scheme == 'http' && System.getenv('NIFI_CAMERA_ALLOW_HTTP') == 'true'
+    if (!(secure || legacyHttp) || !url.host || url.userInfo || url.query || url.fragment || !(url.path in ['', '/']))
+        throw new IOException('Valid HTTPS origin required')
     url.toString().replaceFirst('/$', '')
 }
 try {
     String secret = System.getenv('NIFI_CAMERA_CLIENT_SECRET')
     if (!secret) throw new IOException('Missing camera credentials')
-    def issue = post(requiredOrigin('NIFI_CAMERA_IDENTITY_ORIGIN') + '/internal/v1/identity/service-tokens')
+    def identityOrigin = requiredOrigin('NIFI_CAMERA_IDENTITY_ORIGIN')
+    def gatewayOrigin = requiredOrigin('NIFI_CAMERA_GATEWAY_ORIGIN')
+    def issue = post(identityOrigin + '/internal/v1/identity/service-tokens')
     String token
     try {
         issue.setRequestProperty('Content-Type', 'application/json')
@@ -47,7 +52,7 @@ try {
         token = response.accessToken
     } finally { issue.disconnect() }
 
-    def req = post(requiredOrigin('NIFI_CAMERA_GATEWAY_ORIGIN') + '/api/v1/analyses/camera' +
+    def req = post(gatewayOrigin + '/api/v1/analyses/camera' +
         (ff.getAttribute('camera.clinic_id') ? '?clinicContextId=' + ff.getAttribute('camera.clinic_id') : ''))
     try {
         String eventId = ff.getAttribute('gateway.idempotency_key')
@@ -61,7 +66,9 @@ try {
         req.setRequestProperty('X-Camera-SHA256', hash)
         req.setRequestProperty('X-Camera-Version', '1')
         req.setFixedLengthStreamingMode(ff.size)
-        session.read(ff, { input -> req.outputStream.withCloseable { input.transferTo(it) } } as InputStreamCallback)
+        req.outputStream.withCloseable { output ->
+            session.read(ff, { input -> input.transferTo(output) } as InputStreamCallback)
+        }
         int status = req.responseCode
         if (status == 202) {
             def receipt = readJson(req)
@@ -86,7 +93,9 @@ try {
             session.transfer(ff, REL_FAILURE)
         }
     } finally { req.disconnect() }
-} catch (IOException | IllegalArgumentException | groovy.json.JsonException ignored) {
+} catch (IOException | IllegalArgumentException | groovy.json.JsonException | ProcessException error) {
+    // NiFi wraps I/O failures raised during a FlowFile stream callback.
+    if (error instanceof ProcessException && !(error.cause instanceof IOException)) throw error
     ff = session.putAttribute(ff, 'camera.delivery.retry', 'true')
     session.transfer(ff, REL_FAILURE)
 }

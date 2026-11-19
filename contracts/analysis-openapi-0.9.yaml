@@ -68,7 +68,7 @@ paths:
                   correlationId: {type: string, format: uuid}
                   analysisId: {type: string, format: uuid}
                   processingStatus: {type: string, enum: [QUEUED, DUPLICATE]}
-        '400': {description: Invalid camera metadata or content checksum.}
+        '400': {description: 'Invalid camera metadata or checksum, or plaintext camera request in the TLS demo profile.'}
         '401': {description: Missing or invalid camera bearer.}
         '402': {description: Insufficient credit.}
         '403': {description: Camera delegation denied.}

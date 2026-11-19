@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
 
@@ -48,14 +49,18 @@ public class CameraGrantTests
         Assert.False((await repository.ResolveCameraDelegationAsync(request with { ActorAccountId = Guid.NewGuid() })).Allowed);
 
         using var key = RSA.Create(2048);
-        var signing = new RsaSecurityKey(key)
+        using var previousKey = RSA.Create(2048);
+        static RsaSecurityKey SigningKey(RSA rsa) => new(rsa)
         {
-            KeyId = "aura-local-" + Convert.ToHexStringLower(SHA256.HashData(key.ExportSubjectPublicKeyInfo()))[..16]
+            KeyId = "aura-local-" + Convert.ToHexStringLower(SHA256.HashData(rsa.ExportSubjectPublicKeyInfo()))[..16]
         };
+        var signing = SigningKey(key);
+        var previousSigning = SigningKey(previousKey);
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ServiceAuth:Issuer"] = "camera-fixture", ["ServiceAuth:Audience"] = "aura-profile",
-            ["ServiceAuth:PublicKeyPem"] = key.ExportSubjectPublicKeyInfoPem()
+            ["ServiceAuth:PublicKeyPem"] = key.ExportSubjectPublicKeyInfoPem(),
+            ["ServiceAuth:PreviousPublicKeyPem"] = previousKey.ExportSubjectPublicKeyInfoPem()
         }).Build();
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -66,23 +71,29 @@ public class CameraGrantTests
         app.MapCameraDelegation();
         await app.StartAsync();
         using var client = app.GetTestClient();
-        async Task<HttpResponseMessage> Send(Guid subject, string scope = "profile:camera", string audience = "aura-profile",
-            bool expired = false, Guid? claimedPrincipal = null)
+        string Token(Guid subject, string scope, string audience, bool expired, RsaSecurityKey? signer)
         {
             var now = DateTime.UtcNow;
             var jwt = new JwtSecurityToken("camera-fixture", audience,
                 [new Claim("sub", subject.ToString("D")), new Claim("client_id", "camera-fixture"), new Claim("scope", scope)],
                 now.AddMinutes(-5), expired ? now.AddMinutes(-2) : now.AddMinutes(2),
-                new SigningCredentials(signing, SecurityAlgorithms.RsaSha256));
+                new SigningCredentials(signer ?? signing, SecurityAlgorithms.RsaSha256));
+            return new JwtSecurityTokenHandler().WriteToken(jwt);
+        }
+        async Task<HttpResponseMessage> Send(Guid subject, string scope = "profile:camera", string audience = "aura-profile",
+            bool expired = false, Guid? claimedPrincipal = null, RsaSecurityKey? signer = null)
+        {
             using var http = new HttpRequestMessage(HttpMethod.Post, "/internal/v1/profile/camera-delegation/resolve")
             {
                 Content = JsonContent.Create(request with { ServicePrincipalId = claimedPrincipal ?? Guid.Empty, ClientId = "" })
             };
-            http.Headers.Authorization = new("Bearer", new JwtSecurityTokenHandler().WriteToken(jwt));
+            http.Headers.Authorization = new("Bearer", Token(subject, scope, audience, expired, signer));
             return await client.SendAsync(http);
         }
         using (var accepted = await Send(principal))
             Assert.True((await accepted.Content.ReadFromJsonAsync<CameraDelegationResolveResponse>())!.Allowed);
+        using (var stillValid = await Send(principal, signer: previousSigning))
+            Assert.True((await stillValid.Content.ReadFromJsonAsync<CameraDelegationResolveResponse>())!.Allowed);
         using (var forged = await Send(Guid.NewGuid(), claimedPrincipal: principal))
             Assert.Equal(HttpStatusCode.Forbidden, forged.StatusCode);
         using (var wrongScope = await Send(principal, scope: "profile:resolve"))
@@ -94,6 +105,15 @@ public class CameraGrantTests
         await db.SqlAsync("UPDATE profile.camera_grants SET status='REVOKED' WHERE patient_id=$1", patient);
         using var revoked = await Send(principal);
         Assert.False((await revoked.Content.ReadFromJsonAsync<CameraDelegationResolveResponse>())!.Allowed);
+        using var revokedWithPreviousKey = await Send(principal, signer: previousSigning);
+        Assert.False((await revokedWithPreviousKey.Content.ReadFromJsonAsync<CameraDelegationResolveResponse>())!.Allowed);
+
+        config["ServiceAuth:PreviousPublicKeyPem"] = null;
+        using var rotated = new ServiceTokenValidator(config, NullLogger<ServiceTokenValidator>.Instance);
+        Assert.True(rotated.ValidateToken(Token(principal, "profile:camera", "aura-profile", false, signing),
+            "aura-profile", "profile:camera").Valid);
+        Assert.False(rotated.ValidateToken(Token(principal, "profile:camera", "aura-profile", false, previousSigning),
+            "aura-profile", "profile:camera").Valid);
     }
 
     private sealed class Accounts(Guid actor) : IAccountAuthority

@@ -59,6 +59,13 @@ public sealed class GatewayFirebaseAuthMiddleware(
 {
     public async Task InvokeAsync(HttpContext context)
     {
+        if (!context.Request.IsHttps && IsCameraPost(context.Request) &&
+            context.RequestServices.GetRequiredService<IConfiguration>().GetValue<bool>("Gateway:RequireCameraHttps"))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+
         if (!RequiresUserToken(context.Request))
         {
             await next(context);
@@ -152,6 +159,10 @@ public sealed class GatewayFirebaseAuthMiddleware(
         await next(context);
     }
 
+    private static bool IsCameraPost(HttpRequest request) =>
+        HttpMethods.IsPost(request.Method) &&
+        string.Equals(request.Path.Value?.TrimEnd('/'), "/api/v1/analyses/camera", StringComparison.OrdinalIgnoreCase);
+
     private static bool RequiresUserToken(HttpRequest request)
     {
         if (
@@ -164,8 +175,7 @@ public sealed class GatewayFirebaseAuthMiddleware(
         var path = (request.Path.Value ?? "").TrimEnd('/');
 
         // Camera bearer is verified by Profile against the authoritative camera grant.
-        if (HttpMethods.IsPost(request.Method) &&
-            string.Equals(path, "/api/v1/analyses/camera", StringComparison.OrdinalIgnoreCase))
+        if (IsCameraPost(request))
             return false;
 
         // Exempt webhook callback and sandbox payment simulator from Firebase token (secured via HMAC SHA-256)

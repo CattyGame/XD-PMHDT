@@ -2,7 +2,7 @@
 Camera test client for the current AURA NiFi ingestion flow.
 
 Default: prepare and describe test requests without sending.
---live: send requests to ListenHTTP.
+--live: send requests through the HTTPS camera ingress.
 
 HTTP 200 confirms ingress receipt only.
 Inspect NiFi queues and quarantine files to verify routing.
@@ -15,8 +15,10 @@ import hashlib
 import hmac
 import json
 import os
+import ssl
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -123,7 +125,12 @@ def build_cases(image_bytes, patient_id, tenant_id=DEFAULT_PATIENT, clinic_id=No
     return cases
 
 
-def send_request(url, body, timeout):
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def send_request(opener, url, body, timeout):
     request = urllib.request.Request(
         url,
         data=body,
@@ -131,7 +138,7 @@ def send_request(url, body, timeout):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             return response.status, ""
     except urllib.error.HTTPError as error:
         return error.code, "HTTP error"
@@ -154,13 +161,24 @@ def main():
     parser.add_argument("--clinic-id")
     parser.add_argument("--device-id", default="CAM-DEMO")
     parser.add_argument(
-        "--url", default="http://127.0.0.1:8081/ingest/camera"
+        "--url", default="https://localhost:8444/ingest/camera"
     )
+    parser.add_argument("--ca-file", type=Path, help="CA certificate for the HTTPS camera ingress")
     parser.add_argument("--timeout", type=float, default=15.0)
     args = parser.parse_args()
 
     if args.timeout <= 0:
         parser.error("--timeout must be greater than zero")
+
+    opener = None
+    if args.live:
+        url = urllib.parse.urlsplit(args.url)
+        if url.scheme != "https" or not url.hostname or url.username is not None or url.fragment:
+            parser.error("--live requires an HTTPS URL without embedded credentials or a fragment.")
+        context = ssl.create_default_context()
+        if args.ca_file:
+            context.load_verify_locations(cafile=str(args.ca_file))
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), NoRedirect())
 
     try:
         patient_id = str(uuid.UUID(args.patient_id))
@@ -204,7 +222,7 @@ def main():
         print("  Expected destination:", expected)
 
         if args.live:
-            status, error = send_request(args.url, body, args.timeout)
+            status, error = send_request(opener, args.url, body, args.timeout)
             print("  HTTP:", status)
             if status == 200:
                 received += 1
