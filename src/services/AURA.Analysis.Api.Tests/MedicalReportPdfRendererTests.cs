@@ -91,6 +91,41 @@ public sealed class MedicalReportPdfRendererTests
         SaveArtifact(measured?"integrated-avr.pdf":"integrated-null-avr.pdf",pdf);
     }
 
+    [Fact]
+    public void Integrated_research_report_renders_artifact_hashes_when_present()
+    {
+        var id = Guid.NewGuid();
+        var research = JsonSerializer.SerializeToElement(new
+        {
+            avr = new
+            {
+                measurement_available = true,
+                avr = 0.67,
+                crae_px = 13.4,
+                crve_px = 20.0,
+                model_version = "avr-v8-rrwnet",
+                model_sha256 = new string('a', 64)
+            },
+            dr = new
+            {
+                probability_dr = 0.61,
+                model_version = "resnet34-hrf-v1",
+                checkpoint_sha256 = new string('b', 64),
+                gradcam_method = "GRAD_CAM",
+                gradcam_geometry = "IMAGENET_CENTER_CROP_224"
+            }
+        });
+        var data = new MedicalReportPdfData(Guid.NewGuid(), id, Guid.NewGuid(), Guid.NewGuid(), null, null,
+            DateTime.UtcNow, "PENDING", "frangi-v0.2", null, false, null, null, null, .42, 1.12,
+            0.67, "Synthetic software test, not a patient record.",
+            $"https://aura.example/api/v1/analyses/{id:D}", TestImages.Png(128, 128), TestImages.Png(128, 128))
+            { Research = research };
+
+        var pdf = MedicalReportPdfRenderer.Render(data);
+        Assert.StartsWith("%PDF-", Encoding.ASCII.GetString(pdf, 0, 8));
+        Assert.True(pdf.Length < MedicalReportPdfRenderer.MaximumPdfBytes);
+    }
+
     private static void SaveArtifact(string name, byte[] bytes)
     {
         if (Environment.GetEnvironmentVariable("AURA_M2_ARTIFACTS") is not {Length:>0} root) return;

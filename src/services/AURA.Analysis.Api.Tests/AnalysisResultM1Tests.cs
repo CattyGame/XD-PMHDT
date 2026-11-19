@@ -176,4 +176,28 @@ public sealed class AnalysisResultM1Tests
         Assert.Equal("INCOMPLETE_ZONE_B", research.GetProperty("avr").GetProperty("unavailable_reason").GetString());
         Assert.False(r.RiskAvailable);
     }
+
+    [Fact]
+    public void Mapper_ForcesUnavailableRiskAndNullZeroAvRatioForResearchPayloads()
+    {
+        var r = AnalysisResultMapper.Map(
+            2,
+            """{"riskLevel":"HIGH","riskScore":0.91,"confidenceScore":0.88}""",
+            """{"avRatio":0,"vessel_density":0.14,"research":{"avr":{"measurement_available":false,"avr":null,"unavailable_reason":"INSUFFICIENT_SIX_VESSEL_SETS","model_version":"avr-v8"},"dr":{"probability_dr":0.52,"model_version":"resnet34","gradcam_method":"GRAD_CAM","gradcam_geometry":"IMAGENET_CENTER_CROP_224"}}}""",
+            "[]",
+            false,
+            "frangi-v0.2",
+            "c",
+            "t",
+            1,
+            "research",
+            Array.Empty<AnalysisResultMapper.AnnotationRow>());
+
+        Assert.False(r.RiskAvailable);
+        Assert.Null(r.RiskLevel);
+        Assert.Null(r.RiskScore);
+        Assert.Null(r.ConfidenceScore);
+        Assert.Null(r.Metrics.AvRatio);
+        Assert.NotNull(r.Research);
+    }
 }
