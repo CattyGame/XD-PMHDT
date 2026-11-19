@@ -221,138 +221,44 @@ public partial class ProfileRepository
     public async Task<CameraDelegationResolveResponse> ResolveCameraDelegationAsync(
         CameraDelegationResolveRequest request, CancellationToken cancellationToken = default)
     {
-        if (!string.Equals(request.Action, "ANALYSIS_CREATE", StringComparison.OrdinalIgnoreCase))
+        CameraDelegationResolveResponse Deny() => new(false, null, null, null, null, null, null, "CAMERA_ACCESS_DENIED");
+        if (request.Action != "ANALYSIS_CREATE" || request.DeviceId is not {Length: >0 and <=128}
+            || request.ClientId is not {Length: >0 and <=64} || request.PatientId == Guid.Empty
+            || request.ExpectedTenantId == Guid.Empty || request.ServicePrincipalId == Guid.Empty)
+            return Deny();
+
+        Guid grantId, actor;
+        Guid? clinicId;
+        await using (var cmd = _dataSource.CreateCommand("""
+            SELECT g.grant_id,g.actor_account_id,c.clinic_id,t.tenant_kind
+            FROM profile.camera_grants g
+            JOIN profile.patients p ON p.patient_id=g.patient_id AND p.tenant_id=g.tenant_id
+            JOIN profile.tenants t ON t.tenant_id=g.tenant_id
+            LEFT JOIN profile.clinics c ON c.tenant_id=g.tenant_id
+            WHERE g.device_id=$1 AND g.client_id=$2 AND g.service_principal_id=$3
+              AND g.patient_id=$4 AND g.tenant_id=$5 AND g.status='ACTIVE'
+              AND g.expires_at>clock_timestamp() AND g.actor_account_id IS NOT NULL
+            """))
         {
-            return new CameraDelegationResolveResponse(false, null, null, null, null, null, null, "INVALID_ACTION");
-        }
-
-        if (string.IsNullOrWhiteSpace(request.DeviceId) || string.IsNullOrWhiteSpace(request.ClientId)
-            || request.PatientId == Guid.Empty || request.ExpectedTenantId == Guid.Empty
-            || request.ActorAccountId == Guid.Empty || request.ServicePrincipalId == Guid.Empty)
-        {
-            return new CameraDelegationResolveResponse(false, null, null, null, null, null, null, "INVALID_REQUEST_PARAMETERS");
-        }
-
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-
-        // 1. Kiểm tra bệnh nhân và tenant
-        const string patientSql = @"
-            SELECT p.patient_id, p.tenant_id, p.linked_account_id, p.owner_principal_id, p.status, t.tenant_kind
-            FROM profile.patients p
-            JOIN profile.tenants t ON t.tenant_id = p.tenant_id
-            WHERE p.patient_id = $1;";
-
-        Guid pTenantId;
-        Guid? pLinkedAccountId;
-        Guid pOwnerPrincipalId;
-        string pStatus;
-        string tenantKind;
-
-        await using (var pCmd = new NpgsqlCommand(patientSql, connection))
-        {
-            pCmd.Parameters.AddWithValue(request.PatientId);
-            await using var reader = await pCmd.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
-            {
-                return new CameraDelegationResolveResponse(false, null, null, null, null, null, null, "PATIENT_NOT_FOUND");
-            }
-
-            pTenantId = reader.GetGuid(1);
-            pLinkedAccountId = reader.IsDBNull(2) ? (Guid?)null : reader.GetGuid(2);
-            pOwnerPrincipalId = reader.GetGuid(3);
-            pStatus = reader.GetString(4);
-            tenantKind = reader.GetString(5);
-        }
-
-        // Camera Sprint 3 chỉ áp dụng cho tenant PERSONAL
-        if (!string.Equals(tenantKind, "PERSONAL", StringComparison.OrdinalIgnoreCase))
-        {
-            return new CameraDelegationResolveResponse(false, request.PatientId, pTenantId, tenantKind, null, null, null, "CLINIC_CAMERA_UNSUPPORTED");
-        }
-
-        if (!string.Equals(pStatus, "ACTIVE", StringComparison.OrdinalIgnoreCase))
-        {
-            return new CameraDelegationResolveResponse(false, request.PatientId, pTenantId, tenantKind, null, null, null, "PATIENT_DISABLED");
-        }
-
-        // Kiểm tra actorAccountId phải là chủ sở hữu hoặc tài khoản liên kết của bệnh nhân
-        var isOwn = (pLinkedAccountId.HasValue && pLinkedAccountId.Value == request.ActorAccountId)
-                    || pOwnerPrincipalId == request.ActorAccountId;
-        if (!isOwn)
-        {
-            return new CameraDelegationResolveResponse(false, request.PatientId, pTenantId, tenantKind, null, null, null, "ACTOR_PATIENT_MISMATCH");
-        }
-
-        // Kiểm tra expectedTenantId phải khớp với tenantId của bệnh nhân
-        if (request.ExpectedTenantId != pTenantId)
-        {
-            return new CameraDelegationResolveResponse(false, request.PatientId, pTenantId, tenantKind, null, null, null, "TENANT_MISMATCH");
-        }
-
-        // 2. Kiểm tra bản ghi ủy quyền Camera (profile.camera_grants)
-        const string grantSql = @"
-            SELECT grant_id, status, expires_at
-            FROM profile.camera_grants
-            WHERE device_id = $1 AND client_id = $2 AND service_principal_id = $3
-              AND patient_id = $4 AND tenant_id = $5
-            LIMIT 1;";
-
-        Guid grantId;
-        string grantStatus;
-        DateTimeOffset expiresAt;
-
-        await using (var gCmd = new NpgsqlCommand(grantSql, connection))
-        {
-            gCmd.Parameters.AddWithValue(request.DeviceId);
-            gCmd.Parameters.AddWithValue(request.ClientId);
-            gCmd.Parameters.AddWithValue(request.ServicePrincipalId);
-            gCmd.Parameters.AddWithValue(request.PatientId);
-            gCmd.Parameters.AddWithValue(pTenantId);
-
-            await using var reader = await gCmd.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
-            {
-                return new CameraDelegationResolveResponse(false, request.PatientId, pTenantId, tenantKind, null, null, null, "GRANT_NOT_FOUND");
-            }
-
+            cmd.Parameters.AddWithValue(request.DeviceId);
+            cmd.Parameters.AddWithValue(request.ClientId);
+            cmd.Parameters.AddWithValue(request.ServicePrincipalId);
+            cmd.Parameters.AddWithValue(request.PatientId);
+            cmd.Parameters.AddWithValue(request.ExpectedTenantId);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken)) return Deny();
             grantId = reader.GetGuid(0);
-            grantStatus = reader.GetString(1);
-            expiresAt = reader.GetFieldValue<DateTimeOffset>(2);
+            actor = reader.GetGuid(1);
+            clinicId = reader.IsDBNull(2) ? null : reader.GetGuid(2);
+            if (reader.GetString(3) != (clinicId.HasValue ? "CLINIC" : "PERSONAL")) return Deny();
         }
 
-        if (!string.Equals(grantStatus, "ACTIVE", StringComparison.OrdinalIgnoreCase))
-        {
-            return new CameraDelegationResolveResponse(false, request.PatientId, pTenantId, tenantKind, null, null, grantId, "GRANT_REVOKED");
-        }
-
-        if (expiresAt <= DateTimeOffset.UtcNow)
-        {
-            return new CameraDelegationResolveResponse(false, request.PatientId, pTenantId, tenantKind, null, null, grantId, "GRANT_EXPIRED");
-        }
-
-        // 3. Kiểm tra trạng thái tài khoản Actor trong identity.accounts (Fail-Closed)
-        const string accSql = "SELECT account_status FROM identity.accounts WHERE account_id = $1 LIMIT 1;";
-        await using (var aCmd = new NpgsqlCommand(accSql, connection))
-        {
-            aCmd.Parameters.AddWithValue(request.ActorAccountId);
-            var aObj = await aCmd.ExecuteScalarAsync(cancellationToken);
-            if (aObj is not string accStatus || !string.Equals(accStatus, "ACTIVE", StringComparison.OrdinalIgnoreCase))
-            {
-                return new CameraDelegationResolveResponse(false, request.PatientId, pTenantId, tenantKind, null, null, grantId, "ACCOUNT_DISABLED");
-            }
-        }
-
-        // 4. Hợp lệ hoàn toàn
-        return new CameraDelegationResolveResponse(
-            Allowed: true,
-            PatientId: request.PatientId,
-            TenantId: pTenantId,
-            TenantKind: "PERSONAL",
-            OwnerPrincipalId: request.ActorAccountId,
-            BillingOwner: new BillingOwnerDto("ACCOUNT", request.ActorAccountId),
-            GrantId: grantId,
-            Reason: null
-        );
+        if (request.ActorAccountId != Guid.Empty && request.ActorAccountId != actor
+            || request.ClinicContextId != clinicId) return Deny();
+        var access = await ResolveAccessAsync(actor, request.PatientId, clinicId, request.Action, cancellationToken);
+        if (!access.Allowed || access.TenantId != request.ExpectedTenantId) return Deny();
+        return new(true, request.PatientId, access.TenantId, access.TenantKind, access.OwnerPrincipalId,
+            access.BillingOwner, grantId, null) { ActorAccountId = actor, ClinicContextId = clinicId };
     }
 
     // ====================================================================

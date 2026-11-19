@@ -11,7 +11,10 @@ This script does not verify Gateway, authentication, dedup or retry.
 
 import argparse
 import base64
+import hashlib
+import hmac
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -32,18 +35,26 @@ def json_bytes(payload):
     ).encode("utf-8")
 
 
-def build_cases(image_bytes, patient_id):
+def build_cases(image_bytes, patient_id, tenant_id=DEFAULT_PATIENT, clinic_id=None,
+                device_id="CAM-DEMO", device_key=""):
     image_base64 = base64.b64encode(image_bytes).decode("ascii")
 
     def payload():
-        return {
+        event = {
             "request_id": str(uuid.uuid4()),
             "patient_id": patient_id,
-            "device_id": "CAM-DEMO",
+            "device_id": device_id,
+            "tenant_id": tenant_id,
+            "clinic_id": clinic_id,
+            "version": 1,
             "modality": "FUNDUS",
             "eye_side": "left",
             "image_base64": image_base64,
         }
+        fields = ("1", event["request_id"], tenant_id, clinic_id or "", patient_id,
+                  device_id, event["modality"], event["eye_side"], hashlib.sha256(image_bytes).hexdigest())
+        event["signature"] = hmac.digest(device_key.encode(), "\n".join(fields).encode(), "sha256").hex()
+        return event
 
     cases = []
 
@@ -52,7 +63,7 @@ def build_cases(image_bytes, patient_id):
         "ValidFundus",
         json_bytes(valid),
         valid["request_id"],
-        "Queue before PreparedMultipart-PendingGateway",
+        "Accepted-Camera-Receipt after gateway admission",
     ))
 
     unsupported = payload()
@@ -139,6 +150,9 @@ def main():
     parser.add_argument(
         "--patient-id", default=DEFAULT_PATIENT
     )
+    parser.add_argument("--tenant-id", default=DEFAULT_PATIENT)
+    parser.add_argument("--clinic-id")
+    parser.add_argument("--device-id", default="CAM-DEMO")
     parser.add_argument(
         "--url", default="http://127.0.0.1:8081/ingest/camera"
     )
@@ -150,8 +164,10 @@ def main():
 
     try:
         patient_id = str(uuid.UUID(args.patient_id))
+        tenant_id = str(uuid.UUID(args.tenant_id))
+        clinic_id = str(uuid.UUID(args.clinic_id)) if args.clinic_id else None
     except ValueError:
-        parser.error("--patient-id must be a UUID")
+        parser.error("Patient, tenant and clinic selectors must be UUIDs.")
 
     if not args.image.is_file():
         parser.error(f"Image not found: {args.image}")
@@ -166,7 +182,10 @@ def main():
     if not (is_png or is_jpeg):
         parser.error("Test image must have a PNG or JPEG signature")
 
-    cases = build_cases(image_bytes, patient_id)
+    device_key = os.environ.get("AURA_CAMERA_DEVICE_KEY", "")
+    if args.live and (args.tenant_id == DEFAULT_PATIENT or len(device_key.encode()) < 32):
+        parser.error("Live mode requires the registered --tenant-id and AURA_CAMERA_DEVICE_KEY.")
+    cases = build_cases(image_bytes, patient_id, tenant_id, clinic_id, args.device_id, device_key)
 
     print("Mode:", "LIVE INGRESS" if args.live else "DRY RUN")
     print("Patient UUID:", patient_id)

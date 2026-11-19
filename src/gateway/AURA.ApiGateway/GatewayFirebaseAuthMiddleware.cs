@@ -163,18 +163,10 @@ public sealed class GatewayFirebaseAuthMiddleware(
 
         var path = (request.Path.Value ?? "").TrimEnd('/');
 
-        // Support camera ingestion via InvokeHTTP with Service Token / device credentials
-        if (string.Equals(path, "/api/v1/analyses/camera", StringComparison.OrdinalIgnoreCase))
-        {
-            var authHeader = request.Headers.Authorization.ToString();
-            var hasDeviceOrServiceToken = request.Headers.ContainsKey("x-device-id") ||
-                                          request.Headers.ContainsKey("x-service-token") ||
-                                          authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase);
-            if (hasDeviceOrServiceToken)
-            {
-                return false;
-            }
-        }
+        // Camera bearer is verified by Profile against the authoritative camera grant.
+        if (HttpMethods.IsPost(request.Method) &&
+            string.Equals(path, "/api/v1/analyses/camera", StringComparison.OrdinalIgnoreCase))
+            return false;
 
         // Exempt webhook callback and sandbox payment simulator from Firebase token (secured via HMAC SHA-256)
         if (string.Equals(path, "/api/v1/billing/payments/callback", StringComparison.OrdinalIgnoreCase) ||

@@ -23,7 +23,10 @@ public sealed record UploadCommand(
 {
     // Set only by the authenticated, persisted item-admission service.
     public Guid? ParentBatchId { get; init; }
+    public CameraUploadBinding? Camera { get; init; }
 }
+
+public sealed record CameraUploadBinding(Guid GrantId, Guid TenantId, string DeviceId, string ImageSha256);
 
 // ---- Profile (M6): POST /internal/v1/profile/access/resolve ----
 public sealed record PatientAccessRequest(

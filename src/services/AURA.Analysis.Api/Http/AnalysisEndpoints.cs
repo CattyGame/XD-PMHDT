@@ -21,6 +21,7 @@ public static class AnalysisEndpoints
 {
     public static void MapAnalysisEndpoints(this WebApplication app)
     {
+        app.MapPost("/api/v1/analyses/camera", (Func<HttpContext, Task<IResult>>)(c => Handle(c, () => Upload(c, camera: true))));
         app.MapGet("/api/v1/analyses/patients/{patientId}/history", (HttpContext c, string patientId, int? limit, Guid? beforeId) => Handle(c, async () =>
         {
             var user = await User(c);
@@ -241,9 +242,36 @@ public static class AnalysisEndpoints
         c.Request.Body=new LimitedReadStream(c.Request.Body,bytes);
     }
 
-    private static async Task<IResult> Upload(HttpContext c)
+    private static async Task<IResult> Upload(HttpContext c, bool camera = false)
     {
-        var user=await User(c);var clinic=Clinic(c);
+        var user = camera ? null : await User(c);
+        var clinic = Clinic(c);
+        string CameraHeader(string name, int max)
+        {
+            var value = c.Request.Headers[name];
+            if (value.Count != 1 || value[0] is not { Length: > 0 } text || text.Length > max)
+                throw UploadFailure.Validation(new ErrorDetail(name, "invalid_header"));
+            return text;
+        }
+        System.Net.Http.Headers.AuthenticationHeaderValue? cameraBearer = null;
+        Guid tenant = default;
+        string? device = null, checksum = null;
+        if (camera)
+        {
+            var auth = c.Request.Headers.Authorization;
+            if (auth.Count != 1 || !System.Net.Http.Headers.AuthenticationHeaderValue.TryParse(auth[0], out cameraBearer)
+                || !string.Equals(cameraBearer.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase)
+                || cameraBearer.Parameter is not { Length: > 0 and <= 16384 })
+                throw new UploadFailure(401, "ERR_UNAUTHORIZED", "A camera service token is required.");
+            if (!Guid.TryParse(CameraHeader("X-Tenant-Id", 36), out tenant) || tenant == Guid.Empty)
+                throw UploadFailure.Validation(new ErrorDetail("X-Tenant-Id", "invalid_uuid"));
+            device = CameraHeader("X-Device-Id", 128);
+            checksum = CameraHeader("X-Camera-SHA256", 64);
+            if (!device.All(x => char.IsAsciiLetterOrDigit(x) || x is '.' or '_' or ':' or '-')
+                || checksum.Length != 64 || !checksum.All(char.IsAsciiHexDigitLower)
+                || CameraHeader("X-Camera-Version", 1) != "1")
+                throw UploadFailure.Validation(new ErrorDetail("camera", "invalid_camera_metadata"));
+        }
         var keys=c.Request.Headers["Idempotency-Key"];
         if(keys.Count!=1||!Guid.TryParse(keys[0],out var key)||key==Guid.Empty)
             throw UploadFailure.Validation(new ErrorDetail("Idempotency-Key","invalid_uuid"));
@@ -295,8 +323,26 @@ public static class AnalysisEndpoints
                 }
             }
             fields.TryGetValue("patientId",out var patient);fields.TryGetValue("modality",out var modality);fields.TryGetValue("eyeSide",out var eye);
+            CameraUploadBinding? binding = null;
+            var actor = user?.AccountId ?? Guid.Empty;
+            if (camera)
+            {
+                if (!Guid.TryParse(patient, out var patientId) || patientId == Guid.Empty || files.Count != 1)
+                    throw UploadFailure.Validation(new ErrorDetail("camera", "patient_and_single_image_required"));
+                var grant = await c.RequestServices.GetRequiredService<ICameraDelegation>()
+                    .ResolveAsync(cameraBearer!, patientId, tenant, clinic, device!, c.RequestAborted);
+                actor = grant.ActorAccountId!.Value;
+                binding = new(grant.GrantId!.Value, tenant, device!, checksum!);
+            }
             var result=await c.RequestServices.GetRequiredService<IAnalysisUploadHandler>().CreateAsync(
-                new(user.AccountId,clinic,key,Correlation(c),patient,modality,eye,files),c.RequestAborted);
+                new(actor,clinic,key,camera ? key.ToString("D") : Correlation(c),patient,modality,eye,files) { Camera = binding },c.RequestAborted);
+            if (camera)
+            {
+                var item = result.Response.Items.Single();
+                return Results.Json(new {requestId = key, deviceId = device, imageSha256 = checksum,
+                    version = 1, result.Response.BatchId, imageCount = 1, sourceAcceptedAt = result.Response.CreatedAt,
+                    correlationId = key.ToString("D"), item.AnalysisId, item.ProcessingStatus}, UploadJson.Options, statusCode: 202);
+            }
             var response=result.Response;
             if(c.Request.Path.StartsWithSegments("/api/v1/analyses/batches"))
                 response=response with { StatusUrl=$"/api/v1/analyses/batches/{response.BatchId:D}" };

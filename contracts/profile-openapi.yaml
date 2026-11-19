@@ -1002,15 +1002,10 @@ paths:
   /internal/v1/profile/camera-delegation/resolve:
     post:
       summary: Phân giải ủy quyền thiết bị camera chụp đáy mắt cho Analysis Service
-      description: 'Được gọi nội bộ bởi Analysis Service khi tiếp nhận ảnh từ NiFi
-        Camera.
-
-        Xác minh tính hợp lệ của grant, deviceId, clientId, servicePrincipalId, patientId,
-        tenantId.
-
-        Sprint 3 chỉ chấp nhận camera cho tenant PERSONAL.
-
-        '
+      description: >
+        Analysis forwards the camera bearer. Profile verifies audience aura-profile, scope profile:camera,
+        and binds signed sub/client_id to the current device/patient/tenant grant. A clinic selector
+        must match the registered clinic. The grant stores the actor, whose current access is resolved.
       operationId: resolveCameraDelegation
       tags:
       - Profile Internal
@@ -1032,11 +1027,9 @@ paths:
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
-          description: Service token không có scope profile:resolve.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Service scope or signed identity does not match.
+        '503':
+          description: Profile or Identity authority unavailable.
   /health:
     get:
       summary: Kiểm tra trạng thái hoạt động của dịch vụ Profile
@@ -1511,10 +1504,7 @@ components:
     CameraDelegationResolveRequest:
       type: object
       required:
-      - actorAccountId
       - patientId
-      - servicePrincipalId
-      - clientId
       - deviceId
       - expectedTenantId
       - action
@@ -1537,7 +1527,11 @@ components:
           format: uuid
         action:
           type: string
-          example: ANALYSIS_CREATE
+          enum: [ANALYSIS_CREATE]
+        clinicContextId:
+          type: string
+          format: uuid
+          nullable: true
     CameraDelegationResolveResponse:
       type: object
       required:
@@ -1545,6 +1539,14 @@ components:
       properties:
         allowed:
           type: boolean
+        actorAccountId:
+          type: string
+          format: uuid
+          nullable: true
+        clinicContextId:
+          type: string
+          format: uuid
+          nullable: true
         patientId:
           type: string
           format: uuid

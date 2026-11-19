@@ -283,39 +283,7 @@ app.MapPost("/internal/v1/profile/clinic-access/resolve", async Task<IResult> (H
     {return Results.StatusCode(503);}
 });
 
-// 5. POST /internal/v1/profile/camera-delegation/resolve (Bảo vệ bằng Service JWT: scope profile:resolve)
-app.MapPost("/internal/v1/profile/camera-delegation/resolve", async (
-    HttpRequest request,
-    CameraDelegationResolveRequest body,
-    ProfileRepository repository,
-    ServiceTokenValidator tokenValidator,
-    CancellationToken ct) =>
-{
-    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
-
-    var authHeader = request.Headers.Authorization.FirstOrDefault();
-    if (string.IsNullOrWhiteSpace(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-    {
-        return Results.Json(
-            new ErrorEnvelope(new ErrorDetails("ERR_UNAUTHORIZED", "Thiếu service token xác thực.", correlationId, false)),
-            statusCode: StatusCodes.Status401Unauthorized);
-    }
-
-    var token = authHeader["Bearer ".Length..].Trim();
-    var (valid, _, errCode, errMsg) = await tokenValidator.ValidateTokenAsync(token, "aura-profile", "profile:resolve");
-    if (!valid)
-    {
-        var statusCode = errCode == "ERR_FORBIDDEN" ? StatusCodes.Status403Forbidden : StatusCodes.Status401Unauthorized;
-        return Results.Json(
-            new ErrorEnvelope(new ErrorDetails(errCode ?? "ERR_UNAUTHORIZED", errMsg ?? "Service token không hợp lệ.", correlationId, false)),
-            statusCode: statusCode);
-    }
-
-    var response = await repository.ResolveCameraDelegationAsync(body, ct);
-    return Results.Ok(response);
-})
-.WithName("ResolveCameraDelegation")
-.WithTags("Internal");
+app.MapCameraDelegation();
 
 // --- CLINIC LIFECYCLE & MEMBERSHIP ENDPOINTS (Task W4-M6-01 / SCRUM-358) ---
 
