@@ -2,10 +2,11 @@ import type { BackendContext } from './backendContext'
 import { isMockEnabled } from './client'
 import { getFirebaseAuth } from '../firebase/config'
 
-/** API Billing M3: 4 routes are implemented in Program.cs; the OpenAPI 0.2 catalog is incomplete. */
 export type BillingOwner = Readonly<{ type: 'ACCOUNT' | 'CLINIC'; id: string }>
 export type BillingWallet = Readonly<{ ownerType: 'ACCOUNT' | 'CLINIC'; ownerId: string; environment: 'TEST' | 'LIVE'; balance: number }>
-export type BillingPackage = Readonly<{ id: number; name: string; price: number; credits: number }>
+export type BillingPackage = Readonly<{
+  id: number; name: string; price: number; credits: number; priceVersionId: string; currency: string; version: number
+}>
 export type PackageCatalog = Readonly<{
   data: readonly BillingPackage[]
   source: string
@@ -20,6 +21,7 @@ export type BillingOrderCreated = Readonly<{
   currency: string
   credits: number
   packageName: string
+  priceVersionId: string
   paymentUrl: string
   createdAt: string
 }>
@@ -70,6 +72,7 @@ function invalid(): never { throw new BillingError(0, 'ERR_INVALID_RESPONSE') }
 export function billingErrorMessage(cause: unknown): string {
   if (!(cause instanceof BillingError)) return 'Không kết nối được Billing API. Vui lòng thử lại.'
   if (cause.code === 'ERR_MOCK_ENABLED') return 'Tắt VITE_ENABLE_MOCK để dùng Billing API thật.'
+  if (cause.code === 'ERR_PRICE_VERSION_CHANGED') return 'Giá gói đã thay đổi. Hãy kiểm tra giá mới trước khi mua.'
   if (cause.status === 400) return 'Thông tin đơn hàng không hợp lệ. Vui lòng kiểm tra lại.'
   if (cause.status === 401) return 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.'
   if (cause.status === 403) return 'Tài khoản không có quyền thanh toán cho ví đã chọn.'
@@ -83,13 +86,16 @@ export function billingErrorMessage(cause: unknown): string {
 }
 
 export function parseCatalog(value: unknown): PackageCatalog {
-  if (!object(value) || !Array.isArray(value.data) || value.data.length > 200 ||
+  if (!object(value) || !Array.isArray(value.data) ||
       !text(value.source) || typeof value.cacheHit !== 'boolean' ||
       !natural(value.ttlSeconds) || !natural(value.databaseReadCount)) invalid()
   const rows = (value.data as unknown[]).map((item): BillingPackage => {
     if (!object(item) || !Number.isSafeInteger(item.id) || (item.id as number) <= 0 ||
-        !text(item.name) || !money(item.price) || !natural(item.credits) || (item.credits as number) < 1) invalid()
-    return { id: item.id as number, name: item.name, price: item.price as number, credits: item.credits as number }
+        !text(item.name) || !money(item.price) || !natural(item.credits) || (item.credits as number) < 1 ||
+        !validBillingId(item.priceVersionId) || typeof item.currency !== 'string' || !/^[A-Z]{3}$/.test(item.currency) ||
+        !natural(item.version) || item.version < 1) invalid()
+    return { id: item.id as number, name: item.name, price: item.price as number, credits: item.credits as number,
+      priceVersionId: item.priceVersionId, currency: item.currency, version: item.version }
   })
   if (new Set(rows.map(item => item.id)).size !== rows.length) invalid()
   return { data: rows, source: value.source, cacheHit: value.cacheHit,
@@ -98,12 +104,13 @@ export function parseCatalog(value: unknown): PackageCatalog {
 
 export function parseCreatedOrder(value: unknown): BillingOrderCreated {
   if (!object(value) || !validBillingId(value.orderId) || !text(value.status) ||
+      !validBillingId(value.priceVersionId) ||
       !money(value.amount) || !text(value.currency) || !natural(value.credits) ||
       !text(value.packageName) || typeof value.paymentUrl !== 'string' ||
       !text(value.createdAt) || !Number.isFinite(Date.parse(value.createdAt))) invalid()
   // Never navigate automatically to the paymentUrl: the internal sandbox route is used instead.
   return { orderId: value.orderId, status: value.status, amount: value.amount as number,
-    currency: value.currency, credits: value.credits as number, packageName: value.packageName,
+    currency: value.currency, credits: value.credits as number, packageName: value.packageName, priceVersionId: value.priceVersionId,
     paymentUrl: value.paymentUrl, createdAt: value.createdAt }
 }
 
@@ -198,15 +205,17 @@ export async function getBillingWallet(context: BackendContext, owner: BillingOw
 }
 
 export async function createBillingOrder(
-  context: BackendContext, owner: BillingOwner, packageId: number, idempotencyKey: string,
+  context: BackendContext, owner: BillingOwner, packageId: number, idempotencyKey: string, packagePriceVersionId: string,
 ): Promise<BillingOrderCreated> {
   if (!validBillingId(owner.id) || !['ACCOUNT', 'CLINIC'].includes(owner.type) ||
-      !Number.isSafeInteger(packageId) || packageId < 1 || !validBillingId(idempotencyKey))
+      !Number.isSafeInteger(packageId) || packageId < 1 || !validBillingId(idempotencyKey) || !validBillingId(packagePriceVersionId))
     throw new BillingError(400, 'ERR_VALIDATION')
   const response = await request('/api/v1/billing/orders', 'POST', context,
-    { billingOwner: owner, packageId, paymentMethod: 'SANDBOX_MOCK' }, idempotencyKey)
+    { billingOwner: owner, packageId, packagePriceVersionId, paymentMethod: 'SANDBOX_MOCK' }, idempotencyKey)
   if (![200, 201].includes(response.status)) invalid()
-  return parseCreatedOrder(response.value)
+  const order = parseCreatedOrder(response.value)
+  if (order.priceVersionId.toLowerCase() !== packagePriceVersionId.toLowerCase()) invalid()
+  return order
 }
 
 export async function getBillingOrder(context: BackendContext, orderId: string,

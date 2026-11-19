@@ -100,6 +100,7 @@ builder.Services.AddSingleton<StaleReservationReconciliationService>();
 builder.Services.AddHostedService<StaleReservationReconciliationWorker>();
 builder.Services.AddSingleton<ServiceTokenValidator>();
 builder.Services.AddSingleton<SystemAdminAuthorizer>();
+builder.Services.AddSingleton<BillingHistoryRepository>();
 builder.Services.AddSingleton<ProfileAccessClient>();
 builder.Services.AddSingleton<AnalysisSettlementResolverClient>();
 builder.Services.AddSingleton<SettlementInboxRepository>();
@@ -186,18 +187,7 @@ await app.Services.GetRequiredService<CreditReservationRepository>()
 
 app.MapHealthChecks("/health");
 app.MapAuraMetrics();
-
-// Public package catalog remains anonymous and continues to read the legacy PoC catalog.
-app.MapGet("/api/v1/billing/packages", async (
-    PackageCatalogService service,
-    CancellationToken cancellationToken) =>
-{
-    var response = await service.GetAllAsync(cancellationToken);
-    return Results.Ok(response);
-})
-.WithName("GetPackageCatalog")
-.WithTags("Package Catalog")
-.Produces<PackageCatalogResponse>();
+app.MapBillingCatalog();
 
 // Legacy catalog update is retained for compatibility, but now requires SYSTEM_ADMIN.
 app.MapPut("/api/v1/billing/packages/{id:int}", async Task<IResult> (
@@ -279,6 +269,9 @@ app.MapPost("/api/v1/billing/orders", async Task<IResult> (
         return BillingError(context, StatusCodes.Status404NotFound, "ERR_PACKAGE_NOT_FOUND",
             "Không tìm thấy gói cước hoặc phiên bản giá tương ứng đang kích hoạt.");
     }
+
+    if (result.Status == OrderOperationStatus.PriceChanged)
+        return BillingError(context, 409, "ERR_PRICE_VERSION_CHANGED", "Giá đã thay đổi. Hãy tải lại danh mục.");
 
     if (result.Status == OrderOperationStatus.IdempotencyConflict)
     {

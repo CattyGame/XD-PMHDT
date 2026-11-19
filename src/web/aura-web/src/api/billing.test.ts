@@ -17,9 +17,10 @@ const context: BackendContext = {
   personalTenantId: '55555555-5555-4555-8555-555555555555', roles: ['PATIENT'],
   displayName: 'Người kiểm thử', profileVersion: 1,
 }
-const catalog = { data: [{ id: 1, name: 'Gói thử nghiệm', price: 80000, credits: 5 }],
+const priceVersionId = '66666666-6666-4666-8666-666666666666'
+const catalog = { data: [{ id: 1, name: 'Gói thử nghiệm', price: 80000, credits: 5, priceVersionId, currency: 'VND', version: 2 }],
   source: 'database', cacheHit: false, ttlSeconds: 60, databaseReadCount: 1 }
-const created = { orderId, status: 'PENDING', amount: 80000, currency: 'VND', credits: 5,
+const created = { orderId, status: 'PENDING', amount: 80000, currency: 'VND', credits: 5, priceVersionId,
   packageName: 'Gói thử nghiệm', paymentUrl: 'http://localhost:5173/billing/sandbox-checkout',
   createdAt: '2026-11-04T10:00:00Z' }
 const order = { id: orderId, billingOwnerType: 'ACCOUNT', billingOwnerId: accountId,
@@ -62,18 +63,23 @@ describe('SCRUM-355 Billing M3 API', () => {
   })
   it('tạo đơn bằng Firebase Bearer và Idempotency-Key đúng backend', async () => {
     fetchMock.mockResolvedValueOnce(json(created, 201))
-    const result = await createBillingOrder(context, { type: 'ACCOUNT', id: accountId }, 1, key)
+    const result = await createBillingOrder(context, { type: 'ACCOUNT', id: accountId }, 1, key, priceVersionId)
     expect(result.orderId).toBe(orderId)
     const options = fetchMock.mock.calls[0][1]
     expect(options?.headers).toMatchObject({ Authorization: 'Bearer firebase-token', 'Idempotency-Key': key })
     expect(JSON.parse(String(options?.body))).toEqual({
-      billingOwner: { type: 'ACCOUNT', id: accountId }, packageId: 1, paymentMethod: 'SANDBOX_MOCK',
+      billingOwner: { type: 'ACCOUNT', id: accountId }, packageId: 1, packagePriceVersionId: priceVersionId, paymentMethod: 'SANDBOX_MOCK',
     })
   })
   it('trả lại kết quả replay 200 và không tự tạo giao dịch mới', async () => {
     fetchMock.mockResolvedValueOnce(json(created, 200))
-    expect((await createBillingOrder(context, { type: 'ACCOUNT', id: accountId }, 1, key)).orderId).toBe(orderId)
+    expect((await createBillingOrder(context, { type: 'ACCOUNT', id: accountId }, 1, key, priceVersionId)).orderId).toBe(orderId)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('từ chối snapshot trả về với phiên bản khác báo giá', async () => {
+    fetchMock.mockResolvedValueOnce(json({ ...created, priceVersionId: key }, 201))
+    await expect(createBillingOrder(context, { type: 'ACCOUNT', id: accountId }, 1, key, priceVersionId))
+      .rejects.toMatchObject({ code: 'ERR_INVALID_RESPONSE' })
   })
   it('lấy trạng thái đơn PENDING từ backend để tránh POST thanh toán khi refresh', async () => {
     fetchMock.mockResolvedValueOnce(json(order))
@@ -93,7 +99,7 @@ describe('SCRUM-355 Billing M3 API', () => {
   it('chặn HTTP 409 idempotency conflict, HTTP 429 và 5xx', async () => {
     for (const status of [409, 429, 503]) {
       fetchMock.mockResolvedValueOnce(json({ error: { code: 'ERR_REQUEST_FAILED' } }, status))
-      await expect(createBillingOrder(context, { type: 'ACCOUNT', id: accountId }, 1, key))
+      await expect(createBillingOrder(context, { type: 'ACCOUNT', id: accountId }, 1, key, priceVersionId))
         .rejects.toMatchObject({ status })
     }
   })

@@ -1,0 +1,208 @@
+using AURA.Billing.Api;
+using AURA.Billing.Api.Auth;
+using AURA.Billing.Api.Data;
+using AURA.Billing.Api.Models;
+using AURA.Notification.Api;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Xunit;
+
+namespace AURA.M1.RegressionTests;
+
+public sealed class CatalogVersionTests
+{
+    [M1PostgresFact]
+    public async Task Catalog_versions_are_atomic_and_replay_keeps_the_original_price()
+    {
+        await using var db = await Database.CreateAsync();
+        var repository = new PackageRepository(db.Billing);
+        var actor = Guid.NewGuid();
+        var key = Guid.NewGuid();
+        var initial = new PublishPriceRequest(0, "Fixture package", 500, "VND", 3, "Fixture");
+        var first = await repository.PublishAsync(null, initial, actor, key, null, default);
+        Assert.NotNull(first.Price);
+        var packageId = first.Price.PackageId;
+        var orders = new OrderRepository(db.Billing, NullLogger<OrderRepository>.Instance);
+        var order = await orders.CreateOrderAsync(Guid.NewGuid(), actor, "ACCOUNT", actor, first.Price, "TEST",
+            Guid.NewGuid(), "fixture", default);
+        var published = await repository.PublishAsync(packageId, initial with { ExpectedVersion = 1, AmountMinor = 700 },
+            actor, Guid.NewGuid(), null, default);
+        Assert.Equal(700m, published.Price!.PriceAmount);
+        Assert.Equal(first.Price.Id, order.PackagePriceVersionId);
+        Assert.Equal(500m, (await orders.GetOrderByIdAsync(order.Id, default))!.PriceAmountSnapshot);
+        await Assert.ThrowsAsync<PriceVersionUnavailableException>(() => orders.CreateOrderAsync(Guid.NewGuid(), actor,
+            "ACCOUNT", actor, first.Price, "TEST", Guid.NewGuid(), "expired-quote", default));
+        var payment = new PaymentCallbackPayload(order.Id, "fixture-payment", 500, "VND", "SUCCESS", 0, "fixture-signature");
+        Assert.Equal(3, (await orders.ProcessCallbackInTransactionAsync(payment, "SANDBOX_MOCK", default)).CreditsAdded);
+        Assert.True((await orders.ProcessCallbackInTransactionAsync(payment, "SANDBOX_MOCK", default)).Replayed);
+        Assert.Equal(1L, await db.ScalarAsync<long>("SELECT count(*) FROM billing.credit_ledger_entries WHERE order_id=$1", order.Id));
+        var replay = await repository.PublishAsync(null, initial, actor, key, null, default);
+        Assert.True(replay.Replayed);
+        Assert.Equal(first.Price.Id, replay.Price!.Id);
+        Assert.Equal(500m, replay.Price.PriceAmount);
+        Assert.True((await repository.PublishAsync(null, initial with { Credits = 8 }, actor, key, null, default)).Conflict);
+        Assert.True((await repository.PublishAsync(packageId, initial with { ExpectedVersion = 1 },
+            actor, Guid.NewGuid(), null, default)).Conflict);
+        var catalog = await repository.GetAllAsync(default);
+        Assert.Equal(published.Price.Id, Assert.Single(catalog, p => p.Id == packageId).PriceVersionId);
+        Assert.Equal(2L, await db.ScalarAsync<long>("SELECT count(*) FROM billing.audit_events"));
+        var next = initial with { ExpectedVersion = 2, AmountMinor = 800 };
+        var results = await Task.WhenAll(
+            repository.PublishAsync(packageId, next, actor, Guid.NewGuid(), null, default),
+            repository.PublishAsync(packageId, next with { AmountMinor = 900 }, actor, Guid.NewGuid(), null, default));
+        Assert.Single(results, r => r.Conflict);
+        Assert.Single(results, r => r.Price?.VersionNumber == 3);
+        Assert.Equal(1L, await db.ScalarAsync<long>(
+            "SELECT count(*) FROM billing.package_price_versions WHERE package_id=$1 AND status='ACTIVE'", packageId));
+    }
+
+    [M1PostgresFact]
+    public async Task Published_admin_routes_and_owner_history_use_current_authority_and_real_ledger()
+    {
+        await using var db = await Database.CreateAsync();
+        var actor = Guid.NewGuid();
+        var tenant = Guid.NewGuid();
+        using var identity = new IdentityFixture(actor, tenant);
+        var packages = new PackageRepository(db.Billing);
+        var templates = new PushTemplates(db.Notification);
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IHttpClientFactory>(identity);
+        builder.Services.AddSingleton(packages);
+        builder.Services.AddSingleton(templates);
+        builder.Services.AddSingleton(new BillingHistoryRepository(db.Billing));
+        builder.Services.AddSingleton(new BillingRuntimeOptions("TEST", false));
+        builder.Services.AddSingleton<BillingOwnerAuthorizer>();
+        builder.Services.AddSingleton<SystemAdminAuthorizer>();
+        await using var app = builder.Build();
+        app.MapBillingCatalog();
+        app.MapPushTemplates();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-session");
+        var key = Guid.NewGuid();
+        async Task<HttpResponseMessage> Publish()
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/admin/billing/packages")
+            {
+                Content = JsonContent.Create(new PublishPriceRequest(0, "Fixture", 250, "USD", 5, "Test"))
+            };
+            request.Headers.Add("Idempotency-Key", key.ToString("D"));
+            return await client.SendAsync(request);
+        }
+        using var published = await Publish();
+        Assert.Equal(HttpStatusCode.Created, published.StatusCode);
+        var priceId = (await published.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("priceVersionId").GetGuid();
+        using var replay = await Publish();
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(priceId, (await replay.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("priceVersionId").GetGuid());
+
+        var active = await packages.GetAllAsync(default);
+        var usd = Assert.Single(active, p => p.PriceVersionId == priceId);
+        var vnd = Assert.Single(active, p => p.Id == 1);
+        using var anonymous = app.GetTestClient();
+        using var catalog = await anonymous.GetAsync("/api/v1/billing/packages");
+        Assert.Equal(HttpStatusCode.OK, catalog.StatusCode);
+        Assert.True(catalog.Headers.CacheControl!.NoStore);
+        var view = (await catalog.Content.ReadFromJsonAsync<PackageCatalogResponse>())!;
+        Assert.Equal(usd, Assert.Single(view.Data, p => p.PriceVersionId == priceId));
+        var orders = new OrderRepository(db.Billing, NullLogger<OrderRepository>.Instance);
+        async Task<OrderRecord> Paid(PackageDto plan, string env)
+        {
+            var price = await orders.GetActivePriceVersionAsync(plan.Id, plan.PriceVersionId, default);
+            var order = await orders.CreateOrderAsync(Guid.NewGuid(), tenant, "ACCOUNT", actor, price!, env,
+                Guid.NewGuid(), "test", default);
+            var callback = new PaymentCallbackPayload(order.Id, $"tx-{order.Id:N}", plan.Price, plan.Currency!, "SUCCESS", 0, "test");
+            Assert.True((await orders.ProcessCallbackInTransactionAsync(callback, "SANDBOX_MOCK", default)).Success);
+            return order;
+        }
+        var paidUsd = await Paid(usd, "TEST");
+        var paidVnd = await Paid(vnd, "TEST");
+        var live = await Paid(vnd, "LIVE");
+        var orderPath = $"/api/v1/billing/orders?ownerType=ACCOUNT&ownerId={actor:D}&limit=1";
+        var page = await client.GetFromJsonAsync<JsonElement>(orderPath);
+        var next = page.GetProperty("nextCursor").GetString();
+        Assert.NotNull(next);
+        var oldPage = await client.GetFromJsonAsync<JsonElement>(orderPath + "&cursor=" + next);
+        Assert.Equal(paidVnd.Id, page.GetProperty("items")[0].GetProperty("id").GetGuid());
+        Assert.Equal(paidUsd.Id, oldPage.GetProperty("items")[0].GetProperty("id").GetGuid());
+        Assert.Equal(JsonValueKind.Null, oldPage.GetProperty("nextCursor").ValueKind);
+        var range = $"from={DateTime.UtcNow.AddDays(-1):yyyy-MM-dd}T00:00:00Z&to={DateTime.UtcNow.AddDays(1):yyyy-MM-dd}T00:00:00Z";
+        var usage = await client.GetFromJsonAsync<JsonElement>($"/api/v1/billing/usage?ownerType=ACCOUNT&ownerId={actor:D}&{range}");
+        var entries = usage.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Equal(2, entries.Length);
+        Assert.Equal(usd.Credits + vnd.Credits, entries.Sum(i => i.GetProperty("balanceDelta").GetInt32()));
+        Assert.DoesNotContain(entries, i => i.GetProperty("orderId").GetGuid() == live.Id);
+        var summary = await client.GetFromJsonAsync<JsonElement>("/api/v1/admin/billing/summary?" + range);
+        var groups = summary.GetProperty("groups").EnumerateArray().ToArray();
+        Assert.Equal(3, groups.Length);
+        Assert.Contains(groups, g => g.GetProperty("currency").GetString() == "USD" && g.GetProperty("paidAmount").GetDecimal() == 2.50m);
+        Assert.Contains(groups, g => g.GetProperty("environment").GetString() == "LIVE");
+
+        var templateList = await client.GetFromJsonAsync<JsonElement>("/api/v1/admin/notification-templates");
+        var template = templateList.GetProperty("items")[0];
+        var templatePath = "/api/v1/admin/notification-templates/" + template.GetProperty("id").GetGuid().ToString("D");
+        var tweak = new PushTemplateChange(1, "Thông báo từ {{app_name}}", "{{event_label}}. Đăng nhập để xem chi tiết.", true, "Test");
+        using var unsafeTemplate = await client.PutAsJsonAsync(templatePath, tweak with { Body = "https://outside.example" });
+        Assert.Equal(HttpStatusCode.BadRequest, unsafeTemplate.StatusCode);
+        using var acceptedTemplate = await client.PutAsJsonAsync(templatePath, tweak);
+        Assert.Equal(HttpStatusCode.OK, acceptedTemplate.StatusCode);
+        Assert.Equal(2, (await acceptedTemplate.Content.ReadFromJsonAsync<PushTemplate>())!.Version);
+        using var staleTemplate = await client.PutAsJsonAsync(templatePath, tweak);
+        Assert.Equal(HttpStatusCode.Conflict, staleTemplate.StatusCode);
+        Assert.Equal(1L, await db.ScalarAsync<long>("SELECT count(*) FROM notification.audit_events"));
+
+        using var wrongOwner = await client.GetAsync($"/api/v1/billing/orders?ownerType=ACCOUNT&ownerId={Guid.NewGuid():D}");
+        Assert.Equal(HttpStatusCode.Forbidden, wrongOwner.StatusCode);
+        identity.Permitted = false;
+        using var revoked = await client.GetAsync(orderPath + "&cursor=" + next);
+        Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
+        using var nonAdmin = await client.GetAsync("/api/v1/admin/billing/summary");
+        Assert.Equal(HttpStatusCode.Forbidden, nonAdmin.StatusCode);
+    }
+
+    [Fact]
+    public void Push_templates_accept_only_generic_copy_and_predefined_variables()
+    {
+        Assert.True(PushTemplates.IsAllowed("{{app_name}}", "{{event_label}}. Đăng nhập để xem chi tiết."));
+        Assert.False(PushTemplates.IsAllowed("{{patient_name}}", "Đăng nhập để xem chi tiết."));
+        Assert.False(PushTemplates.IsAllowed("AURA", "https://outside.example"));
+        Assert.False(PushTemplates.IsAllowed("Nguyễn Văn A", "Đăng nhập để xem chi tiết."));
+        Assert.False(PushTemplates.IsAllowed("AURA", "Kết quả bệnh nhân: cao."));
+    }
+
+    private sealed class IdentityFixture(Guid actor, Guid tenant) : HttpMessageHandler, IHttpClientFactory
+    {
+        public bool Permitted { get; set; } = true;
+        public HttpClient CreateClient(string name) => new(this, disposeHandler: false) { BaseAddress = new("http://authority.test") };
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            object body;
+            switch (request.RequestUri!.AbsolutePath)
+            {
+                case "/api/v1/identity/me":
+                    Assert.Equal("synthetic-session", request.Headers.Authorization!.Parameter);
+                    body = new { accountId = actor, accountStatus = "ACTIVE", roles = Permitted ? new[] { "SYSTEM_ADMIN" } : [] };
+                    break;
+                case "/internal/v1/identity/service-tokens":
+                    body = new { accessToken = "fixture-service" };
+                    break;
+                default:
+                    Assert.Equal("/internal/v1/profile/billing-owner/resolve", request.RequestUri.AbsolutePath);
+                    var query = await request.Content!.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+                    Assert.Equal("BILLING_READ", query.GetProperty("action").GetString());
+                    body = new { allowed = Permitted && query.GetProperty("ownerId").GetGuid() == actor, tenantId = tenant };
+                    break;
+            }
+            return new(HttpStatusCode.OK) { Content = JsonContent.Create(body) };
+        }
+    }
+}

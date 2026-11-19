@@ -76,6 +76,7 @@ builder.Services.AddSingleton<TokenCipher>();
 builder.Services.AddSingleton<DeviceRegistrationRepository>();
 builder.Services.AddSingleton<NotificationInboxRepository>();
 builder.Services.AddSingleton<NotificationDeliveryJobRepository>();
+builder.Services.AddSingleton<PushTemplates>();
 builder.Services.AddHttpClient("IdentityAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Identity:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
 builder.Services.AddHttpClient("AnalysisAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Analysis:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
@@ -233,6 +234,7 @@ app.Use(async (context, next) =>
 });
 
 app.MapHealthChecks("/health");
+app.MapPushTemplates();
 
 app.MapGet("/health/ready", async Task<IResult> (
     DeviceRegistrationRepository repository,

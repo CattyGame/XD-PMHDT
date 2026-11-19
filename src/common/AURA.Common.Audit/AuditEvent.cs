@@ -8,8 +8,8 @@ namespace AURA.Common.Audit;
 
 public enum AuditSource { Identity, Profile, Analysis, Billing, Notification }
 public enum AuditAction { ImageRead, ReportDownload, RoleChanged, PriceChanged, ClinicStatusChanged, NotificationRead,
-    MembershipInvited, MembershipGranted, MembershipRevoked }
-public enum AuditResource { Image, Report, Account, Package, Clinic, Membership }
+    MembershipInvited, MembershipGranted, MembershipRevoked, NotificationTemplateChanged }
+public enum AuditResource { Image, Report, Account, Package, Clinic, Membership, NotificationTemplate }
 public enum AuditOutcome { Authorized, Succeeded, Denied, Failed }
 
 // No request body, path, headers, filenames or free-text metadata can enter this contract.
