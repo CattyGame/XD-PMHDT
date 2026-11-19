@@ -15,4 +15,5 @@
     <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.4.0" />
   </ItemGroup>
 
+  <ItemGroup><ProjectReference Include="../../common/AURA.Common.Audit/AURA.Common.Audit.csproj" /></ItemGroup>
 </Project>

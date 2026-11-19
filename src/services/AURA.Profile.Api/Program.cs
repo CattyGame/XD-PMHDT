@@ -1,6 +1,7 @@
 using AURA.Profile.Api;
 using AURA.Profile.Api.Models;
 using Npgsql;
+using AURA.Common.Audit;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,6 +44,7 @@ builder.Services.AddHttpClient("AnalysisClient", client =>
 
 builder.Services.AddSingleton<ServiceTokenValidator>();
 
+builder.Services.AddOwnerAudit(builder.Configuration, AuditSource.Profile);
 var app = builder.Build();
 
 // Validate provisioned service-auth material before health or business routes start.
@@ -71,6 +73,7 @@ app.Use(async (context, next) =>
 });
 
 app.MapHealthChecks("/health");
+app.MapAuditEndpoints();
 
 // 1. POST /internal/v1/profile/provision (Bảo vệ bằng Service JWT: scope profile:provision)
 app.MapPost("/internal/v1/profile/provision", async (
@@ -381,7 +384,7 @@ app.MapPatch("/api/v1/admin/clinics/{clinicId:guid}/status", async (
             statusCode: StatusCodes.Status400BadRequest);
     }
 
-    var updatedClinic = await repository.UpdateClinicStatusAsync(identity.AccountId, clinicId, normalizedStatus, body.Reason?.Trim(), ct);
+    var updatedClinic = await repository.UpdateClinicStatusAsync(identity.AccountId, clinicId, normalizedStatus, body.Reason?.Trim(), ct, correlationId);
     if (updatedClinic == null)
     {
         return Results.Json(
@@ -444,7 +447,7 @@ app.MapPost("/api/v1/clinics/{clinicId:guid}/memberships/invite", async (
             statusCode: StatusCodes.Status400BadRequest);
     }
 
-    var (result, errorCode) = await repository.InviteClinicMemberAsync(clinicId, body.Email, normalizedRole, ct);
+    var (result, errorCode) = await repository.InviteClinicMemberAsync(clinicId, body.Email, normalizedRole, identity.AccountId, ct, correlationId);
     if (errorCode == "ERR_MEMBERSHIP_ALREADY_EXISTS")
     {
         return Results.Json(
@@ -553,7 +556,7 @@ app.MapPost("/api/v1/clinics/{clinicId:guid}/memberships", async (
 
     var targetRole = body.Role.Trim().ToUpperInvariant();
     var (success, member, errCode, errMsg) = await repository.AddOrReactivateClinicMemberAsync(
-        clinicId, body.AccountId, targetRole, ct);
+        clinicId, body.AccountId, targetRole, identity.AccountId, ct, correlationId);
 
     if (!success)
     {
@@ -609,7 +612,7 @@ app.MapDelete("/api/v1/clinics/{clinicId:guid}/memberships/{accountId:guid}", as
             statusCode: StatusCodes.Status403Forbidden);
     }
 
-    var (success, errCode, errMsg) = await repository.RevokeClinicMemberAsync(clinicId, accountId, ct);
+    var (success, errCode, errMsg) = await repository.RevokeClinicMemberAsync(clinicId, accountId, identity.AccountId, ct, correlationId);
     if (!success)
     {
         var statusCode = errCode switch

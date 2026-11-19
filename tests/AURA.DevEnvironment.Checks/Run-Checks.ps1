@@ -100,7 +100,7 @@ try {
     $global:AuraM1EnvironmentCheckState.emptyAt = -1
 
     $plan = @(& $initialize -PlanOnly)
-    Assert-Check ($plan.Count -eq 36) "Migration plan includes all service schemas, research annotations, durable delivery and payment outbox"
+    Assert-Check ($plan.Count -eq 37) "Migration plan includes all service schemas, research annotations, durable delivery, payment outbox and shared audit"
     Assert-Check ($plan[0] -eq "infra/postgres/migrations/001_notification_devices.sql") "Notification schema is bootstrapped first"
     Assert-Check ($plan[2] -eq "infra/postgres/migrations/002_identity_and_profile.sql") "Identity/Profile migration is included"
     Assert-Check ($plan[3] -eq "infra/postgres/migrations/003_doctor_assignments.sql") "Doctor assignments follow Profile schema"
@@ -120,8 +120,9 @@ try {
     Assert-Check ($plan[24] -eq "infra/postgres/migrations/009_billing_clinic_and_reconciliation.sql") "Billing clinic packages and reconciliation follow payments"
     Assert-Check ($plan[26] -eq "infra/postgres/migrations/010_clinic_lifecycle_and_memberships.sql") "Clinic lifecycle and memberships follow billing clinic reconciliation"
     Assert-Check ($plan[27] -eq "infra/postgres/migrations/011_clinic_patients_and_assignments.sql") "Clinic patients and doctor assignments extension follow clinic lifecycle"
-    Assert-Check ($plan[-5] -eq "infra/postgres/migrations/002_service_database_roles.sql" -and $plan[-4] -eq "infra/postgres/migrations/015_runtime_boundary_hardening.sql" -and $plan[-3] -eq "infra/postgres/migrations/016_billing_event_compatibility.sql") "Final blanket grants are followed by ADR005 append-only and runtime boundary hardening"
-    Assert-Check ($plan[-2] -eq "infra/postgres/migrations/017_notification_payment_and_delivery_jobs.sql" -and $plan[-1] -eq "infra/postgres/migrations/018_billing_payment_outbox.sql") "Durable notification delivery precedes the canonical payment outbox"
+    Assert-Check ($plan[-6] -eq "infra/postgres/migrations/002_service_database_roles.sql" -and $plan[-5] -eq "infra/postgres/migrations/015_runtime_boundary_hardening.sql" -and $plan[-4] -eq "infra/postgres/migrations/016_billing_event_compatibility.sql") "Final blanket grants are followed by ADR005 append-only and runtime boundary hardening"
+    Assert-Check ($plan[-3] -eq "infra/postgres/migrations/017_notification_payment_and_delivery_jobs.sql" -and $plan[-2] -eq "infra/postgres/migrations/018_billing_payment_outbox.sql") "Durable notification delivery precedes the canonical payment outbox"
+    Assert-Check ($plan[-1] -eq "infra/postgres/migrations/019_shared_audit.sql") "Owner audit and projection permissions follow all legacy blanket grants"
 
     $global:AuraM1EnvironmentCheckState.dockerCalls = New-Object System.Collections.Generic.List[string]
     $global:AuraM1EnvironmentCheckState.failOnCall = -1
@@ -139,7 +140,7 @@ try {
     }
     $originalEncoding = $OutputEncoding
     & $initialize -EnvFile ".env.example"
-    Assert-Check ($global:AuraM1EnvironmentCheckState.dockerCalls.Count -eq 37) "Migration runner invokes config validation and all thirty-six migrations"
+    Assert-Check ($global:AuraM1EnvironmentCheckState.dockerCalls.Count -eq $plan.Count + 1) "Migration runner invokes config validation and every planned migration"
     Assert-Check ($OutputEncoding -eq $originalEncoding) "Migration runner restores pipeline encoding"
     Assert-Check (@($global:AuraM1EnvironmentCheckState.dockerCalls | Where-Object { $_ -like '*ALTER ROLE*' }).Count -eq 0) "Default migration run preserves existing passwords/logins"
     $global:AuraM1EnvironmentCheckState.dockerCalls.Clear()

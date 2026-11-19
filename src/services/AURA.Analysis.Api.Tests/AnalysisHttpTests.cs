@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
+using AURA.Common.Audit;
 using Xunit;
 
 namespace AURA.Analysis.Api.Tests;
@@ -82,6 +83,7 @@ public sealed class AnalysisHttpTests
         public readonly Identity Identity=new();public readonly Upload Upload=new();public readonly FakeAccess Access=new();
         public readonly FakeFileRepo Files=new();public readonly FakeStorage Storage=new();public readonly Batch Batch=new();
         public readonly HistoryRepository History=new();
+        public readonly AuditWriter Audit=new();
         public WebApplication App=null!;public HttpClient Client=null!;
         public static async Task<Rig> Start(long imageLimit=10485760,int images=100,long total=1101004800,NpgsqlDataSource? itemDatabase=null)
         {
@@ -92,6 +94,7 @@ public sealed class AnalysisHttpTests
             b.Services.AddSingleton<IPatientAccessResolver>(r.Access);b.Services.AddSingleton<IFileAccessRepository>(r.Files);b.Services.AddSingleton<IPrivateFileStorage>(r.Storage);
             b.Services.AddSingleton<IBatchStatusRepository>(r.Batch);b.Services.AddTransient<BatchStatusService>();b.Services.AddTransient<FileAccessService>();
             b.Services.AddSingleton<IPatientHistoryRepository>(r.History);b.Services.AddTransient<PatientHistoryService>();
+            b.Services.AddSingleton<IAuditWriter>(r.Audit);
             if(itemDatabase is not null)
             {b.Services.AddSingleton(itemDatabase);b.Services.AddSingleton(TimeProvider.System);b.Services.AddTransient<ItemUploadService>();}
             r.App=b.Build();r.App.MapAnalysisEndpoints();await r.App.StartAsync();r.Client=r.App.GetTestClient();r.Client.DefaultRequestHeaders.Authorization=new("Bearer","fixture-user");
@@ -234,7 +237,25 @@ public sealed class AnalysisHttpTests
         using var allowed=await r.Client.GetAsync(url);Assert.Equal(HttpStatusCode.OK,allowed.StatusCode);
         Assert.Equal("image/png",allowed.Content.Headers.ContentType!.MediaType);Assert.Equal("no-store",allowed.Headers.CacheControl!.ToString());
         Assert.Equal("nosniff",Assert.Single(allowed.Headers.GetValues("X-Content-Type-Options")));
+        var audit=Assert.Single(r.Audit.Events);Assert.Equal(AuditAction.ImageRead,audit.Action);
+        Assert.Equal(r.Identity.Account,audit.ActorAccountId);Assert.Equal(file.ToString("D"),audit.ResourceId);
         r.Access.Allowed=false;using var denied=await r.Client.GetAsync(url);await Code(denied,404,"ERR_NOT_FOUND");
+        Assert.Equal(2,r.Audit.Events.Count);Assert.Equal(AuditOutcome.Denied,r.Audit.Events[1].Outcome);
+    }
+    [Fact] public async Task Audit_failure_blocks_image_bytes_and_disposes_the_open_private_stream()
+    {
+        await using var r=await Rig.Start();var image=Guid.NewGuid();var file=Guid.NewGuid();
+        r.Files.Records.Add(new(image,file,FakeAccess.Tenant,Guid.NewGuid(),r.Identity.Account,StoredFileKind.Original,"private/key"));
+        using var stream=new MemoryStream(TestImages.Png(10,10));r.Storage.ReadOverride=(_,_)=>stream;r.Audit.Down=true;
+        using var response=await r.Client.GetAsync($"/api/v1/analyses/{image}/files/{file}/content?token=PRIVATE_TOKEN");
+        await Code(response,503,"ERR_NETWORK");Assert.False(stream.CanRead);
+        Assert.Empty(r.Audit.Events);Assert.DoesNotContain("PRIVATE_TOKEN",await response.Content.ReadAsStringAsync());
+    }
+    private sealed class AuditWriter:IAuditWriter
+    {
+        public readonly List<AuditEvent> Events=[];public bool Down;
+        public Task AppendAsync(AuditEvent e,CancellationToken ct)
+        {if(Down)throw new IOException("PRIVATE_AUDIT_FAILURE");Events.Add(e);return Task.CompletedTask;}
     }
     [Fact] public async Task Request_over_capacity_is_rejected_without_running_handler()
     {await using var r=await Rig.Start();var entered=new TaskCompletionSource();var release=new TaskCompletionSource();r.Upload.Before=async()=>{entered.SetResult();await release.Task;};using var first=r.Post();var running=r.Client.SendAsync(first);await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));try{using var second=r.Post();using var response=await r.Client.SendAsync(second);await Code(response,409,"ERR_REQUEST_IN_PROGRESS");}finally{release.SetResult();}using var done=await running;Assert.Equal(HttpStatusCode.Accepted,done.StatusCode);}

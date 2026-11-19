@@ -1,0 +1,134 @@
+openapi: 3.0.3
+info:
+  title: AURA Shared Metadata Audit
+  version: 1.0.0
+  description: >-
+    SCRUM-380. Owner-local append-only audit/outbox; Profile owns the inbox/projection.
+    Public audit metadata contains hashed resource identifiers and correlation values.
+    Audit schemaVersion is 1; resourceVersion is null when the owning operation has no revision.
+    Reads record authorization before streaming, not proof of a completed client download.
+    The 180-day retention is a course policy; pending delivery obligations and opaque replay
+    tombstones are retained. No clinical content, credentials, free-text reasons or raw request paths.
+paths:
+  /api/v1/admin/audit-events:
+    get:
+      operationId: listRedactedAuditEvents
+      security: [{BearerAuth: []}]
+      description: Current ACTIVE SYSTEM_ADMIN only. Identity outage fails closed; private/no-store.
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 1024}, description: Opaque keyset cursor bound to filters; URL-encode without modification.}
+        - {name: from, in: query, schema: {type: string, format: date-time}, description: UTC inclusive.}
+        - {name: to, in: query, schema: {type: string, format: date-time}, description: UTC exclusive.}
+        - {name: source, in: query, schema: {$ref: '#/components/schemas/AuditSource'}}
+        - {name: action, in: query, schema: {$ref: '#/components/schemas/AuditAction'}}
+      responses:
+        '200':
+          description: Metadata page, newest first; projection may lag durable source events.
+          headers:
+            Cache-Control: {schema: {type: string, enum: ['private, no-store']}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuditPage'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /internal/v1/profile/audit-events:
+    post:
+      operationId: collectAuditEvent
+      security: [{ServiceJWT: []}]
+      description: >-
+        Private service network only, never routed by Gateway. Require valid RS256 issuer/key/audience
+        aura-profile and scope profile:audit. Signed client_id must match source + '-api'.
+        Ack only after inbox/projection commit. Same source/event/hash replays; changed payload returns409.
+        Maximum JSON body8192 bytes; unknown/duplicate/missing fields and numeric enums are rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/OwnerAuditEvent'}
+      responses:
+        '200':
+          description: Persisted receipt; also returned for a matching replay.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [eventId, payloadSha256]
+                properties:
+                  eventId: {type: string, format: uuid}
+                  payloadSha256: {$ref: '#/components/schemas/Sha256'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '413': {$ref: '#/components/responses/Error'}
+        '415': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    BearerAuth: {type: http, scheme: bearer, bearerFormat: Firebase ID token}
+    ServiceJWT: {type: http, scheme: bearer, bearerFormat: RS256 service JWT}
+  responses:
+    Error:
+      description: Canonical error; unsuccessful responses never acknowledge delivery.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                required: [code, message, correlationId, retryable]
+                properties:
+                  code: {type: string}
+                  message: {type: string}
+                  correlationId: {type: string, format: uuid}
+                  retryable: {type: boolean}
+  schemas:
+    Sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+    AuditSource: {type: string, enum: [Identity, Profile, Analysis, Billing, Notification]}
+    AuditAction: {type: string, enum: [ImageRead, ReportDownload, RoleChanged, PriceChanged, ClinicStatusChanged, NotificationRead, MembershipInvited, MembershipGranted, MembershipRevoked]}
+    AuditResource: {type: string, enum: [Image, Report, Account, Package, Clinic, Membership]}
+    OwnerAuditEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, schemaVersion, source, actorAccountId, tenantId, action, resourceType, resourceId, resourceVersion, correlationId, outcome, occurredAt]
+      properties:
+        eventId: {type: string, format: uuid}
+        schemaVersion: {type: integer, enum: [1]}
+        source: {$ref: '#/components/schemas/AuditSource'}
+        actorAccountId: {type: string, format: uuid}
+        tenantId: {type: string, format: uuid, nullable: true}
+        action: {$ref: '#/components/schemas/AuditAction'}
+        resourceType: {$ref: '#/components/schemas/AuditResource'}
+        resourceId: {type: string, maxLength: 40, description: Canonical nonempty UUID or positive integer ID; never names or filenames.}
+        resourceVersion: {type: integer, format: int64, minimum: 1, nullable: true}
+        correlationId: {$ref: '#/components/schemas/Sha256'}
+        outcome: {type: string, enum: [Authorized, Succeeded, Denied, Failed]}
+        occurredAt: {type: string, format: date-time, description: UTC; future clock drift limited to5minutes.}
+    AuditItem:
+      type: object
+      additionalProperties: false
+      required: [eventId, sourceService, actorAccountId, action, resourceType, resourceIdHash, resourceVersion, correlationId, occurredAt, outcome]
+      properties:
+        eventId: {type: string, format: uuid}
+        sourceService: {type: string, enum: [identity-api, profile-api, analysis-api, billing-api, notification-api]}
+        actorAccountId: {type: string, format: uuid}
+        action: {$ref: '#/components/schemas/AuditAction'}
+        resourceType: {$ref: '#/components/schemas/AuditResource'}
+        resourceIdHash: {$ref: '#/components/schemas/Sha256'}
+        resourceVersion: {type: integer, format: int64, minimum: 1, nullable: true}
+        correlationId: {$ref: '#/components/schemas/Sha256'}
+        occurredAt: {type: string, format: date-time}
+        outcome: {type: string, enum: [ALLOW, DENY, FAIL]}
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/AuditItem'}}
+        nextCursor: {type: string, nullable: true}

@@ -13,4 +13,5 @@
     <PackageReference Include="RabbitMQ.Client" Version="6.8.1" />
   </ItemGroup>
 
+  <ItemGroup><ProjectReference Include="../../common/AURA.Common.Audit/AURA.Common.Audit.csproj" /></ItemGroup>
 </Project>

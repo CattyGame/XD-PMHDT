@@ -131,7 +131,9 @@ jobs:
           node tests/research/m4_compose_checks.cjs 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
 
       - name: Live harness guardrails and service scope upgrade
-        run: python3 -m unittest discover -s scripts/dev -p test_m1_harnesses.py
+        run: |
+          python3 -m unittest discover -s scripts/dev -p test_m1_harnesses.py
+          python3 -m unittest discover -s scripts/dev -p test_audit_registry.py
 
       - name: Required Analysis, Billing and Worker tests including PostgreSQL
         id: tests

@@ -4,6 +4,7 @@ using AURA.Common.Cache;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using StackExchange.Redis;
+using AURA.Common.Audit;
 
 namespace AURA.Analysis.Api.Http;
 
@@ -46,6 +47,7 @@ public static class AnalysisRuntime
         services.AddSingleton(reportOptions);
         services.AddSingleton(new AnalysisUploadGate(capacity));services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton(_=>NpgsqlDataSource.Create(db.ConnectionString));
+        services.AddOwnerAudit(configuration, AuditSource.Analysis);
         services.AddSingleton<IConnectionMultiplexer>(_ => {
             var options = ConfigurationOptions.Parse(redisConnection);
             options.Password = configuration["Redis:Password"] ?? options.Password;

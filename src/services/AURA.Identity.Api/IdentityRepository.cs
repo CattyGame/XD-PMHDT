@@ -1,5 +1,6 @@
 using AURA.Identity.Api.Models;
 using Npgsql;
+using AURA.Common.Audit;
 
 namespace AURA.Identity.Api;
 
@@ -111,7 +112,7 @@ public class IdentityRepository
 
     public Task<BootstrapResponse?> GetAccountByIdAsync(Guid accountId, CancellationToken cancellationToken = default)
         => GetAccountAsync("a.account_id", accountId, cancellationToken);
-    public async Task<bool> SetDoctorCapabilityAsync(Guid actor, Guid target, bool approved, string reason)
+    public async Task<bool> SetDoctorCapabilityAsync(Guid actor, Guid target, bool approved, string reason, string? correlationId = null)
     {
         await using var connection=await _dataSource.OpenConnectionAsync();
         await using var tx=await connection.BeginTransactionAsync();
@@ -121,7 +122,9 @@ public class IdentityRepository
         await using var role=new NpgsqlCommand(approved ? "INSERT INTO identity.account_roles(account_id,role_name) VALUES($1,'DOCTOR') ON CONFLICT DO NOTHING" : "DELETE FROM identity.account_roles WHERE account_id=$1 AND role_name='DOCTOR'",connection,tx);
         role.Parameters.AddWithValue(target);await role.ExecuteNonQueryAsync();
         await using var audit=new NpgsqlCommand("INSERT INTO identity.doctor_capability_audit(actor_account_id,target_account_id,approved,reason) VALUES($1,$2,$3,$4)",connection,tx);
-        audit.Parameters.AddWithValue(actor);audit.Parameters.AddWithValue(target);audit.Parameters.AddWithValue(approved);audit.Parameters.AddWithValue(reason);await audit.ExecuteNonQueryAsync();
+        audit.Parameters.AddWithValue(actor);audit.Parameters.AddWithValue(target);audit.Parameters.AddWithValue(approved);audit.Parameters.AddWithValue("sha256:" + AuditEvent.Correlation(reason));await audit.ExecuteNonQueryAsync();
+        await AuditStore.AppendAsync(connection, tx, AuditEvent.Create(AuditSource.Identity, actor,
+            AuditAction.RoleChanged, AuditResource.Account, target.ToString("D"), correlationId), default);
         await tx.CommitAsync();return true;
     }
 }

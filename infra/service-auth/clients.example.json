@@ -12,7 +12,8 @@
           "identity:context"
         ],
         "aura-profile": [
-          "profile:resolve"
+          "profile:resolve",
+          "profile:audit"
         ],
         "aura-billing": [
           "billing:reserve",
@@ -27,7 +28,8 @@
       "principalId": "a1000000-0000-4000-8000-000000000002",
       "allowedTargets": {
         "aura-profile": [
-          "profile:provision"
+          "profile:provision",
+          "profile:audit"
         ]
       }
     },
@@ -36,7 +38,8 @@
       "principalId": "a1000000-0000-4000-8000-000000000003",
       "allowedTargets": {
         "aura-profile": [
-          "profile:resolve"
+          "profile:resolve",
+          "profile:audit"
         ],
         "aura-identity": [
           "identity:context"
@@ -82,6 +85,9 @@
         ],
         "aura-billing": [
           "billing:notify"
+        ],
+        "aura-profile": [
+          "profile:audit"
         ]
       }
     }

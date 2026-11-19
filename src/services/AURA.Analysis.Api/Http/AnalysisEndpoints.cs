@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Net.Http.Headers;
 using System.Text;
+using AURA.Common.Audit;
 
 namespace AURA.Analysis.Api.Http;
 
@@ -36,12 +37,16 @@ public static class AnalysisEndpoints
         }));
         app.MapGet("/api/v1/reports/{reportId}/content",(HttpContext c,string reportId)=>Handle(c,async()=>
         {
-            var user=await User(c);var content=await c.RequestServices.GetRequiredService<AnalysisReportService>().ReadDownloadContentAsync(user.AccountId,Clinic(c),ResourceId(reportId),Correlation(c),c.RequestAborted);
+            var user=await User(c);
+            var content=await ReadAudited(c,user.AccountId,AuditAction.ReportDownload,AuditResource.Report,ResourceId(reportId),
+                ()=>c.RequestServices.GetRequiredService<AnalysisReportService>().ReadDownloadContentAsync(user.AccountId,Clinic(c),ResourceId(reportId),Correlation(c),c.RequestAborted));
             c.Response.Headers["X-Content-Type-Options"]="nosniff";return Results.Stream(content.Stream,content.ContentType);
         }));
         app.MapGet("/api/v1/analyses/{analysisId}/files/{fileId}/content",(HttpContext c,string analysisId,string fileId)=>Handle(c,async()=>
         {
-            var user=await User(c);var content=await c.RequestServices.GetRequiredService<FileAccessService>().ReadContentAsync(user.AccountId,Clinic(c),ResourceId(analysisId),ResourceId(fileId),c.RequestAborted);
+            var user=await User(c);
+            var content=await ReadAudited(c,user.AccountId,AuditAction.ImageRead,AuditResource.Image,ResourceId(fileId),
+                ()=>c.RequestServices.GetRequiredService<FileAccessService>().ReadContentAsync(user.AccountId,Clinic(c),ResourceId(analysisId),ResourceId(fileId),c.RequestAborted));
             c.Response.Headers["X-Content-Type-Options"]="nosniff";return Results.Stream(content.Stream,content.ContentType);
         }));
         app.MapPost("/api/v1/analysis-upload-batches",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
@@ -183,6 +188,27 @@ public static class AnalysisEndpoints
                 .LogError("Analysis dependency failure: {ExceptionType}; stack: {StackTrace}", error.GetType().Name, error.StackTrace);
             return Error(c,UploadFailure.Dependency("Analysis dependencies"));
         }
+    }
+    private static async Task<PrivateContent> ReadAudited(HttpContext c, Guid actor, AuditAction action,
+        AuditResource resource, Guid id, Func<Task<PrivateContent>> read)
+    {
+        var writer=c.RequestServices.GetRequiredService<IAuditWriter>();
+        var audit=AuditEvent.Create(AuditSource.Analysis,actor,action,resource,id.ToString("D"),Correlation(c),outcome:AuditOutcome.Authorized);
+        PrivateContent content;
+        try { content=await read(); }
+        catch(OperationCanceledException) when(c.RequestAborted.IsCancellationRequested) { throw; }
+        catch(UploadFailure failure)
+        {
+            await writer.AppendAsync(audit with { Outcome=failure.Status is 403 or 404 ? AuditOutcome.Denied : AuditOutcome.Failed },c.RequestAborted);
+            throw;
+        }
+        catch
+        {
+            await writer.AppendAsync(audit with { Outcome=AuditOutcome.Failed },c.RequestAborted);
+            throw;
+        }
+        await AuditRead.RequireAsync(writer,audit,content.Stream,c.RequestAborted);
+        return content;
     }
     private static IResult Error(HttpContext c,UploadFailure e)=>Results.Json(new{error=new{
         code=e.Code,message=e.Message,correlationId=Correlation(c),retryable=e.Retryable,details=e.Details

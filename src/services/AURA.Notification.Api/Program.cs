@@ -5,6 +5,7 @@ using FirebaseAdmin;
 using FirebaseAdmin.Auth;
 using Google.Apis.Auth.OAuth2;
 using Npgsql;
+using AURA.Common.Audit;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -90,6 +91,7 @@ builder.Services.AddHostedService<NotificationEventConsumer>();
 builder.Services.AddHostedService<NotificationDeliveryWorker>();
 builder.Services.AddNotificationTestPush();
 
+builder.Services.AddOwnerAudit(builder.Configuration, AuditSource.Notification);
 var app = builder.Build();
 
 app.UseExceptionHandler();
@@ -433,6 +435,10 @@ app.MapGet(
                 unreadOnly ?? false,
                 context.RequestAborted);
 
+            await context.RequestServices.GetRequiredService<IAuditWriter>().AppendAsync(AuditEvent.Create(
+                AuditSource.Notification, accountId.Value, AuditAction.NotificationRead, AuditResource.Account,
+                accountId.Value.ToString("D"), context.Items["CorrelationId"] as string,
+                outcome: AuditOutcome.Authorized), context.RequestAborted);
             return Results.Ok(response);
         }
         catch (NpgsqlException)

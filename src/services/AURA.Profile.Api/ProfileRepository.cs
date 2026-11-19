@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using AURA.Profile.Api.Models;
 using Npgsql;
+using AURA.Common.Audit;
 
 namespace AURA.Profile.Api;
 
@@ -481,7 +482,8 @@ public partial class ProfileRepository
         Guid clinicId,
         string newStatus,
         string? reason,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? correlationId = null)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -536,12 +538,14 @@ public partial class ProfileRepository
                 logCmd.Parameters.AddWithValue(clinicId);
                 logCmd.Parameters.AddWithValue(previousStatus);
                 logCmd.Parameters.AddWithValue(newStatus);
-                logCmd.Parameters.AddWithValue((object?)reason ?? DBNull.Value);
+                logCmd.Parameters.AddWithValue(reason is null ? DBNull.Value : "sha256:" + AuditEvent.Correlation(reason));
                 logCmd.Parameters.AddWithValue(adminAccountId);
                 logCmd.Parameters.AddWithValue(now);
                 await logCmd.ExecuteNonQueryAsync(cancellationToken);
             }
 
+            await AuditStore.AppendAsync(connection, transaction, AuditEvent.Create(AuditSource.Profile, adminAccountId,
+                AuditAction.ClinicStatusChanged, AuditResource.Clinic, clinicId.ToString("D"), correlationId), cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
             return await GetClinicByIdAsync(clinicId, cancellationToken);
@@ -557,7 +561,8 @@ public partial class ProfileRepository
         Guid clinicId,
         string email,
         string role,
-        CancellationToken cancellationToken = default)
+        Guid actorAccountId,
+        CancellationToken cancellationToken = default, string? correlationId = null)
     {
         var normalizedRole = ClinicMemberRoles.NormalizeRole(role);
         if (normalizedRole == null)
@@ -680,6 +685,8 @@ public partial class ProfileRepository
                 invite.Parameters.AddWithValue(now);invite.Parameters.AddWithValue(now.AddHours(72));
                 await invite.ExecuteNonQueryAsync(cancellationToken);
             }
+            await AuditStore.AppendAsync(connection, transaction, AuditEvent.Create(AuditSource.Profile, actorAccountId,
+                AuditAction.MembershipInvited, AuditResource.Membership, membershipId.ToString("D"), correlationId), cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
             return (new ClinicMembershipDto(
@@ -812,13 +819,14 @@ public partial class ProfileRepository
     }
 
     public async Task<(bool Success, ClinicMembershipDto? Membership, string? ErrorCode, string? ErrorMessage)> AddOrReactivateClinicMemberAsync(
-        Guid clinicId, Guid targetAccountId, string role, CancellationToken cancellationToken = default)
+        Guid clinicId, Guid targetAccountId, string role, Guid actorAccountId, CancellationToken cancellationToken = default, string? correlationId = null)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
         const string checkProfileSql = "SELECT display_name FROM profile.profiles WHERE account_id = $1 LIMIT 1;";
         string displayName;
-        await using (var profileCmd = new NpgsqlCommand(checkProfileSql, connection))
+        await using (var profileCmd = new NpgsqlCommand(checkProfileSql, connection, transaction))
         {
             profileCmd.Parameters.AddWithValue(targetAccountId);
             var nameObj = await profileCmd.ExecuteScalarAsync(cancellationToken);
@@ -838,7 +846,7 @@ public partial class ProfileRepository
         Guid? existingMembershipId = null;
         string? existingStatus = null;
 
-        await using (var checkCmd = new NpgsqlCommand(checkMembershipSql, connection))
+        await using (var checkCmd = new NpgsqlCommand(checkMembershipSql, connection, transaction))
         {
             checkCmd.Parameters.AddWithValue(clinicId);
             checkCmd.Parameters.AddWithValue(targetAccountId);
@@ -863,7 +871,7 @@ public partial class ProfileRepository
                 WHERE clinic_id = $2 AND account_id = $3
                 RETURNING membership_id, created_at, updated_at;";
 
-            await using var reactivateCmd = new NpgsqlCommand(reactivateSql, connection);
+            await using var reactivateCmd = new NpgsqlCommand(reactivateSql, connection, transaction);
             reactivateCmd.Parameters.AddWithValue(role);
             reactivateCmd.Parameters.AddWithValue(clinicId);
             reactivateCmd.Parameters.AddWithValue(targetAccountId);
@@ -875,6 +883,10 @@ public partial class ProfileRepository
                 var createdAt = reader.GetFieldValue<DateTimeOffset>(1);
                 var updatedAt = reader.GetFieldValue<DateTimeOffset>(2);
 
+                await reader.CloseAsync();
+                await AuditStore.AppendAsync(connection, transaction, AuditEvent.Create(AuditSource.Profile, actorAccountId,
+                    AuditAction.MembershipGranted, AuditResource.Membership, membershipId.ToString("D"), correlationId), cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
                 return (true, new ClinicMembershipDto(
                     membershipId, clinicId, targetAccountId, displayName, role, MembershipStatuses.Active, createdAt, updatedAt), null, null);
             }
@@ -887,7 +899,7 @@ public partial class ProfileRepository
                 VALUES ($1, $2, $3, $4, 'ACTIVE', NOW(), NOW())
                 RETURNING created_at, updated_at;";
 
-            await using var insertCmd = new NpgsqlCommand(insertSql, connection);
+            await using var insertCmd = new NpgsqlCommand(insertSql, connection, transaction);
             insertCmd.Parameters.AddWithValue(newMembershipId);
             insertCmd.Parameters.AddWithValue(clinicId);
             insertCmd.Parameters.AddWithValue(targetAccountId);
@@ -899,6 +911,10 @@ public partial class ProfileRepository
                 var createdAt = reader.GetFieldValue<DateTimeOffset>(0);
                 var updatedAt = reader.GetFieldValue<DateTimeOffset>(1);
 
+                await reader.CloseAsync();
+                await AuditStore.AppendAsync(connection, transaction, AuditEvent.Create(AuditSource.Profile, actorAccountId,
+                    AuditAction.MembershipGranted, AuditResource.Membership, newMembershipId.ToString("D"), correlationId), cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
                 return (true, new ClinicMembershipDto(
                     newMembershipId, clinicId, targetAccountId, displayName, role, MembershipStatuses.Active, createdAt, updatedAt), null, null);
             }
@@ -908,7 +924,7 @@ public partial class ProfileRepository
     }
 
     public async Task<(bool Success, string? ErrorCode, string? ErrorMessage)> RevokeClinicMemberAsync(
-        Guid clinicId, Guid targetAccountId, CancellationToken cancellationToken = default)
+        Guid clinicId, Guid targetAccountId, Guid actorAccountId, CancellationToken cancellationToken = default, string? correlationId = null)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -920,21 +936,23 @@ public partial class ProfileRepository
         }
 
         const string checkSql = @"
-            SELECT role FROM profile.memberships
+            SELECT role, membership_id FROM profile.memberships
             WHERE clinic_id = $1 AND account_id = $2 AND status = 'ACTIVE'
             LIMIT 1;";
 
         string role;
+        Guid membershipId;
         await using (var checkCmd = new NpgsqlCommand(checkSql, connection, transaction))
         {
             checkCmd.Parameters.AddWithValue(clinicId);
             checkCmd.Parameters.AddWithValue(targetAccountId);
-            var roleObj = await checkCmd.ExecuteScalarAsync(cancellationToken);
-            if (roleObj is not string r)
+            await using var reader = await checkCmd.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
             {
                 return (false, "ERR_MEMBERSHIP_NOT_FOUND", "Không tìm thấy thành viên hoạt động trong phòng khám.");
             }
-            role = r;
+            role = reader.GetString(0);
+            membershipId = reader.GetGuid(1);
         }
 
         if (string.Equals(role, ClinicMemberRoles.ClinicAdmin, StringComparison.OrdinalIgnoreCase))
@@ -964,6 +982,8 @@ public partial class ProfileRepository
             var rowsAffected = await revokeCmd.ExecuteNonQueryAsync(cancellationToken);
             if (rowsAffected > 0)
             {
+                await AuditStore.AppendAsync(connection, transaction, AuditEvent.Create(AuditSource.Profile, actorAccountId,
+                    AuditAction.MembershipRevoked, AuditResource.Membership, membershipId.ToString("D"), correlationId), cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return (true, null, null);
             }
@@ -1627,7 +1647,7 @@ public partial class ProfileRepository
     /// Kiểm tra token/lời mời trong hạn 72 giờ và email trùng khớp với tài khoản được xác nhận.
     /// </summary>
     public async Task<(bool Succeeded, string? ErrorCode, ClinicMembershipDto? Result)> AcceptClinicInvitationExplicitAsync(
-        Guid accountId, string? email, Guid membershipId, string token, CancellationToken cancellationToken = default)
+        Guid accountId, string? email, Guid membershipId, string token, CancellationToken cancellationToken = default, string? correlationId = null)
     {
         if(string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(token) || token.Length>256)return(false,"ERR_INVALID_INVITATION",null);
         await using var connection=await _dataSource.OpenConnectionAsync(cancellationToken);
@@ -1658,6 +1678,8 @@ public partial class ProfileRepository
         update.Parameters.AddWithValue(accountId);update.Parameters.AddWithValue(membershipId);await update.ExecuteNonQueryAsync(cancellationToken);
         await using var consume=new NpgsqlCommand("UPDATE profile.clinic_invitations SET consumed_at=now() WHERE membership_id=$1",connection,transaction);
         consume.Parameters.AddWithValue(membershipId);await consume.ExecuteNonQueryAsync(cancellationToken);
+        await AuditStore.AppendAsync(connection, transaction, AuditEvent.Create(AuditSource.Profile, accountId,
+            AuditAction.MembershipGranted, AuditResource.Membership, membershipId.ToString("D"), correlationId), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return(true,null,new ClinicMembershipDto(membershipId,clinicId,accountId,null,role,"ACTIVE",createdAt,DateTimeOffset.UtcNow,email));
     }

@@ -90,6 +90,12 @@
         "dependencies": {
           "System.CodeDom": "7.0.0"
         }
+      },
+      "aura.common.audit": {
+        "type": "Project",
+        "dependencies": {
+          "Npgsql": "[10.0.3, )"
+        }
       }
     }
   }

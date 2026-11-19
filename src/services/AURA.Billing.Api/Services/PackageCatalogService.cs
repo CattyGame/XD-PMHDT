@@ -109,11 +109,13 @@ public sealed class PackageCatalogService
     public async Task<UpdatePackageResponse?> UpdateAsync(
         int id,
         UpdatePackageRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid actorAccountId,
+        string? correlationId)
     {
         // The database update completes before cache invalidation.
         var updated =
-            await _repository.UpdateAsync(id, request, cancellationToken);
+            await _repository.UpdateAsync(id, request, cancellationToken, actorAccountId, correlationId);
 
         if (updated is null)
         {

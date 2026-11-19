@@ -7,6 +7,7 @@ using AURA.Billing.Api.Services;
 using Microsoft.AspNetCore.Diagnostics;
 using Npgsql;
 using StackExchange.Redis;
+using AURA.Common.Audit;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -66,7 +67,8 @@ builder.Services.AddHttpClient("IdentityApi", client =>
 {
     client.BaseAddress = new Uri(identityBaseUrl, UriKind.Absolute);
     client.Timeout = TimeSpan.FromSeconds(5);
-});
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+    .RedactLoggedHeaders(["Authorization", "X-User-Authorization"]);
 
 var analysisBaseUrl = builder.Configuration["Services:Analysis:BaseUrl"]
     ?? "http://127.0.0.1:5001";
@@ -105,6 +107,7 @@ builder.Services.Configure<BillingSettlementOptions>(
     builder.Configuration.GetSection(BillingSettlementOptions.Section));
 builder.Services.AddHostedService<AnalysisSettlementWorker>();
 
+builder.Services.AddOwnerAudit(builder.Configuration, AuditSource.Billing);
 var app = builder.Build();
 
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
@@ -112,7 +115,7 @@ app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
     var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
     var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
         .CreateLogger("AURA.Billing.Api.UnhandledException");
-    logger.LogError(exception, "Unhandled Billing API error.");
+    logger.LogError("Unhandled Billing API error: {ErrorType}.", exception?.GetType().Name);
 
     var correlationId = context.Items["CorrelationId"] as string ?? Guid.NewGuid().ToString("D");
     var databaseUnavailable = exception is NpgsqlException or TimeoutException;
@@ -221,7 +224,8 @@ app.MapPut("/api/v1/billing/packages/{id:int}", async Task<IResult> (
             "Name phải có từ 1 đến 100 ký tự; price không âm và credits phải lớn hơn 0.");
     }
 
-    var response = await service.UpdateAsync(id, request, cancellationToken);
+    var response = await service.UpdateAsync(id, request, cancellationToken, authorization.AccountId,
+        context.Items["CorrelationId"] as string);
     return response is null
         ? BillingError(context, StatusCodes.Status404NotFound, "ERR_NOT_FOUND", "Không tìm thấy package.")
         : Results.Ok(response);

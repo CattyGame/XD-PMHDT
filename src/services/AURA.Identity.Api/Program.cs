@@ -6,6 +6,7 @@ using FirebaseAdmin;
 using FirebaseAdmin.Auth;
 using Google.Apis.Auth.OAuth2;
 using Npgsql;
+using AURA.Common.Audit;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -36,6 +37,7 @@ builder.Services.AddHttpClient("ProfileClient", (sp, client) =>
     client.Timeout = TimeSpan.FromSeconds(5);
 });
 
+builder.Services.AddOwnerAudit(builder.Configuration, AuditSource.Identity);
 var app = builder.Build();
 
 // Validate provisioned service-auth material before health or business routes start.
@@ -382,7 +384,8 @@ app.MapPut("/api/v1/admin/accounts/{accountId:guid}/doctor-capability", async Ta
     var actor=await repository.GetAccountByFirebaseUidAsync(uid);
     if(actor?.AccountStatus!="ACTIVE" || !actor.Roles.Contains("SYSTEM_ADMIN",StringComparer.Ordinal))return Results.StatusCode(403);
     if(string.IsNullOrWhiteSpace(body.Reason) || body.Reason.Length>1000)return Results.BadRequest();
-    return await repository.SetDoctorCapabilityAsync(actor.AccountId,accountId,body.Approved,body.Reason.Trim()) ? Results.NoContent() : Results.NotFound();
+    return await repository.SetDoctorCapabilityAsync(actor.AccountId,accountId,body.Approved,body.Reason.Trim(),
+        request.HttpContext.Items["CorrelationId"] as string) ? Results.NoContent() : Results.NotFound();
 });
 
 app.Run();

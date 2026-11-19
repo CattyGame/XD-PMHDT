@@ -19,8 +19,8 @@ internal static class ConcurrencyChecks
         await using var hold = await admin.OpenConnectionAsync(ct);
         await using var tx = await hold.BeginTransactionAsync(ct);
         await new NpgsqlCommand("LOCK TABLE profile.memberships IN SHARE MODE", hold, tx).ExecuteNonQueryAsync(ct);
-        var first = repository.RevokeClinicMemberAsync(clinic, owner, ct);
-        var second = repository.RevokeClinicMemberAsync(clinic, secondAdmin, ct);
+        var first = repository.RevokeClinicMemberAsync(clinic, owner, secondAdmin, ct);
+        var second = repository.RevokeClinicMemberAsync(clinic, secondAdmin, owner, ct);
         await using var blocked = admin.CreateCommand("SELECT count(*) FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'");
         blocked.Parameters.AddWithValue(application);
         while (Convert.ToInt32(await blocked.ExecuteScalarAsync(ct)) < 2) await Task.Delay(20, ct);

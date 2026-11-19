@@ -4,11 +4,29 @@ using AURA.Analysis.Api.Upload;
 using Npgsql;
 using QuestPDF.Infrastructure;
 using Xunit;
+using AURA.Common.Audit;
+using AURA.Analysis.Api.Auth;
+using AURA.Analysis.Api.Http;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System.Net;
 
 namespace AURA.Analysis.Api.Tests;
 
 public sealed class ReportSnapshotPostgresTests
 {
+    private sealed class ReportIdentity(Guid actor):IAnalysisUserIdentityResolver
+    {public Task<AnalysisUserContext> ResolveAsync(HttpRequest request,CancellationToken ct)=>Task.FromResult(new AnalysisUserContext(actor,["PATIENT"]));}
+    private sealed class ReportAuditWriter:IAuditWriter
+    {
+        public readonly List<AuditEvent> Events=[];public bool Down;
+        public Task AppendAsync(AuditEvent e,CancellationToken ct)
+        {if(Down)throw new IOException("Test-only audit outage");Events.Add(e);return Task.CompletedTask;}
+    }
     [PostgresFact]
     public async Task Batch_notification_does_not_require_a_legacy_analysis_request()
     {
@@ -103,6 +121,26 @@ public sealed class ReportSnapshotPostgresTests
             Assert.Equal(review1,root.GetProperty("review").GetProperty("reviewId").GetGuid());
             Assert.Equal("LOW",root.GetProperty("review").GetProperty("correctedRiskLevel").GetString());
             Assert.Equal(64,root.GetProperty("originalSha256").GetString()!.Length);Assert.Equal(64,reader.GetString(1).Length);
+        }
+        var httpBuilder=WebApplication.CreateBuilder();httpBuilder.WebHost.UseTestServer();httpBuilder.Logging.ClearProviders();
+        var auditWriter=new ReportAuditWriter();
+        httpBuilder.Services.AddSingleton(reports);httpBuilder.Services.AddSingleton<IAuditWriter>(auditWriter);
+        httpBuilder.Services.AddSingleton<IAnalysisUserIdentityResolver>(new ReportIdentity(actor));
+        await using(var httpApp=httpBuilder.Build())
+        {
+            httpApp.MapAnalysisEndpoints();await httpApp.StartAsync();using var client=httpApp.GetTestClient();
+            using(var response=await client.GetAsync($"/api/v1/reports/{exported.ReportId:D}/content"))
+            {
+                Assert.Equal(HttpStatusCode.OK,response.StatusCode);
+                Assert.Equal("application/pdf",response.Content.Headers.ContentType!.MediaType);
+                var audit=Assert.Single(auditWriter.Events);Assert.Equal(AuditAction.ReportDownload,audit.Action);
+                Assert.Equal(exported.ReportId.ToString("D"),audit.ResourceId);Assert.Equal(actor,audit.ActorAccountId);
+            }
+            auditWriter.Down=true;
+            using var blocked=await client.GetAsync($"/api/v1/reports/{exported.ReportId:D}/content");
+            Assert.Equal(HttpStatusCode.ServiceUnavailable,blocked.StatusCode);
+            Assert.DoesNotContain("%PDF-",await blocked.Content.ReadAsStringAsync());
+            Assert.Single(auditWriter.Events);
         }
         var download=await reports.ReadDownloadContentAsync(actor,null,exported.ReportId,null,default);
         Assert.Equal("application/pdf",download.ContentType);

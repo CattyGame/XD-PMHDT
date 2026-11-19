@@ -27,6 +27,10 @@ servers:
 - url: http://127.0.0.1:5005
   description: Trực tiếp Localhost Development
 paths:
+  /api/v1/admin/audit-events:
+    $ref: ./audit-openapi.yaml#/paths/~1api~1v1~1admin~1audit-events
+  /internal/v1/profile/audit-events:
+    $ref: ./audit-openapi.yaml#/paths/~1internal~1v1~1profile~1audit-events
   /api/v1/profiles/me:
     get:
       summary: Xem hồ sơ cá nhân của người dùng hiện tại
