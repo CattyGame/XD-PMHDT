@@ -46,13 +46,33 @@ public sealed class ExportServiceTests
         Assert.Equal(409,error.Status);Assert.Equal(1,repo.ResearchReads);
     }
 
+    [Fact]
+    [Trait("TestKind", "ContractMock")]
+    public async Task Research_export_status_is_denied_after_patient_scope_is_revoked()
+    {
+        var clinic=Guid.NewGuid();var tenant=Guid.NewGuid();var patient=Guid.NewGuid();var actor=Guid.NewGuid();
+        var repo=new ExportRepositoryFake();
+        repo.Rows=[new ResearchSourceRow(patient,Guid.NewGuid(),"model-v1","config-v1","threshold-v1",1,"HIGH",true,.7m)];
+        var authority=new RevocableResearchAuthority(tenant,clinic,[patient]);
+        var service=new ExportService(repo,new CampaignsFake(),new ClinicAuthorityFake(),authority,
+            new StorageFake(),new StorageOptions(),TimeProvider.System);
+        var request=new ResearchExportRequest(clinic,null,"approved study","CSV",false);
+
+        var receipt=await service.CreateResearchExportAsync(actor,request,"scope-revoke",null,CancellationToken.None);
+        authority.AuthorizedPatients=[];
+
+        var failure=await Assert.ThrowsAsync<UploadFailure>(()=>service.GetStatusAsync(actor,clinic,receipt.ReportId,null,CancellationToken.None));
+
+        Assert.Equal(403,failure.Status);
+    }
+
     private sealed class ExportRepositoryFake:IExportRepository
     {
         public int ResearchReads{get;private set;}
         public ExportSnapshot? Saved{get;private set;}
         public IReadOnlyList<ResearchSourceRow> Rows{get;set;}=[];
         public Task<ExportSnapshot?> FindByKeyAsync(Guid t,Guid a,string k,string key,CancellationToken ct)=>Task.FromResult<ExportSnapshot?>(Saved is { } s&&s.TenantId==t&&s.ActorId==a&&s.Kind==k&&s.IdempotencyKey==key?s:null);
-        public Task<ExportSnapshot?> FindByIdAsync(Guid id,CancellationToken ct)=>Task.FromResult<ExportSnapshot?>(null);
+        public Task<ExportSnapshot?> FindByIdAsync(Guid id,CancellationToken ct)=>Task.FromResult<ExportSnapshot?>(Saved is { } s&&s.Id==id?s:null);
         public Task<IReadOnlyList<Guid>> ReadCampaignPatientScopeAsync(Guid t,Guid c,CancellationToken ct)=>Task.FromResult<IReadOnlyList<Guid>>([]);
         public Task<IReadOnlyList<ResearchSourceRow>> ReadResearchRowsAsync(Guid t,Guid c,Guid? campaign,IReadOnlyCollection<Guid> ids,CancellationToken ct){ResearchReads++;return Task.FromResult(Rows);}
         public Task InsertAsync(ExportSnapshot value,CancellationToken ct){Saved=value;return Task.CompletedTask;}
@@ -61,6 +81,12 @@ public sealed class ExportServiceTests
     {
         public int Calls{get;private set;}
         public Task<AnalyticsAccessGrant> ResolveAsync(AnalyticsAccessRequest request,CancellationToken ct){Calls++;return Task.FromResult(new AnalyticsAccessGrant(tenantId??Guid.NewGuid(),request.ClinicId,null,ids,1));}
+    }
+    private sealed class RevocableResearchAuthority(Guid tenantId,Guid clinicId,IReadOnlyCollection<Guid> initialPatients):IAnalyticsAccessResolver
+    {
+        public IReadOnlyCollection<Guid> AuthorizedPatients{get;set;}=initialPatients;
+        public Task<AnalyticsAccessGrant> ResolveAsync(AnalyticsAccessRequest request,CancellationToken ct)=>
+            Task.FromResult(new AnalyticsAccessGrant(tenantId,clinicId,null,AuthorizedPatients,1));
     }
     private sealed class ClinicAuthorityFake:IClinicAccessResolver
     {

@@ -1,0 +1,113 @@
+{
+  "fixtureVersion": "scrum386-golden-v1",
+  "analytics": {
+    "expected": {
+      "total": 3,
+      "active": 0,
+      "completed": 2,
+      "failed": 0,
+      "lowQuality": 1,
+      "rejected": 0,
+      "duplicate": 1,
+      "riskLow": 0,
+      "riskModerate": 1,
+      "riskHigh": 0,
+      "riskUnavailable": 0,
+      "riskUnreviewed": 2,
+      "measurementAvailable": 1,
+      "measurementUnavailable": 1,
+      "measurementUnknown": 1
+    },
+    "ratios": {
+      "completedOfUnique": 0.6666666666666667,
+      "lowQualityOfUnique": 0.3333333333333333,
+      "moderateLatestReviewOfUnique": 0.3333333333333333,
+      "unreviewedOfUnique": 0.6666666666666667,
+      "measurementAvailableOfUnique": 0.3333333333333333,
+      "measurementUnavailableOfUnique": 0.3333333333333333,
+      "measurementUnknownOfUnique": 0.3333333333333333,
+      "emptyDenominator": null
+    }
+  },
+  "alerts": [
+    {
+      "name": "current-reviewed-high-with-measurement",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "analysisId": "22222222-2222-4222-8222-222222222222",
+      "resultId": "33333333-3333-4333-8333-333333333333",
+      "reviewVersion": 4,
+      "processingStatus": "COMPLETED",
+      "resultRiskLevel": "LOW",
+      "correctedRiskLevel": "HIGH",
+      "hasCurrentReview": true,
+      "measurementStatus": "AVAILABLE",
+      "expected": [
+        { "kind": "CLINICIAN_REVIEW_HIGH", "alertId": "b25e0e26-ebd9-df3f-2b78-a60ea1f08393" },
+        { "kind": "RESEARCH_NOTICE", "alertId": "de1eb9a8-58f8-e4a7-4d9c-762840ea0718" }
+      ]
+    },
+    {
+      "name": "superseded-review-v3",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "analysisId": "22222222-2222-4222-8222-222222222222",
+      "resultId": "33333333-3333-4333-8333-333333333333",
+      "reviewVersion": 3,
+      "processingStatus": "COMPLETED",
+      "resultRiskLevel": "LOW",
+      "correctedRiskLevel": "HIGH",
+      "hasCurrentReview": true,
+      "measurementStatus": "AVAILABLE",
+      "expected": [
+        { "kind": "CLINICIAN_REVIEW_HIGH", "alertId": "b77bad88-8b23-317b-5733-edadd4f0040f" },
+        { "kind": "RESEARCH_NOTICE", "alertId": "e60cdc9d-40f6-03b9-3ca6-889f327bf5af" }
+      ]
+    },
+    {
+      "name": "latest-review-corrected-low",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "analysisId": "22222222-2222-4222-8222-222222222222",
+      "resultId": "33333333-3333-4333-8333-333333333333",
+      "reviewVersion": 4,
+      "processingStatus": "COMPLETED",
+      "resultRiskLevel": "HIGH",
+      "correctedRiskLevel": "LOW",
+      "hasCurrentReview": true,
+      "measurementStatus": "UNKNOWN",
+      "expected": []
+    },
+    {
+      "name": "unavailable-low-quality-does-not-create-clinical-risk-alert",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "analysisId": "44444444-4444-4444-8444-444444444444",
+      "resultId": "55555555-5555-4555-8555-555555555555",
+      "reviewVersion": 1,
+      "processingStatus": "LOW_QUALITY",
+      "resultRiskLevel": "HIGH",
+      "correctedRiskLevel": null,
+      "hasCurrentReview": true,
+      "measurementStatus": "UNAVAILABLE",
+      "expected": []
+    }
+  ],
+  "feedback": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "clinicId": "66666666-6666-4666-8666-666666666666",
+    "analysisId": "22222222-2222-4222-8222-222222222222",
+    "batchId": "77777777-7777-4777-8777-777777777777",
+    "patientId": "88888888-8888-4888-8888-888888888888",
+    "doctorId": "99999999-9999-4999-8999-999999999999",
+    "resultId": "33333333-3333-4333-8333-333333333333",
+    "modelVersion": "golden-model-v1",
+    "reviewVersion": 4,
+    "feedbackType": "QUALITY",
+    "comment": "Synthetic golden feedback"
+  },
+  "export": {
+    "rows": [
+      { "caseCode": "=SUM(A1:A2)", "riskLevel": "HIGH", "measurementAvailable": true, "avr": 0.42 },
+      { "caseCode": "CASE-002", "riskLevel": null, "measurementAvailable": false, "avr": null }
+    ],
+    "expectedCsv": "\"caseCode\",\"riskLevel\",\"measurementAvailable\",\"avr\"\r\n\"'=SUM(A1:A2)\",\"HIGH\",\"True\",\"0.42\"\r\n\"CASE-002\",\"\",\"False\",\"\"\r\n",
+    "expectedSha256": "2c97a2cb10d13211b858e64f306962c8cb5a03291a0f8b2b1cbae9a558f80794"
+  }
+}
