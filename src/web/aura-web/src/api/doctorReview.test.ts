@@ -91,6 +91,17 @@ describe('SCRUM-354: Doctor Review API', () => {
       .rejects.toMatchObject({ code: 'ERR_INVALID_RESPONSE' })
   })
 
+  it('allows feedback on a server-labelled synthetic result without enabling mock transport', async () => {
+    const feedbackCase = parseDoctorAnalysis({ ...item, reviewVersion: 0,
+      result: { ...item.result, isMock: true, resultId: fileId, modelVersion: 'synthetic-fixture-v1' } })
+    fetchMock.mockResolvedValueOnce(json({ feedbackId: patientId, status: 'ACCEPTED', version: 0 }, 201))
+    await submitDoctorFeedback(context, clinicId, feedbackCase, 'QUALITY', 'Synthetic fixture only')
+    expect(feedbackCase.result?.isMock).toBe(true)
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toMatchObject({
+      resultId: fileId, modelVersion: 'synthetic-fixture-v1', reviewVersion: 0,
+    })
+  })
+
   it('File Access kèm clinicContextId và không dùng ảnh không có quyền', async () => {
     fetchMock.mockResolvedValueOnce(json({ url: `/api/v1/analyses/${analysisId}/files/${fileId}/content?clinicContextId=${clinicId}`,
       expiresAt: new Date(Date.now() + 60000).toISOString() }))

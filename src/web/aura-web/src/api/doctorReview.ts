@@ -222,7 +222,7 @@ export async function submitDoctorFeedback(
 ): Promise<void> {
   const { analysisId, result, reviewVersion } = analysis
   if (!isGuid(analysisId) || !result?.resultId || !isGuid(result.resultId) || !text(result.modelVersion) ||
-    result.isMock || analysis.processingStatus !== 'COMPLETED' ||
+    analysis.processingStatus !== 'COMPLETED' ||
     !Number.isSafeInteger(reviewVersion) || reviewVersion < 0 ||
     !Object.hasOwn(feedbackTypes, feedbackType) || !comment.trim() || comment.trim().length > 4000) {
     throw new DoctorApiError(400, 'ERR_INVALID_FEEDBACK')

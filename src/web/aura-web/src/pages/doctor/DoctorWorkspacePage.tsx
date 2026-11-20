@@ -339,7 +339,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
         aiRisk={detail.result?.riskAvailable ? detail.result.riskLevel : null}
         reviewed={detail.reviewStatus === 'REVIEWED'} disabled={stale || detail.processingStatus !== 'COMPLETED'}
         onSubmit={saveReview} />
-      {detail.result && !detail.result.isMock && <DoctorFeedbackForm
+      {detail.result && <DoctorFeedbackForm
         key={`${detail.analysisId}:${detail.result.resultId}:${detail.reviewVersion}`}
         disabled={stale || !detail.result.resultId || !detail.result.modelVersion}
         onSubmit={saveFeedback} />}
