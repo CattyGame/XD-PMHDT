@@ -77,6 +77,9 @@
         "aura-identity": [
           "identity:directory"
         ],
+        "aura-profile": [
+          "profile:resolve"
+        ],
         "aura-analysis": [
           "analysis:notify"
         ],

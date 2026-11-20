@@ -25,6 +25,8 @@ import PaymentPage from '../pages/billing/PaymentPage'
 import PaymentSuccessPage from '../pages/billing/PaymentSuccessPage'
 import FcmToastHost from '../components/FcmToastHost'
 const ConsultationsPage = lazy(() => import('../pages/consultations/ConsultationsPage'))
+import ProfilePage from '../pages/ProfilePage'
+import AdminManagementPage from '../pages/AdminManagementPage'
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
@@ -67,6 +69,8 @@ export default function ApplicationRoutes() {
       <Route path="/billing/success/:orderId" element={<ProtectedRoute><PaymentSuccessPage /></ProtectedRoute>} />
       <Route path="/doctor/workspace" element={<ProtectedRoute><DoctorWorkspacePage /></ProtectedRoute>} />
       <Route path="/campaigns" element={<ProtectedRoute><CampaignManagementPage /></ProtectedRoute>}/>
+      <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+      <Route path="/admin" element={<ProtectedRoute><AdminManagementPage /></ProtectedRoute>} />
     </Routes>
     </>
   )

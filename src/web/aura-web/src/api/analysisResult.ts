@@ -156,8 +156,8 @@ export function parseAnalysis(value: unknown, requestedId: string): AnalysisDeta
 
 /** Từng GET cần token của phiên hiện tại, không cache và không ghi thông tin quyền vào URL. */
 export async function authorizedApiResponse(path: string, context: BackendContext, signal?: AbortSignal,
-  method: 'GET' | 'POST' | 'DELETE' | 'PATCH' = 'GET', body?: string, timeoutMs = 15_000,
-  idempotencyKey?: string): Promise<Response> {
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' = 'GET', body?: string, timeoutMs = 15_000,
+  extraHeaders?: Record<string, string>): Promise<Response> {
   if (!path.startsWith('/api/v1/') || new URL(path, window.location.origin).origin !== window.location.origin)
     throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
   if (isMockEnabled) throw new AnalysisResultError(0, 'ERR_MOCK_ENABLED')
@@ -178,8 +178,11 @@ export async function authorizedApiResponse(path: string, context: BackendContex
     if (!string(token) || /\s/.test(token)) throw new AnalysisResultError(401, 'ERR_TOKEN_UNAVAILABLE')
     const response = await fetch(path, {
       method, body,
-      headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}),
-        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(extraHeaders ?? {}),
+      },
       credentials: 'omit', cache: 'no-store', redirect: 'error', signal: abort,
     })
     current()

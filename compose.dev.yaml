@@ -57,10 +57,12 @@ services:
       NotificationDatabase__Database: ${POSTGRES_DB:?Set POSTGRES_DB}
       NotificationDatabase__Username: aura_notification_app
       NotificationDatabase__Password: ${NOTIFICATION_DB_PASSWORD:?Set NOTIFICATION_DB_PASSWORD}
+      ConnectionStrings__Redis: "redis:6379,password=${REDIS_PASSWORD:?Set REDIS_PASSWORD},abortConnect=false"
       Notification__EncryptionKeyId: ${NOTIFICATION_ENCRYPTION_KEY_ID:?Set NOTIFICATION_ENCRYPTION_KEY_ID}
       Notification__EncryptionKey: ${NOTIFICATION_ENCRYPTION_KEY:?Set NOTIFICATION_ENCRYPTION_KEY}
       Notification__EnableTestPush: "false"
       Services__Identity__BaseUrl: "http://identity-api:8080"
+      Services__Profile__BaseUrl: "http://profile-api:8080"
       Services__Analysis__BaseUrl: "http://analysis-api:8080"
       Services__Billing__BaseUrl: "http://billing-api:8080"
       Notification__PublicBaseUrl: "${PUBLIC_WEB_BASE_URL:-http://localhost:5173}"
@@ -80,6 +82,12 @@ services:
           create_host_path: false
     depends_on:
       postgres:
+        condition: service_healthy
+      identity-api:
+        condition: service_started
+      profile-api:
+        condition: service_started
+      redis:
         condition: service_healthy
     networks:
       - aura_network

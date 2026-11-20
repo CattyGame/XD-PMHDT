@@ -31,6 +31,10 @@ export default function SessionHomePage() {
           {/* Mở hộp thư thông báo của tài khoản hiện tại */}
           {!context.roles.includes("SYSTEM_ADMIN") && (
             <Link to="/notifications">Thông báo</Link>)}
+          <Link to="/profile">Hồ sơ cá nhân</Link>
+          {context.roles.includes("SYSTEM_ADMIN") && (
+            <Link to="/admin">Quản trị hệ thống (SuperAdmin)</Link>
+          )}
         </nav>
         <button type="button" onClick={() => void logout()}>Đăng xuất</button>
       </header>

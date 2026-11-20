@@ -24,7 +24,8 @@ BEGIN
       updated_at=clock_timestamp() WHERE tenant_id=target_tenant AND id=target_batch;
 END $$;
 REVOKE UPDATE,DELETE ON analysis.report_snapshots,analysis.batch_completion_events FROM aura_analysis_app;
-REVOKE UPDATE,DELETE ON identity.doctor_capability_audit FROM aura_identity_app;
+REVOKE UPDATE,DELETE ON identity.doctor_capability_audit,identity.account_lifecycle_audit FROM aura_identity_app;
+REVOKE UPDATE,DELETE ON profile.audit_events,profile.clinic_audit_logs FROM aura_profile_app;
 REVOKE DELETE ON profile.clinic_invitations FROM aura_profile_app;
 REVOKE ALL ON FUNCTION analysis.ensure_batch_completion(uuid,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION analysis.ensure_batch_completion(uuid,uuid),analysis.recompute_batch_progress(uuid,uuid) TO aura_analysis_app;
