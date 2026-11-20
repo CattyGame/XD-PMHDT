@@ -20,6 +20,7 @@ export default function SessionHomePage() {
           <Link to="/" aria-current="page">Trang chủ</Link>
           {personalUpload && <Link to="/upload">Tải ảnh võng mạc</Link>}
           {context.roles.includes("DOCTOR") && <Link to="/doctor/workspace">Không gian bác sĩ</Link>}
+          {(context.roles.includes("DOCTOR") || context.roles.includes("PATIENT")) && <Link to="/consultations">Tư vấn</Link>}
           <Link to="/clinic-upload">Tải ảnh phòng khám</Link>
           <Link to="/billing/packages">Mua gói / Credit</Link>
           <Link to="/clinics/members">Thành viên phòng khám</Link>
