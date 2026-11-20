@@ -1,0 +1,7 @@
+{
+  "resultId": "33333333-3333-4333-8333-333333333333",
+  "modelVersion": "retina-model-v1",
+  "reviewVersion": 1,
+  "feedbackType": "QUALITY",
+  "comment": "Image quality limits vessel segmentation."
+}

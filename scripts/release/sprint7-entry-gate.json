@@ -1,0 +1,133 @@
+{
+  "gate": "W6-M6-03-SPRINT7-ENTRY-GATE",
+  "jira": "SCRUM-397",
+  "owner": "M6",
+  "milestones": {
+    "sprint6FeatureFreeze": "2026-11-20T18:00:00+07:00",
+    "sprint7QaGate": "2026-11-25T18:00:00+07:00",
+    "sprint8Handover": "2026-11-28T18:00:00+07:00"
+  },
+  "scopeV2": {
+    "included": [
+      "FUNDUS JPEG/PNG upload & batch",
+      "Research V2 (Frangi/ResNet/Grad-CAM/AVR with unavailable=null+reason)",
+      "Doctor review & report export",
+      "Clinic/Campaign/Membership/Patient management",
+      "SuperAdmin lifecycle & non-PHI audit",
+      "Sandbox credit billing (non-production)",
+      "Notification inbox & FCM generic push"
+    ],
+    "deferred": [
+      "OCT inference (explicitly DEFERRED; OCT input rejected)",
+      "DICOM/FHIR integration",
+      "Production payment gateway",
+      "Multi-level clinical ICDR calibration"
+    ],
+    "scientificGate": {
+      "jira": "SCRUM-373",
+      "status": "OPEN",
+      "autoCloseAllowed": false
+    }
+  },
+  "requiredContracts": [
+    "contracts/identity-openapi.yaml",
+    "contracts/profile-openapi.yaml",
+    "contracts/analysis-openapi-0.9.yaml",
+    "contracts/billing-openapi.yaml",
+    "contracts/notification-openapi.yaml",
+    "contracts/ai-response-1.3.schema.json"
+  ],
+  "requiredWorkflows": [
+    ".github/workflows/adr005-postgres.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/repository-checks.yml",
+    ".github/workflows/sprint3-handoff.yml"
+  ],
+  "roleCoverage": {
+    "PATIENT": [
+      "src/web/aura-web/src/pages/ProfilePage.test.tsx",
+      "src/web/aura-web/src/pages/UploadPage.test.tsx",
+      "tests/AURA.Profile.AuthorizationChecks/Program.cs"
+    ],
+    "DOCTOR": [
+      "src/web/aura-web/src/pages/doctor/DoctorWorkspacePage.test.tsx",
+      "tests/AURA.Profile.AuthorizationChecks/Program.cs",
+      "tests/AURA.Profile.MultiTenantChecks/AuthorityChecks.cs"
+    ],
+    "CLINIC_ADMIN": [
+      "src/web/aura-web/src/pages/ClinicMemberPage.test.tsx",
+      "src/web/aura-web/src/pages/ClinicPatientPage.test.tsx",
+      "src/web/aura-web/src/pages/M6SecurityRegressions.test.tsx",
+      "tests/AURA.Profile.ClinicMembershipChecks/Program.cs"
+    ],
+    "SYSTEM_ADMIN": [
+      "src/web/aura-web/src/pages/AdminManagementPage.test.tsx",
+      "tests/AURA.Profile.MultiTenantChecks/DatabaseChecks.cs",
+      "tests/AURA.Profile.MultiTenantChecks/IdentityConnectionChecks.cs"
+    ]
+  },
+  "invariantTests": {
+    "nullUnavailableReason": "src/web/aura-web/src/pages/AnalysisResultPage.test.tsx",
+    "sandboxBillingNonProduction": "src/web/aura-web/src/pages/billing/BillingPage.test.tsx",
+    "noSkippedRequiredGates": ".github/workflows/adr005-postgres.yml"
+  },
+  "blockersAndGaps": [
+    {
+      "code": "W6-M6-01",
+      "jira": "SCRUM-390",
+      "owner": "M6",
+      "status": "MERGED",
+      "evidence": "PR #105, PR #106 (5e0b961)",
+      "scopeReductionPlan": "N/A - merged"
+    },
+    {
+      "code": "W6-M6-02",
+      "jira": "SCRUM-395",
+      "owner": "M6",
+      "status": "MERGED",
+      "evidence": "PR #107 (2ad80eb)",
+      "scopeReductionPlan": "N/A - merged"
+    },
+    {
+      "code": "W6-M6-04",
+      "jira": "SCRUM-396",
+      "owner": "M6",
+      "status": "OPEN",
+      "evidence": "Blocked on W6-M2-04 (SCRUM-391), W6-M5-02 (SCRUM-394), W6-M2-02 (SCRUM-385)",
+      "scopeReductionPlan": "If consultation hub / FCM cross-test prerequisites miss freeze 2026-11-20 18:00 UTC+7, keep W6-M6-04 as explicit Sprint 7 entry defect and verify socket-revoke + generic push before Sprint 7 QA gate."
+    },
+    {
+      "code": "W6-M1-01/02/04",
+      "jira": "SCRUM-380,SCRUM-381,SCRUM-383",
+      "owner": "M1",
+      "status": "PENDING_VERIFICATION",
+      "evidence": "Awaiting final integration SHA verification on develop",
+      "scopeReductionPlan": "Defer non-essential analytics export extensions to Sprint 7 defect window if core pipeline smoke passes."
+    },
+    {
+      "code": "W6-M2-03",
+      "jira": "SCRUM-386",
+      "owner": "M2",
+      "status": "PENDING_VERIFICATION",
+      "evidence": "Awaiting final integration SHA verification on develop",
+      "scopeReductionPlan": "Retain core alert/notification inbox; defer optional alert filters."
+    },
+    {
+      "code": "W6-M4-02/03",
+      "jira": "SCRUM-392,SCRUM-388",
+      "owner": "M4",
+      "status": "PENDING_VERIFICATION",
+      "evidence": "Awaiting final integration SHA verification on develop",
+      "scopeReductionPlan": "Keep unavailable=null+reason fallback active; never fabricate metrics."
+    },
+    {
+      "code": "W6-M5-01/03",
+      "jira": "SCRUM-393,SCRUM-389",
+      "owner": "M5",
+      "status": "PENDING_VERIFICATION",
+      "evidence": "Awaiting final integration SHA verification on develop",
+      "scopeReductionPlan": "Prioritize core doctor workspace and analytics view; defer cosmetic UI polish."
+    }
+  ],
+  "defects": []
+}

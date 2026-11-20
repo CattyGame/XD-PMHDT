@@ -9,6 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = [
     ROOT / "src/services/AURA.Analysis.Api/Http/AnalysisEndpoints.cs",
     ROOT / "src/services/AURA.Analysis.Api/Http/CampaignEndpoints.cs",
+    ROOT / "src/services/AURA.Analysis.Api/Http/AnalyticsEndpoints.cs",
+    ROOT / "src/services/AURA.Analysis.Api/Http/ExportEndpoints.cs",
+    ROOT / "src/services/AURA.Analysis.Api/Http/AlertEndpoints.cs",
+    ROOT / "src/services/AURA.Analysis.Api/Http/FeedbackEndpoints.cs",
 ]
 CONTRACT = ROOT / "contracts/analysis-openapi-0.9.yaml"
 CAMPAIGN_CONTRACT = ROOT / "contracts/campaign-openapi.yaml"

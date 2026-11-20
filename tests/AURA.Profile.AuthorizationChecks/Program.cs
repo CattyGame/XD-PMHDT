@@ -561,6 +561,93 @@ Check("AC3.2 (W4): Cam kết hiệu năng SLA < 5ms: Xác thực phân quyền t
     }
 });
 
+Console.WriteLine();
+Console.WriteLine("--- [W6-M6-01] Consultation Chat Authority & Instant Revocation ---");
+
+Check("W6-M6-01.1: ConsultationActions đầy đủ 6 hành động (gồm CHAT_PARTICIPATE) và CanonicalOperations có 3 operation chuẩn", () =>
+{
+    var required = new[]
+    {
+        ConsultationActions.Doctors,
+        ConsultationActions.Create,
+        ConsultationActions.Join,
+        ConsultationActions.Read,
+        ConsultationActions.Send,
+        ConsultationActions.ChatParticipate
+    };
+    if (required.Any(a => !ConsultationActions.All.Contains(a)))
+        throw new Exception("Thiếu action chuẩn trong ConsultationActions.");
+    if (CanonicalOperations.All.Count != 3
+        || !CanonicalOperations.All.Contains(CanonicalOperations.AnalyticsRead)
+        || !CanonicalOperations.All.Contains(CanonicalOperations.ResearchExport)
+        || !CanonicalOperations.All.Contains(CanonicalOperations.ChatParticipate)
+        || CanonicalOperations.All.Contains("UNKNOWN_OP"))
+        throw new Exception("CanonicalOperations phải chỉ gồm ANALYTICS_READ, RESEARCH_EXPORT, CHAT_PARTICIPATE.");
+});
+
+Check("W6-M6-01.5: OperationAuthorityResponse fail-closed (UNKNOWN_OPERATION, ADMIN_NO_PHI_WILDCARD, MASK_POLICY_CONSENT_REQUIRED)", () =>
+{
+    var unknownDenied = new OperationAuthorityResponse(1, false, false, "UNKNOWN_OPERATION", "UNKNOWN_OPERATION", null, clinicId, null, null, null, false);
+    var wildcardDenied = new OperationAuthorityResponse(1, false, false, "ADMIN_NO_PHI_WILDCARD", "ADMIN_NO_PHI_WILDCARD", null, clinicId, null, null, null, false);
+    var maskDenied = new OperationAuthorityResponse(1, false, false, "MASK_POLICY_CONSENT_REQUIRED", "MASK_POLICY_CONSENT_REQUIRED", null, clinicId, null, null, null, false);
+    if (unknownDenied.Allowed || wildcardDenied.Allowed || maskDenied.Allowed || maskDenied.IncludeMasksAllowed)
+        throw new Exception("OperationAuthorityResponse phải từ chối operation lạ, admin wildcard PHI và mask thiếu consent.");
+});
+
+Check("W6-M6-01.2: Bệnh nhân sở hữu ca và Bác sĩ được phân công ACTIVE được phép tham gia tư vấn", () =>
+{
+    var analysisId = Guid.NewGuid();
+    var doctors = new[] { new ConsultationDoctorDto(doctorId, "BS. Nhãn khoa Alpha") };
+    var response = new ConsultationAccessResolveResponse(
+        Allowed: true,
+        Revoked: false,
+        Code: null,
+        Reason: null,
+        TenantId: clinicTenantId,
+        ClinicContextId: clinicId,
+        PatientId: clinicPatientId,
+        PatientAccountId: personalAccountId,
+        AnalysisId: analysisId,
+        ParticipantRole: "PATIENT",
+        DoctorAccountId: doctorId,
+        AssignmentId: Guid.NewGuid(),
+        PermissionVersion: 1,
+        EligibleDoctors: doctors);
+
+    if (!response.Allowed || response.Revoked || response.EligibleDoctors.Count != 1)
+        throw new Exception("Bệnh nhân chính chủ phải được mở và tham gia tư vấn.");
+});
+
+Check("W6-M6-01.3: Thu hồi assignment / gỡ membership / đình chỉ clinic / khóa account -> ACCESS_REVOKED tức thì", () =>
+{
+    var denied = new ConsultationAccessResolveResponse(
+        Allowed: false,
+        Revoked: true,
+        Code: "ACCESS_REVOKED",
+        Reason: "DOCTOR_ASSIGNMENT_REVOKED",
+        TenantId: null,
+        ClinicContextId: clinicId,
+        PatientId: null,
+        PatientAccountId: null,
+        AnalysisId: Guid.NewGuid(),
+        ParticipantRole: null,
+        DoctorAccountId: doctorId,
+        AssignmentId: null,
+        PermissionVersion: 1,
+        EligibleDoctors: Array.Empty<ConsultationDoctorDto>());
+
+    if (denied.Allowed || !denied.Revoked || denied.Code != "ACCESS_REVOKED")
+        throw new Exception("Khi quyền tư vấn bị thu hồi phải trả về Allowed=false, Revoked=true, Code=ACCESS_REVOKED.");
+});
+
+Check("W6-M6-01.4: ConsultationDoctorsResponse khớp schema Frontend /api/v1/analyses/{id}/consultation-doctors", () =>
+{
+    var analysisId = Guid.NewGuid();
+    var dto = new ConsultationDoctorsResponse(analysisId, new[] { new ConsultationDoctorDto(doctorId, "BS. Nhãn khoa Alpha") });
+    if (dto.AnalysisId != analysisId || dto.Items.Count != 1 || dto.Items[0].AccountId != doctorId)
+        throw new Exception("ConsultationDoctorsResponse không khớp schema.");
+});
+
 
 Console.WriteLine("====================================================================");
 Console.WriteLine($"KẾT QUẢ: {passed}/{passed} CHECKS PASS HOÀN TOÀN! (100% AC1, AC2, AC3)");

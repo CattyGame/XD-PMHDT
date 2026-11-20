@@ -20,12 +20,15 @@ def read_json(path):
 def main():
     doc = yaml.safe_load((CONTRACTS / 'analysis-openapi.yaml').read_text(encoding='utf-8-sig'))
     validate(doc)
+    current_doc = yaml.safe_load((CONTRACTS / 'analysis-openapi-0.9.yaml').read_text(encoding='utf-8-sig'))
+    validate(current_doc)
     if doc['info']['version'] != '0.6.0':
         raise ValueError('Expected Analysis REST version 0.6.0')
     schemas = doc['components']['schemas']
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', DeprecationWarning)
         resolver = RefResolver.from_schema(doc)
+        current_resolver = RefResolver.from_schema(current_doc)
     def rest_validator(name):
         return OAS30Validator(schemas[name], resolver=resolver, format_checker=FormatChecker())
     event_schema = read_json(CONTRACTS / 'analysis-events.schema.json')
@@ -37,7 +40,17 @@ def main():
     rest_count = event_count = job_count = embedded_count = 0
     for path in sorted((CONTRACTS / 'examples').glob('*.json')):
         value = read_json(path)
-        if path.name.startswith('event-'):
+        scrum385_schemas = {
+            'scrum385-alerts-page-200.json': 'AlertsPage',
+            'scrum385-alert-change-request.json': 'AlertStateChange',
+            'scrum385-feedback-create-request.json': 'FeedbackCreate',
+            'scrum385-research-export-receipt-202.json': 'ExportReceipt',
+        }
+        if path.name in scrum385_schemas:
+            OAS30Validator(current_doc['components']['schemas'][scrum385_schemas[path.name]],
+                           resolver=current_resolver, format_checker=FormatChecker()).validate(value)
+            rest_count += 1
+        elif path.name.startswith('event-'):
             event_validator.validate(value); event_count += 1
         elif path.name == 'job-run.json':
             job_validator.validate(value); job_count += 1
