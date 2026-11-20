@@ -5,6 +5,7 @@ using FirebaseAdmin;
 using FirebaseAdmin.Auth;
 using Google.Apis.Auth.OAuth2;
 using Npgsql;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -74,6 +75,8 @@ builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
 builder.Services.AddSingleton<TokenCipher>();
 builder.Services.AddSingleton<DeviceRegistrationRepository>();
 builder.Services.AddSingleton<NotificationInboxRepository>();
+builder.Services.AddSingleton<ConsultationRepository>();
+builder.Services.AddSingleton<ConsultationOutboxRepository>();
 builder.Services.AddSingleton<NotificationDeliveryJobRepository>();
 builder.Services.AddHttpClient("IdentityAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Identity:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
@@ -81,13 +84,25 @@ builder.Services.AddHttpClient("AnalysisAuthority", client=>{client.BaseAddress=
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
 builder.Services.AddHttpClient("BillingAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Billing:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
+builder.Services.AddHttpClient("ProfileAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Profile:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
+    .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
 builder.Services.AddSingleton<NotificationAuthorityClient>();
+builder.Services.AddSingleton<ConsultationAuthorityClient>();
+builder.Services.AddSingleton<ConsultationService>();
+builder.Services.AddSingleton<ConsultationConnectionRegistry>();
+builder.Services.AddSingleton<IConsultationRealtimePublisher, ConsultationRealtimePublisher>();
+builder.Services.AddHostedService<ConsultationConnectionMonitor>();
+builder.Services.AddSignalR().AddStackExchangeRedis(RequiredConfiguration("ConnectionStrings:Redis"), options =>
+{
+    options.Configuration.ChannelPrefix = RedisChannel.Literal("aura-notification-consultations");
+});
 builder.Services.AddSingleton<INotificationContextResolver,NotificationContextResolver>();
 builder.Services.AddSingleton<IAccountResolver, AccountResolver>();
 builder.Services.AddSingleton<IFcmClient, FirebaseAdminFcmClient>();
 builder.Services.Configure<RabbitMqConsumerOptions>(builder.Configuration.GetSection(RabbitMqConsumerOptions.SectionName));
 builder.Services.AddHostedService<NotificationEventConsumer>();
 builder.Services.AddHostedService<NotificationDeliveryWorker>();
+builder.Services.AddHostedService<ConsultationNotificationOutboxWorker>();
 builder.Services.AddNotificationTestPush();
 
 var app = builder.Build();
@@ -99,7 +114,11 @@ _ = app.Services.GetRequiredService<TokenCipher>();
 
 app.Use(async (context, next) =>
 {
-    if (!context.Request.Path.StartsWithSegments("/api/v1/notifications"))
+    var isConsultationHub = context.Request.Path.StartsWithSegments("/hubs/consultations");
+    var isProtectedPath = context.Request.Path.StartsWithSegments("/api/v1/notifications")
+        || context.Request.Path.StartsWithSegments("/api/v1/consultations")
+        || isConsultationHub;
+    if (!isProtectedPath)
     {
         await next(context);
         return;
@@ -108,6 +127,23 @@ app.Use(async (context, next) =>
     context.Response.Headers["Cache-Control"] = "no-store";
 
     var authorization = context.Request.Headers.Authorization.ToString();
+    if (isConsultationHub)
+    {
+        var tokenQuery = ConsultationTokenQuery.ExtractAndRedact(context.Request);
+        if (tokenQuery.Present)
+        {
+            if (!tokenQuery.Valid || !ConsultationTokenQuery.IsQueryTokenTransport(context.Request))
+            {
+                await ApiError(context, 401, "ERR_UNAUTHORIZED", "Thông tin xác thực không hợp lệ.", false).ExecuteAsync(context);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(authorization))
+            {
+                authorization = "Bearer " + tokenQuery.Token;
+                context.Request.Headers.Authorization = authorization;
+            }
+        }
+    }
 
     if (!authorization.StartsWith(
         "Bearer ",
@@ -210,7 +246,9 @@ app.Use(async (context, next) =>
             {
                 new Claim(
                     ClaimTypes.NameIdentifier,
-                    verifiedToken.Uid)
+                    verifiedToken.Uid),
+                new Claim("firebase_uid", verifiedToken.Uid),
+                new Claim("firebase_token_exp", verifiedToken.ExpirationTimeSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture))
             },
             "Firebase"));
 
@@ -514,6 +552,8 @@ app.MapPost(
 
 app.UseRateLimiter();
 app.MapNotificationTestPush();
+app.MapConsultationEndpoints();
+app.MapHub<ConsultationHub>("/hubs/consultations");
 app.Run();
 
 string RequiredConfiguration(string name)

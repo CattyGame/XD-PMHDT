@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aura:consultation-hub:1",
+  "title": "Planned SignalR consultation messages",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "conversationId"
+      ],
+      "properties": {
+        "type": {
+          "const": "JoinConversation"
+        },
+        "conversationId": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "conversationId",
+        "clientMessageId",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "SendMessage"
+        },
+        "conversationId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "clientMessageId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "conversationId",
+        "lastReadMessageId"
+      ],
+      "properties": {
+        "type": {
+          "const": "MarkRead"
+        },
+        "conversationId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "lastReadMessageId": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "conversationId",
+        "messageId",
+        "clientMessageId",
+        "senderAccountId",
+        "text",
+        "sentAt"
+      ],
+      "properties": {
+        "type": {
+          "const": "MessagePersisted"
+        },
+        "conversationId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "messageId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "clientMessageId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "senderAccountId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "conversationId",
+        "code"
+      ],
+      "properties": {
+        "type": {
+          "const": "AccessRevoked"
+        },
+        "conversationId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "code": {
+          "const": "ACCESS_REVOKED"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "conversationId",
+        "accountId",
+        "lastReadMessageId",
+        "readAt"
+      ],
+      "properties": {
+        "type": {
+          "const": "ReadCursorAdvanced"
+        },
+        "conversationId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "accountId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "lastReadMessageId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "readAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  ]
+}
