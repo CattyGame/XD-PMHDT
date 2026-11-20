@@ -72,7 +72,7 @@ export function isChatDenied(error: unknown) {
 
 async function request(context: BackendContext, path: string, signal: AbortSignal,
   method: 'GET' | 'POST' = 'GET', body?: object, key?: string) {
-  const response = await authorizedApiResponse(path, context, signal, method, body && JSON.stringify(body), undefined, key)
+  const response = await authorizedApiResponse(path, context, signal, method, body && JSON.stringify(body), undefined, key ? { 'Idempotency-Key': key } : undefined)
   const payload: unknown = await response.json().catch(() => invalid())
   if (signal.aborted) throw signal.reason
   return { payload, status: response.status }
@@ -125,8 +125,7 @@ export async function markConsultationRead(context: BackendContext, conversation
     { lastReadMessageId: uuid(lastReadMessageId) })
   const data = row(payload)
   uuid(data.id)
-  text(data.status)
-  natural(data.version)
+  if (data.status !== 'READ' || natural(data.version) < 1) invalid()
 }
 export function consultationError(error: unknown) {
   if (!(error instanceof AnalysisResultError)) return 'Mất kết nối. Vui lòng thử lại.'

@@ -148,7 +148,7 @@ export default function useConsultationThread(context: BackendContext, conversat
     async function join() {
       try {
         if (signal.aborted) return
-        await hub.invoke('JoinConversation', { type: 'JoinConversation', conversationId })
+        await hub.invoke('JoinConversation', conversationId)
         if (signal.aborted) return
         joined = true
         setStream('live')

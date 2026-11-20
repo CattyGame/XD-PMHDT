@@ -112,7 +112,7 @@ test('MOCK: SCRUM-394 resends the same message, catches up through pages, and cl
         const request = JSON.parse(part)
         if (request.protocol === 'json') ws.send(frame({}))
         if (request.target === 'JoinConversation') {
-          expect(request.arguments).toEqual([{ type: 'JoinConversation', conversationId }])
+          expect(request.arguments).toEqual([conversationId])
           joins++
           ws.send(frame({ type: 3, invocationId: request.invocationId }))
         }

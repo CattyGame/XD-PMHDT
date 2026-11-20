@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:aura:consultation-hub:1",
-  "title": "Planned SignalR consultation messages",
+  "title": "Consultation application messages and SignalR method arguments v1",
   "oneOf": [
     {
       "type": "object",
@@ -166,5 +166,51 @@
         }
       }
     }
-  ]
+  ],
+  "description": "Application DTO schemas. Client-to-server SignalR calls use positional arguments from x-signalr-methods, not the application command envelope.",
+  "x-signalr-methods": {
+    "JoinConversation": {
+      "arguments": [
+        {
+          "name": "conversationId",
+          "type": "string",
+          "format": "uuid"
+        }
+      ]
+    },
+    "SendMessage": {
+      "arguments": [
+        {
+          "name": "conversationId",
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "clientMessageId",
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      ]
+    },
+    "MarkRead": {
+      "arguments": [
+        {
+          "name": "conversationId",
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "name": "lastReadMessageId",
+          "type": "string",
+          "format": "uuid"
+        }
+      ]
+    }
+  }
 }
