@@ -1,5 +1,6 @@
 using AURA.Analysis.Api.Analytics;
 using Npgsql;
+using System.Text.Json;
 using Xunit;
 
 namespace AURA.Analysis.Api.Tests;
@@ -7,6 +8,7 @@ namespace AURA.Analysis.Api.Tests;
 public sealed class AnalyticsRepositoryPostgresTests
 {
     [PostgresFact]
+    [Trait("TestKind", "PostgreSQL")]
     public async Task Summary_counts_unique_analyses_latest_review_and_explicit_measurement_state_in_utc_window()
     {
         var connectionString = new NpgsqlConnectionStringBuilder(
@@ -99,15 +101,49 @@ public sealed class AnalyticsRepositoryPostgresTests
         var summary = await new PostgresAnalyticsRepository(db).ReadSummaryAsync(
             new(tenant, clinic, patient), AnalyticsWindow.Create(start, end), default);
 
-        Assert.Equal(3, summary.Total);
-        Assert.Equal(2, summary.Completed);
-        Assert.Equal(1, summary.LowQuality);
-        Assert.Equal(1, summary.Duplicate);
-        Assert.Equal(1, summary.RiskModerate);
-        Assert.Equal(2, summary.RiskUnreviewed);
-        Assert.Equal(1, summary.MeasurementAvailable);
-        Assert.Equal(1, summary.MeasurementUnavailable);
-        Assert.Equal(1, summary.MeasurementUnknown);
-        Assert.Equal(0, summary.RiskLow);
+        using var fixture = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(
+            AppContext.BaseDirectory, "Fixtures", "scrum386-golden.json")));
+        var golden = fixture.RootElement.GetProperty("analytics");
+        var expected = golden.GetProperty("expected");
+        Assert.Equal(expected.GetProperty("total").GetInt64(), summary.Total);
+        Assert.Equal(expected.GetProperty("active").GetInt64(), summary.Active);
+        Assert.Equal(expected.GetProperty("completed").GetInt64(), summary.Completed);
+        Assert.Equal(expected.GetProperty("failed").GetInt64(), summary.Failed);
+        Assert.Equal(expected.GetProperty("lowQuality").GetInt64(), summary.LowQuality);
+        Assert.Equal(expected.GetProperty("rejected").GetInt64(), summary.Rejected);
+        Assert.Equal(expected.GetProperty("duplicate").GetInt64(), summary.Duplicate);
+        Assert.Equal(expected.GetProperty("riskLow").GetInt64(), summary.RiskLow);
+        Assert.Equal(expected.GetProperty("riskModerate").GetInt64(), summary.RiskModerate);
+        Assert.Equal(expected.GetProperty("riskHigh").GetInt64(), summary.RiskHigh);
+        Assert.Equal(expected.GetProperty("riskUnavailable").GetInt64(), summary.RiskUnavailable);
+        Assert.Equal(expected.GetProperty("riskUnreviewed").GetInt64(), summary.RiskUnreviewed);
+        Assert.Equal(expected.GetProperty("measurementAvailable").GetInt64(), summary.MeasurementAvailable);
+        Assert.Equal(expected.GetProperty("measurementUnavailable").GetInt64(), summary.MeasurementUnavailable);
+        Assert.Equal(expected.GetProperty("measurementUnknown").GetInt64(), summary.MeasurementUnknown);
+
+        var ratios = golden.GetProperty("ratios");
+        AssertRatio(ratios.GetProperty("completedOfUnique"), summary.Completed, summary.Total);
+        AssertRatio(ratios.GetProperty("lowQualityOfUnique"), summary.LowQuality, summary.Total);
+        AssertRatio(ratios.GetProperty("moderateLatestReviewOfUnique"), summary.RiskModerate, summary.Total);
+        AssertRatio(ratios.GetProperty("unreviewedOfUnique"), summary.RiskUnreviewed, summary.Total);
+        AssertRatio(ratios.GetProperty("measurementAvailableOfUnique"), summary.MeasurementAvailable, summary.Total);
+        AssertRatio(ratios.GetProperty("measurementUnavailableOfUnique"), summary.MeasurementUnavailable, summary.Total);
+        AssertRatio(ratios.GetProperty("measurementUnknownOfUnique"), summary.MeasurementUnknown, summary.Total);
+
+        var empty = await new PostgresAnalyticsRepository(db).ReadSummaryAsync(
+            new(tenant, clinic, patient), AnalyticsWindow.Create(end.AddDays(1), end.AddDays(2)), default);
+        Assert.Equal(0, empty.Total);
+        AssertRatio(ratios.GetProperty("emptyDenominator"), 0, empty.Total);
+    }
+
+    private static void AssertRatio(JsonElement expected, long numerator, long denominator)
+    {
+        if (denominator == 0)
+        {
+            Assert.Equal(JsonValueKind.Null, expected.ValueKind);
+            return;
+        }
+
+        Assert.Equal(expected.GetDouble(), numerator / (double)denominator, precision: 12);
     }
 }

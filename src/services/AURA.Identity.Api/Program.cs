@@ -145,7 +145,11 @@ app.MapPost("/api/v1/identity/bootstrap", async (
     var account = await repository.GetAccountByFirebaseUidAsync(uid);
     if (account == null)
     {
-        account = await repository.CreateAccountAsync(uid);
+        account = await repository.CreateAccountAsync(uid, name);
+    }
+    else if (!string.IsNullOrWhiteSpace(name))
+    {
+        await repository.UpdateDisplayNameIfEmptyAsync(account.AccountId, name);
     }
 
     if (account.AccountStatus != "ACTIVE")
@@ -375,14 +379,161 @@ app.MapPost("/internal/v1/identity/directory/resolve", async Task<IResult> (Iden
     var account=body.AccountId.HasValue?await repository.GetAccountByIdAsync(body.AccountId.Value):await repository.GetAccountByFirebaseUidAsync(body.FirebaseUid!,ct);
     return account is not {AccountStatus:"ACTIVE"}?Results.NotFound():Results.Ok(new{account.AccountId,account.FirebaseUid,account.AccountStatus});
 });
-app.MapPut("/api/v1/admin/accounts/{accountId:guid}/doctor-capability", async Task<IResult> (Guid accountId, DoctorCapabilityRequest body, HttpRequest request, IdentityRepository repository, FirebaseAuthProvider authProvider, IWebHostEnvironment env) =>
+static async Task<(bool Allowed, BootstrapResponse? Actor, IResult? ErrorResult)> AuthorizeSystemAdminAsync(
+    HttpRequest request,
+    IdentityRepository repository,
+    FirebaseAuthProvider authProvider,
+    IWebHostEnvironment env,
+    CancellationToken ct)
 {
+    var correlationId = request.HttpContext.Items["CorrelationId"] as string ?? Guid.NewGuid().ToString("D");
+    var token = ExtractBearerToken(request);
+    if (string.IsNullOrWhiteSpace(token))
+    {
+        return (false, null, Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_UNAUTHORIZED", "Thiếu Firebase ID token.", correlationId, false)),
+            statusCode: StatusCodes.Status401Unauthorized));
+    }
+
+    var (valid, uid, _, _, _, _) = await VerifyFirebaseTokenAsync(token, authProvider.Auth, env);
+    if (!valid || uid is null)
+    {
+        return (false, null, Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_UNAUTHORIZED", "Firebase token không hợp lệ hoặc đã bị thu hồi.", correlationId, false)),
+            statusCode: StatusCodes.Status401Unauthorized));
+    }
+
+    var actor = await repository.GetAccountByFirebaseUidAsync(uid, ct);
+    if (actor is null || actor.AccountStatus != "ACTIVE" || !actor.Roles.Contains("SYSTEM_ADMIN", StringComparer.Ordinal))
+    {
+        return (false, null, Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_FORBIDDEN", "Chỉ Quản trị viên hệ thống (SYSTEM_ADMIN) đang hoạt động mới có quyền thực hiện.", correlationId, false)),
+            statusCode: StatusCodes.Status403Forbidden));
+    }
+
+    return (true, actor, null);
+}
+
+app.MapGet("/api/v1/admin/accounts", async Task<IResult> (
+    HttpRequest request,
+    IdentityRepository repository,
+    FirebaseAuthProvider authProvider,
+    IWebHostEnvironment env,
+    CancellationToken ct,
+    int limit = 20,
+    string? cursor = null,
+    string? status = null,
+    string? query = null,
+    string? search = null) =>
+{
+    request.HttpContext.Response.Headers.CacheControl = "no-store";
+    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
+    var (allowed, _, errResult) = await AuthorizeSystemAdminAsync(request, repository, authProvider, env, ct);
+    if (!allowed) return errResult!;
+
+    if (limit is < 1 or > 100)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số limit phải nằm trong khoảng 1..100.", correlationId, false)),
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    string? normalizedStatus = null;
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+        normalizedStatus = status.Trim().ToUpperInvariant();
+        if (!AllowedAccountStatuses.All.Contains(normalizedStatus))
+        {
+            return Results.Json(
+                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số status chỉ chấp nhận ACTIVE hoặc DISABLED.", correlationId, false)),
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+    }
+
+    Guid? cursorId = null;
+    if (!string.IsNullOrWhiteSpace(cursor))
+    {
+        if (!Guid.TryParse(cursor, out var parsed) || parsed == Guid.Empty)
+        {
+            return Results.Json(
+                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Con trỏ phân trang (cursor) không hợp lệ.", correlationId, false)),
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+        cursorId = parsed;
+    }
+
+    var effectiveSearch = !string.IsNullOrWhiteSpace(query) ? query : search;
+    var page = await repository.ListAccountsAdminAsync(limit, cursorId, normalizedStatus, effectiveSearch, ct);
+    return Results.Ok(page);
+})
+.WithName("ListAdminAccounts")
+.WithTags("Admin");
+
+app.MapPatch("/api/v1/admin/accounts/{accountId:guid}/status", async Task<IResult> (
+    Guid accountId,
+    UpdateAccountStatusRequest body,
+    HttpRequest request,
+    IdentityRepository repository,
+    FirebaseAuthProvider authProvider,
+    IWebHostEnvironment env,
+    CancellationToken ct) =>
+{
+    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
+    var (allowed, actor, errResult) = await AuthorizeSystemAdminAsync(request, repository, authProvider, env, ct);
+    if (!allowed) return errResult!;
+
+    var (success, updated, httpStatus, errCode, errMsg) = await repository.UpdateAccountStatusAdminAsync(
+        actor!.AccountId, accountId, body.Status, body.ExpectedVersion, body.Reason, correlationId, ct);
+
+    if (!success)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails(errCode ?? "ERR_VALIDATION", errMsg ?? "Không thể cập nhật trạng thái tài khoản.", correlationId, false)),
+            statusCode: httpStatus);
+    }
+
+    return Results.Ok(updated);
+})
+.WithName("UpdateAdminAccountStatus")
+.WithTags("Admin");
+
+app.MapPatch("/api/v1/admin/accounts/{accountId:guid}/roles", async Task<IResult> (
+    Guid accountId,
+    UpdateAccountRolesRequest body,
+    HttpRequest request,
+    IdentityRepository repository,
+    FirebaseAuthProvider authProvider,
+    IWebHostEnvironment env,
+    CancellationToken ct) =>
+{
+    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
+    var (allowed, actor, errResult) = await AuthorizeSystemAdminAsync(request, repository, authProvider, env, ct);
+    if (!allowed) return errResult!;
+
+    var (success, updated, httpStatus, errCode, errMsg) = await repository.UpdateAccountRolesAdminAsync(
+        actor!.AccountId, accountId, body.Roles, body.ExpectedVersion, body.Reason, correlationId, ct);
+
+    if (!success)
+    {
+        return Results.Json(
+            new ErrorEnvelope(new ErrorDetails(errCode ?? "ERR_VALIDATION", errMsg ?? "Không thể cập nhật vai trò tài khoản.", correlationId, false)),
+            statusCode: httpStatus);
+    }
+
+    return Results.Ok(updated);
+})
+.WithName("UpdateAdminAccountRoles")
+.WithTags("Admin");
+
+app.MapPut("/api/v1/admin/accounts/{accountId:guid}/doctor-capability", async Task<IResult> (Guid accountId, DoctorCapabilityRequest body, HttpRequest request, IdentityRepository repository, FirebaseAuthProvider authProvider, IWebHostEnvironment env, CancellationToken ct) =>
+{
+    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
     var (valid,uid,_,_,_,_)=await VerifyFirebaseTokenAsync(ExtractBearerToken(request) ?? "",authProvider.Auth,env);
     if(!valid || uid is null)return Results.Unauthorized();
-    var actor=await repository.GetAccountByFirebaseUidAsync(uid);
+    var actor=await repository.GetAccountByFirebaseUidAsync(uid, ct);
     if(actor?.AccountStatus!="ACTIVE" || !actor.Roles.Contains("SYSTEM_ADMIN",StringComparer.Ordinal))return Results.StatusCode(403);
     if(string.IsNullOrWhiteSpace(body.Reason) || body.Reason.Length>1000)return Results.BadRequest();
-    return await repository.SetDoctorCapabilityAsync(actor.AccountId,accountId,body.Approved,body.Reason.Trim()) ? Results.NoContent() : Results.NotFound();
+    return await repository.SetDoctorCapabilityAsync(actor.AccountId,accountId,body.Approved,body.Reason.Trim(),correlationId,ct) ? Results.NoContent() : Results.NotFound();
 });
 
 app.Run();

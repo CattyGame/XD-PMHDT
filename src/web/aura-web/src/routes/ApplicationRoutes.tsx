@@ -26,6 +26,8 @@ import PaymentSuccessPage from '../pages/billing/PaymentSuccessPage'
 import FcmToastHost from '../components/FcmToastHost'
 import AdminPortalPage from '../pages/portal/AdminPortalPage'
 import OwnerViewsPage from '../pages/portal/OwnerViewsPage'
+import ProfilePage from '../pages/ProfilePage'
+import AdminManagementPage from '../pages/AdminManagementPage'
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
@@ -64,11 +66,13 @@ export default function ApplicationRoutes() {
       <Route path="/billing/history" element={<ProtectedRoute><OwnerViewsPage /></ProtectedRoute>} />
       <Route path="/clinics/analytics" element={<ProtectedRoute><OwnerViewsPage mode="clinic" /></ProtectedRoute>} />
       <Route path="/doctor/activity" element={<ProtectedRoute><OwnerViewsPage mode="doctor" /></ProtectedRoute>} />
-      <Route path="/admin/:section?" element={<ProtectedRoute><AdminPortalPage /></ProtectedRoute>} />
+      <Route path="/admin/:section" element={<ProtectedRoute><AdminPortalPage /></ProtectedRoute>} />
       <Route path="/billing/pay/:orderId" element={<ProtectedRoute><PaymentPage /></ProtectedRoute>} />
       <Route path="/billing/success/:orderId" element={<ProtectedRoute><PaymentSuccessPage /></ProtectedRoute>} />
       <Route path="/doctor/workspace" element={<ProtectedRoute><DoctorWorkspacePage /></ProtectedRoute>} />
       <Route path="/campaigns" element={<ProtectedRoute><CampaignManagementPage /></ProtectedRoute>}/>
+      <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+      <Route path="/admin" element={<ProtectedRoute><AdminManagementPage /></ProtectedRoute>} />
     </Routes>
     </>
   )

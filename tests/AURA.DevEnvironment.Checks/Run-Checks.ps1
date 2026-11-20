@@ -53,6 +53,18 @@ try {
     $gateway = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src/gateway/AURA.ApiGateway/appsettings.json') -Raw | ConvertFrom-Json
     $clinicApproval = $gateway.ReverseProxy.Routes.'clinic-admin-status'
     Assert-Check ($clinicApproval.ClusterId -eq 'profile-cluster' -and $clinicApproval.Match.Path -eq '/api/v1/admin/clinics/{clinicId}/status' -and $clinicApproval.Match.Methods -contains 'PATCH') 'Clinic approval is routed through the authenticated Gateway to Profile'
+    $adminAccounts = $gateway.ReverseProxy.Routes.'identity-admin-accounts'
+    Assert-Check ($adminAccounts.ClusterId -eq 'identity-cluster' -and $adminAccounts.Match.Path -eq '/api/v1/admin/accounts' -and $adminAccounts.Match.Methods -contains 'GET') 'Admin account listing is routed through Gateway to Identity'
+    $adminAccountStatus = $gateway.ReverseProxy.Routes.'identity-admin-account-status'
+    Assert-Check ($adminAccountStatus.ClusterId -eq 'identity-cluster' -and $adminAccountStatus.Match.Path -eq '/api/v1/admin/accounts/{accountId}/status' -and $adminAccountStatus.Match.Methods -contains 'PATCH') 'Admin account status update is routed through Gateway to Identity'
+    $adminAccountRoles = $gateway.ReverseProxy.Routes.'identity-admin-account-roles'
+    Assert-Check ($adminAccountRoles.ClusterId -eq 'identity-cluster' -and $adminAccountRoles.Match.Path -eq '/api/v1/admin/accounts/{accountId}/roles' -and $adminAccountRoles.Match.Methods -contains 'PATCH') 'Admin account role update is routed through Gateway to Identity'
+    $adminClinics = $gateway.ReverseProxy.Routes.'profile-admin-clinics'
+    Assert-Check ($adminClinics.ClusterId -eq 'profile-cluster' -and $adminClinics.Match.Path -eq '/api/v1/admin/clinics' -and $adminClinics.Match.Methods -contains 'GET') 'Admin clinic listing is routed through Gateway to Profile'
+    $adminAudit = $gateway.ReverseProxy.Routes.'profile-admin-audit'
+    Assert-Check ($adminAudit.ClusterId -eq 'profile-cluster' -and $adminAudit.Match.Path -eq '/api/v1/admin/audit-events' -and $adminAudit.Match.Methods -contains 'GET') 'Admin audit log is routed through Gateway to Profile'
+    $consultationDoctors = $gateway.ReverseProxy.Routes.'profile-consultation-doctors'
+    Assert-Check ($consultationDoctors.ClusterId -eq 'profile-cluster' -and $consultationDoctors.Match.Path -eq '/api/v1/analyses/{analysisId}/consultation-doctors' -and $consultationDoctors.Match.Methods -contains 'GET') 'Consultation doctors route is routed through Gateway to Profile'
     foreach ($service in @('AURA.Profile.Api', 'AURA.Identity.Api')) {
         foreach ($file in @('appsettings.json', 'appsettings.Development.json')) {
             $settings = Get-Content -LiteralPath (Join-Path $repositoryRoot "src/services/$service/$file") -Raw | ConvertFrom-Json
@@ -100,7 +112,7 @@ try {
     $global:AuraM1EnvironmentCheckState.emptyAt = -1
 
     $plan = @(& $initialize -PlanOnly)
-    Assert-Check ($plan.Count -eq 36) "Migration plan includes all service schemas, research annotations, durable delivery and payment outbox"
+    Assert-Check ($plan.Count -eq 37) "Migration plan includes all service schemas, research annotations, durable delivery, admin lifecycle audit and payment outbox"
     Assert-Check ($plan[0] -eq "infra/postgres/migrations/001_notification_devices.sql") "Notification schema is bootstrapped first"
     Assert-Check ($plan[2] -eq "infra/postgres/migrations/002_identity_and_profile.sql") "Identity/Profile migration is included"
     Assert-Check ($plan[3] -eq "infra/postgres/migrations/003_doctor_assignments.sql") "Doctor assignments follow Profile schema"
@@ -139,7 +151,7 @@ try {
     }
     $originalEncoding = $OutputEncoding
     & $initialize -EnvFile ".env.example"
-    Assert-Check ($global:AuraM1EnvironmentCheckState.dockerCalls.Count -eq 37) "Migration runner invokes config validation and all thirty-six migrations"
+    Assert-Check ($global:AuraM1EnvironmentCheckState.dockerCalls.Count -eq 38) "Migration runner invokes config validation and all thirty-seven migrations"
     Assert-Check ($OutputEncoding -eq $originalEncoding) "Migration runner restores pipeline encoding"
     Assert-Check (@($global:AuraM1EnvironmentCheckState.dockerCalls | Where-Object { $_ -like '*ALTER ROLE*' }).Count -eq 0) "Default migration run preserves existing passwords/logins"
     $global:AuraM1EnvironmentCheckState.dockerCalls.Clear()

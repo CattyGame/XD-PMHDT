@@ -427,3 +427,11 @@ export async function registerClinicPatient(
   }
 }
 
+export {
+  listAdminClinics,
+  updateAdminClinicStatus,
+  type AdminClinic,
+  type AdminClinicPage,
+  type AdminClinicStatus,
+} from './adminManagement'
+
