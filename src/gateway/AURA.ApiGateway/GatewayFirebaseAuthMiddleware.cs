@@ -3,6 +3,7 @@ using System.Security.Claims;
 using FirebaseAdmin;
 using FirebaseAdmin.Auth;
 using Google.Apis.Auth.OAuth2;
+using Microsoft.AspNetCore.Http.Features;
 
 namespace AURA.ApiGateway;
 
@@ -59,10 +60,23 @@ public sealed class GatewayFirebaseAuthMiddleware(
 {
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!RequiresUserToken(context.Request))
+        var isConsultationHub = context.Request.Path.StartsWithSegments("/hubs/consultations");
+        if (!isConsultationHub && !RequiresUserToken(context.Request))
         {
             await next(context);
             return;
+        }
+
+        if (isConsultationHub)
+        {
+            var tokenQuery = ExtractAndRedactHubToken(context.Request);
+            if (!tokenQuery.Valid || tokenQuery.Token is not null && !IsHubQueryTokenTransport(context.Request))
+            {
+                await Unauthorized(context);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(context.Request.Headers.Authorization) && tokenQuery.Token is not null)
+                context.Request.Headers.Authorization = "Bearer " + tokenQuery.Token;
         }
 
         var authorization = context.Request.Headers.Authorization;
@@ -198,6 +212,25 @@ public sealed class GatewayFirebaseAuthMiddleware(
 
         return !anonymousGet;
     }
+
+    private static (bool Valid, string? Token) ExtractAndRedactHubToken(HttpRequest request)
+    {
+        var query = request.Query;
+        var values = query["access_token"];
+        var remaining = query.Where(pair => !string.Equals(pair.Key, "access_token", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        request.QueryString = QueryString.Create(remaining);
+        request.Query = new QueryCollection(remaining);
+        if (values.Count == 0) return (true, null);
+        if (values.Count != 1 || string.IsNullOrWhiteSpace(values[0])) return (false, null);
+        return (true, values[0]);
+    }
+
+    private static bool IsHubQueryTokenTransport(HttpRequest request) =>
+        string.Equals(request.Path.Value, "/hubs/consultations", StringComparison.OrdinalIgnoreCase) &&
+        HttpMethods.IsGet(request.Method) &&
+        (request.HttpContext.Features.Get<IHttpWebSocketFeature>()?.IsWebSocketRequest == true || request.Headers["Accept"].Any(value =>
+            value?.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase) == true));
 
     private static Task Unauthorized(HttpContext context)
     {

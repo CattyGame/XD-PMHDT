@@ -148,11 +148,17 @@ Các key theo contract dùng ở consumer/caller:
 
 - Services__Identity__BaseUrl.
 
+- Services__Profile__BaseUrl (Notification consultation authority).
+
 ServiceAuth__Audience của consumer không được nhầm với audience
 
 đích khi caller xin token cho một service khác.
 
 Identity nạp lại khóa đã lưu khi khởi động.
+
+Khi thay đổi allowedTargets trong clients.example.json, chạy lại công cụ
+AURA.ServiceIdentity.Setup để tạo registry/hash cục bộ tương ứng. SCRUM-391
+cần notification-api → aura-profile/profile:resolve.
 
 Không sinh khóa mới mỗi lần chạy.
 

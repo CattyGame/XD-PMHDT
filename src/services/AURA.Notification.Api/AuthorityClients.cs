@@ -26,12 +26,88 @@ public sealed class NotificationAuthorityClient(IHttpClientFactory clients, ICon
         {
             "aura-identity" => "IdentityAuthority",
             "aura-billing" => "BillingAuthority",
+            "aura-profile" => "ProfileAuthority",
             _ => "AnalysisAuthority"
         };
         return await clients.CreateClient(clientName).SendAsync(request, ct);
     }
 
     private sealed record Token(string AccessToken);
+}
+
+public sealed record ConsultationAccessRequest(
+    Guid ActorAccountId,
+    Guid ClinicContextId,
+    Guid AnalysisId,
+    string Action,
+    Guid? DoctorAccountId = null,
+    Guid? PatientId = null);
+
+public sealed record ConsultationDoctorAuthority(Guid AccountId, string DisplayName);
+
+public sealed record ConsultationAccessDecision(
+    bool Allowed,
+    bool Revoked,
+    string? Code,
+    string? Reason,
+    Guid? TenantId,
+    Guid? ClinicContextId,
+    Guid? PatientId,
+    Guid? PatientAccountId,
+    Guid? AnalysisId,
+    string? ParticipantRole,
+    Guid? DoctorAccountId,
+    Guid? AssignmentId,
+    int PermissionVersion,
+    IReadOnlyList<ConsultationDoctorAuthority> EligibleDoctors);
+
+public sealed class ConsultationAuthorityClient(NotificationAuthorityClient authorityClient)
+{
+    public async Task<ConsultationAccessDecision> ResolveAsync(
+        ConsultationAccessRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var response = await authorityClient.SendAsync(
+            "aura-profile",
+            "profile:resolve",
+            "/internal/v1/profile/consultation-access/resolve",
+            request,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        ConsultationAccessDecision? decision;
+        try
+        {
+            decision = await response.Content.ReadFromJsonAsync<ConsultationAccessDecision>(cancellationToken: cancellationToken);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            throw new HttpRequestException("Profile consultation authority returned malformed JSON.");
+        }
+        if (decision is null ||
+            (decision.Allowed && decision.Revoked) ||
+            decision.ClinicContextId != request.ClinicContextId ||
+            decision.AnalysisId != request.AnalysisId ||
+            decision.DoctorAccountId != request.DoctorAccountId ||
+            (request.PatientId is not null && decision.PatientId != request.PatientId) ||
+            decision.PermissionVersion < 1 ||
+            decision.EligibleDoctors is null)
+        {
+            throw new HttpRequestException("Profile consultation authority returned a mismatched or incomplete decision.");
+        }
+
+        if (decision.Allowed &&
+            (decision.TenantId is null || decision.PatientId is null ||
+             decision.PatientAccountId is null || decision.DoctorAccountId is null || decision.AssignmentId is null ||
+             decision.ParticipantRole is not ("PATIENT" or "DOCTOR") ||
+             decision.ParticipantRole == "PATIENT" && decision.PatientAccountId != request.ActorAccountId ||
+             decision.ParticipantRole == "DOCTOR" && decision.DoctorAccountId != request.ActorAccountId))
+        {
+            throw new HttpRequestException("Profile consultation authority returned an incomplete grant.");
+        }
+
+        return decision;
+    }
 }
 
 public sealed class NotificationContextRejectedException : HttpRequestException
