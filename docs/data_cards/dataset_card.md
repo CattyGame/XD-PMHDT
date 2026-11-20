@@ -1,9 +1,9 @@
 > **Dự án**: AURA — Phân tích mạch máu võng mạc hỗ trợ đánh giá sức khỏe
 > **Mã Jira**: SCRUM-59, SCRUM-290; SCRUM-308 / SCRUM-310 (Sprint 2 — Tiền xử lý chuẩn hóa & Contract Worker–AI)
 > **Người biên soạn ban đầu**: Đào Duy Quân (M4 — AI Engineer)
-> **Phiên bản tài liệu**: 1.3.1
-> **Ngày cập nhật**: 2026-10-24
-> **Trạng thái**: Dataset/benchmark offline và module preprocessing đã được mô tả riêng; AI endpoint vẫn mock. 7A preprocessing tests và 7B AI suite/OpenAPI check được người chạy xác nhận PASS; chưa chứng nhận Worker hoặc inference thật.
+> **Phiên bản tài liệu**: 2.0.0 (cập nhật Sprint 6 — `W6-M4-03`)
+> **Ngày cập nhật**: 2026-11-18
+> **Trạng thái**: Runtime mặc định chạy thuật toán Frangi v0.2 thật (Sprint 3/4-5) và hỗ trợ profile nghiên cứu V2 opt-in (binary DR ResNet34/Grad-CAM + AVR V8); chế độ mock chỉ cho phép opt-in tường minh khi unit test, tuyệt đối không làm fallback. Gate khoa học `SCRUM-373` (bias AVR trên Iowa <= 0.02) giữ mở riêng (`OPEN_NOT_PASSED`).
 
 ---
 
@@ -487,3 +487,24 @@ và [M4 integration status](../integration/M4_Sprint2_integration_status.md).
     - **Chỉ số sinh học tự động (Automated RGB)**: `Mean AVR = 0.5415`, `Mean CRAE = 11.49 px`, `Mean CRVE = 21.39 px`.
     - **Đối chiếu nhãn chuyên gia (Ground Truth Reference)**: `GT Mean AVR = 0.7551`, `Mean AVR MAE = 0.2335`, `Mean AV Branch Classification Accuracy = 0.5528` (55.28%).
 - Ảnh trực quan hóa lâm sàng: Động mạch phân màu Đỏ, Tĩnh mạch phân màu Xanh, Vành khuyên Zone B viền Xanh lá và Tâm đĩa thị chấm Vàng, trả về qua Base64 PNG.
+
+---
+
+## 16. Cập nhật Dataset Registry & Protocol Đo V2 (Sprint 6 — `W6-M4-03` / `SCRUM-388`)
+
+Registry máy đọc chuẩn hóa toàn bộ V2 được lưu tại `docs/benchmarks/model_card_v2_registry.json` và kiểm tra tự động qua `src/ai-core/scripts/verify_model_card_v2_registry.py`.
+
+### 16.1. Tách bạch 4 Tập Dữ liệu theo Manifest, Split và Giấy phép
+
+| Tập dữ liệu | Cỡ mẫu / Cohort | Split cố định | Giấy phép | Mục đích & Giới hạn |
+|---|---|---|---|---|
+| **CHASE_DB1** | `28` ảnh (`14` đối tượng) | `16` train / `6` val / `6` test (`seed=42`) | `CC BY 4.0` | Baseline phân vùng mạch máu Frangi v0.2 (`Mean Dice = 0.4015`, `Mean IoU = 0.2517` trên 28 ảnh). Không có nhãn DR/AVR. |
+| **HRF45** | `45` ảnh (`15 DR`, `15 H`, `15 Glaucoma`) | Nhị phân DR vs H: `18` train / `6` val / `6` test; `15 Glaucoma` tách riêng `glaucoma_ood` | Academic Research (Erlangen-Nuremberg) | Frangi HRF proxy (`Test9 Mean Dice = 0.4834`) & Transfer Learning **ResNet34 binary DR** (`train_dr_cnn.py`). **Không phải phân độ ICDR nhiều mức**. |
+| **AVRDB100** | `100` thư mục gốc (`99` ca hợp lệ, `IM000189` rỗng) | `70` train / `15` val / `14` test (`seed=42`) | `CC BY 4.0` / Mendeley DOI `10.17632/3csr652p9y.2` | Phân loại A/V (`PIXEL_MLP_RGB_DOG`, `RRWNET_RITE` + `lunetv2_odc.onnx`) & chọn ngưỡng trên `15` ca validation (`iowa_references_used=false`). |
+| **Iowa40** | `40` ảnh (`image1..40.jpg` + `GT/GT.txt` 2 chuyên gia) | Tập độc lập ngoài repo/ZIP | Research only; **không tái phân phối** | Benchmark agreement AVR độc lập. Tuyệt đối **cấm dùng để hiệu chỉnh tham số**. |
+
+### 16.2. Sửa đổi thuật toán V2 & Ràng buộc Không Sinh Nhãn Giả
+
+* **Binary DR CNN + Grad-CAM (`SCRUM-372` V2):** Mục `14` phía trên mô tả baseline cũ (`train_dr_screening.py`, `HEURISTIC_RETINAL_SALIENCY`). Trong bản tích hợp V2 mới (`src/ai-core/scripts/train_dr_cnn.py` & `app/services/dr_cnn_service.py`), hệ thống dùng **ResNet34 đóng băng backbone + Linear head** với transform `Resize(shorter_edge=256) -> CenterCrop(224x224)` và **autograd Grad-CAM thật trên `layer4`** (`gradcam_geometry = "IMAGENET_CENTER_CROP_224"`). Với môi trường kiểm chứng `torch 2.14.1+cpu`: `selected_epoch = 2`, `validation_auc = 0.8889`, `test_auc = 1.0`.
+* **AVR V8 Hình học & Chính sách Từ chối Đo (`Abstention`, `SCRUM-373`):** Pipeline tự động (`calculate_automatic_avr`) chỉ nhận ảnh RGB (không truyền `artery_gt_mask` / `vein_gt_mask` khi `predict`), yêu cầu định vị OD và **đủ 6 động mạch + 6 tĩnh mạch độc lập trong Zone B ($2R..3R$)**. Nếu thiếu điều kiện: trả **`measurement_available = false`**, `avr/crae_px/crve_px = null` kèm `unavailable_reason`, và tính mọi ca unavailable vào **mẫu số `coverage`**, không biến thành `0` hay `LOW_RISK`.
+* **Trạng thái Gate Khoa học `SCRUM-373` (`OPEN_NOT_PASSED`):** Kết quả đo đối chiếu baseline trước đó (`docs/benchmarks/inspire_avr_benchmark_v1.0.json`, 29 ca) ghi nhận `Mean AVR MAE = 0.2335`, `Mean AVR Bias = -0.2136` — chưa đạt ngưỡng khoa học `|bias| <= 0.02`. Gate này giữ mở độc lập và không tự sinh nhãn bác sĩ hay gán `PASS` bằng script.

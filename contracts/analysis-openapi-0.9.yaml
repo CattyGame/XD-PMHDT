@@ -1196,7 +1196,7 @@ paths:
               schema: { $ref: '#/components/schemas/ExportReceipt' }
         '401': { description: Authentication required }
         '403': { description: Current authority denied }
-        '404': { description: Missing, expired, or outside scope }
+        '404': { description: 'Missing, expired, or outside scope' }
         '503': { description: Authority unavailable; fail closed }
   /api/v1/campaigns/{campaignId}/reports:
     post:
@@ -1392,6 +1392,65 @@ paths:
         '403': { description: Access denied, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '404': { description: Patient outside scope, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '503': { description: Profile authority unavailable; fail closed, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /api/v1/admin/ai/config:
+    get:
+      tags:
+      - Analyses
+      operationId: getActiveAiManifest
+      summary: Read active verified AI artifact manifest pointer (SYSTEM_ADMIN only)
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Active verified AI artifact manifest view
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiConfigView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      tags:
+      - Analyses
+      operationId: activateVerifiedAiManifest
+      summary: Validate and atomically activate a verified server-side AI artifact manifest (SYSTEM_ADMIN only)
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiConfigChange'
+      responses:
+        '200':
+          description: Activated verified AI artifact manifest view
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiConfigView'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Version or SHA-256 hash conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Candidate smoke verification failed; active manifest unchanged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     bearerAuth:
@@ -2627,6 +2686,49 @@ components:
       - gradcam_method
       - gradcam_geometry
       type: object
+    AiConfigView:
+      type: object
+      additionalProperties: false
+      required:
+      - artifactManifestId
+      - thresholdConfigSha256
+      - version
+      - activatedAt
+      properties:
+        artifactManifestId:
+          type: string
+          format: uuid
+        thresholdConfigSha256:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        version:
+          type: integer
+          minimum: 1
+        activatedAt:
+          type: string
+          format: date-time
+    AiConfigChange:
+      type: object
+      additionalProperties: false
+      required:
+      - expectedVersion
+      - artifactManifestId
+      - thresholdConfigSha256
+      - reason
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        artifactManifestId:
+          type: string
+          format: uuid
+        thresholdConfigSha256:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
 
 
   responses:

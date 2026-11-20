@@ -78,6 +78,10 @@ describe('Kết quả AVR chưa khả dụng', () => {
     expect(research.textContent).toContain('resnet34')
     expect(research.textContent).toContain('224×224')
     expect(research.textContent).toContain('INCOMPLETE_ZONE_B')
+    expect(research.textContent).toContain('GRAD_CAM')
+    expect(research.textContent).toContain('IMAGENET_CENTER_CROP_224')
+    expect(research.textContent).toContain('a'.repeat(64))
+    expect(research.textContent).toContain('b'.repeat(64))
     expect(screen.queryByRole('region', { name: 'Đánh giá nguy cơ từ API' })).toBeNull()
   })
 

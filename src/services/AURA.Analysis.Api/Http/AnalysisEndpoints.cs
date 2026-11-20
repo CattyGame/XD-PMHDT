@@ -168,6 +168,20 @@ public static class AnalysisEndpoints
             return Results.Json(await c.RequestServices.GetRequiredService<InternalResolversService>().ResolveNotificationContextAsync(
                 request,c.RequestAborted),UploadJson.Options);
         }));
+        app.MapGet("/api/v1/admin/ai/config",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
+        {
+            await AdminUser(c);
+            return Results.Json(await c.RequestServices.GetRequiredService<AiConfigService>().GetActiveAsync(c.RequestAborted),UploadJson.Options);
+        })));
+        app.MapPut("/api/v1/admin/ai/config",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
+        {
+            var admin=await AdminUser(c);
+            Limit(c,16384);
+            using var body=await System.Text.Json.JsonDocument.ParseAsync(c.Request.Body,cancellationToken:c.RequestAborted);
+            var change=AiConfigService.ParseStrictChange(body.RootElement);
+            var view=await c.RequestServices.GetRequiredService<AiConfigService>().ActivateAsync(admin.AccountId,change,c.RequestAborted);
+            return Results.Json(view,UploadJson.Options);
+        })));
     }
 
     private static async Task<IResult> Handle(HttpContext c,Func<Task<IResult>> action)
@@ -200,6 +214,11 @@ public static class AnalysisEndpoints
     {
         var user=await c.RequestServices.GetRequiredService<IAnalysisUserIdentityResolver>().ResolveAsync(c.Request,c.RequestAborted);
         AnalysisUserPolicy.RequireClinicalRole(user);return user;
+    }
+    private static async Task<AnalysisUserContext> AdminUser(HttpContext c)
+    {
+        var user=await c.RequestServices.GetRequiredService<IAnalysisUserIdentityResolver>().ResolveAsync(c.Request,c.RequestAborted);
+        AnalysisUserPolicy.RequireSystemAdmin(user);return user;
     }
     private static Guid ResourceId(string value)=>Guid.TryParse(value,out var id)&&id!=Guid.Empty?id
         :throw new UploadFailure(404,"ERR_NOT_FOUND","Không tìm thấy tài nguyên.");

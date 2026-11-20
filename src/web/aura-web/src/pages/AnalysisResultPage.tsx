@@ -217,12 +217,12 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
       </section>
       {result.research && <section aria-label="Kết quả AI nghiên cứu">
         <h2>Kết quả AI nghiên cứu</h2>
-        <p><strong>AVR V8:</strong> {result.research.avr.model_version}</p>
+        <p><strong>AVR V8:</strong> {result.research.avr.model_version} (<code>{result.research.avr.model_sha256}</code>)</p>
         <p>CRAE: {result.research.avr.crae_px ?? 'Chưa đo được'} px · CRVE: {result.research.avr.crve_px ?? 'Chưa đo được'} px</p>
         {!result.research.avr.measurement_available && <p>Lý do chưa có AVR: {result.research.avr.unavailable_reason}</p>}
-        <p><strong>DR nhị phân:</strong> {result.research.dr.model_version}</p>
+        <p><strong>DR nhị phân:</strong> {result.research.dr.model_version} (<code>{result.research.dr.checkpoint_sha256}</code>)</p>
         <p>Xác suất DR do mô hình nghiên cứu ước lượng: {(result.research.dr.probability_dr * 100).toFixed(1)}%</p>
-        <p>Grad-CAM dùng vùng crop 224×224 từ ảnh đã resize, không phải bản đồ tổn thương trên toàn ảnh gốc.</p>
+        <p>Phương pháp giải thích: {result.research.dr.gradcam_method} ({result.research.dr.gradcam_geometry}) — resize cạnh ngắn 256 rồi crop vùng trung tâm 224×224, không phải bản đồ tổn thương trên toàn ảnh gốc.</p>
         <p>Kết quả này không phân độ ICDR và không thay thế kết luận lâm sàng.</p>
       </section>}
       {result.riskAvailable
