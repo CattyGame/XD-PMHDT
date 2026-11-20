@@ -98,7 +98,7 @@ function Thread({ context, conversation, changed, revoked }: {
       {thread.messages.map(message => {
         const own = message.senderAccountId === context.accountId.toLowerCase()
         return <li key={message.messageId} className={own ? styles.own : styles.received}>
-          <div><strong>{own ? 'Bạn' : 'Người tư vấn'}</strong>{' '}
+          <div><strong>{own ? 'Bạn' : 'Người tham gia'}</strong>{' '}
             <time dateTime={message.sentAt}>{dateFormat.format(new Date(message.sentAt))}</time></div>
           <p>{message.text}</p>
           {own && <small>{message.deliveryState === 'READ' ? 'Đã đọc' : 'Đã gửi'}</small>}
