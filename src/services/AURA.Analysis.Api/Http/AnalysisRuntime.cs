@@ -1,5 +1,8 @@
 using AURA.Analysis.Api.Upload;
 using AURA.Analysis.Api.Analytics;
+using AURA.Analysis.Api.Feedback;
+using AURA.Analysis.Api.Alerts;
+using AURA.Analysis.Api.Exports;
 using AURA.Common.Cache;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
@@ -72,6 +75,12 @@ public static class AnalysisRuntime
         services.AddTransient<AnalysisReportService>();
         services.AddTransient<AnalysisQueryService>();services.AddTransient<InternalResolversService>();
         services.AddTransient<DoctorReviewService>();services.AddTransient<DoctorWorklistService>();
+        services.AddTransient<IFeedbackRepository,PostgresFeedbackRepository>();
+        services.AddTransient<FeedbackService>();
+        services.AddTransient<IAlertRepository,PostgresAlertRepository>();
+        services.AddTransient<AlertService>();
+        services.AddTransient<IExportRepository,PostgresExportRepository>();
+        services.AddTransient<ExportService>();
         services.TryAddSingleton<IAiManifestCatalog, VerifiedServerAiManifestCatalog>();
         services.TryAddSingleton<IAiCandidateSmokeVerifier, MetadataAiCandidateSmokeVerifier>();
         services.TryAddSingleton<AiConfigService>();

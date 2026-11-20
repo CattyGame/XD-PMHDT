@@ -1,0 +1,5 @@
+{
+  "status": "ACKNOWLEDGED",
+  "expectedVersion": 1,
+  "reason": "Reviewed by assigned clinician"
+}
