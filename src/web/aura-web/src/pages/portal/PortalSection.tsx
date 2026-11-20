@@ -93,7 +93,7 @@ export function AnalyticsCards({ data }: { data: Awaited<ReturnType<typeof analy
     <p className={styles.muted}>{formatRange(data)} · Cập nhật {formatDate(data.asOf)}</p>
     <Metrics entries={[[ 'Tổng ca phân tích duy nhất', data.total ], ['Đang xử lý', p.active],
       ['Hoàn tất', p.completed], ['Thất bại', p.failed], ['Chất lượng thấp', p.lowQuality],
-      ['Bị từ chối', p.rejected], ['Trùng', p.duplicate]]} />
+      ['Bị từ chối', p.rejected], ['Ảnh trùng (ngoài tổng ca duy nhất)', p.duplicate]]} />
     <h3>Kết luận bác sĩ mới nhất</h3>
     <Metrics entries={[[ 'Thấp', r.low ], ['Trung bình', r.moderate], ['Cao', r.high],
       ['Thiếu kết luận nguy cơ', r.unavailable], ['Chưa đánh giá', r.unreviewed]]} />
@@ -125,7 +125,7 @@ export function DateRangeForm({ range, onChange }: {
   }
   return <form className={portal.controls} onSubmit={submit} aria-label="Khoảng ngày">
     <label>Từ ngày <input type="date" name="from" defaultValue={localDate(range.from)} required /></label>
-    <label>Đến hết ngày <input type="date" name="to" defaultValue={localDate(range.to)} required /></label>
+    <label>Đến hết ngày <input type="date" name="to" defaultValue={localDate(new Date(Date.parse(range.to) - 1).toISOString())} required /></label>
     <button type="submit">Áp dụng</button>
     {error && <p role="alert" className={styles.error}>{error}</p>}
   </form>

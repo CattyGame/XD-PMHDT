@@ -1,3 +1,5 @@
+import { listAdminAccounts, listAdminClinics, listAdminAuditEvents, setDoctorCapability,
+  updateAdminAccountStatus, updateAdminAccountRoles, updateAdminClinicStatus } from './adminManagement'
 import { AnalysisResultError, authorizedApiResponse } from './analysisResult'
 import type { BackendContext } from './backendContext'
 import { validBillingId } from './billing'
@@ -106,7 +108,9 @@ export async function analytics(context: BackendContext, range: DateRange, signa
   const processing = { active: count(p.active), completed: count(p.completed), failed: count(p.failed),
     lowQuality: count(p.lowQuality), rejected: count(p.rejected), duplicate: count(p.duplicate) }
   const total = count(row.total)
-  const parts = Object.values(processing)
+  // UNIQUE_ANALYSIS excludes duplicate uploads; duplicate is an independent diagnostic count.
+  const { duplicate: _duplicate, ...uniqueProcessing } = processing
+  const parts = Object.values(uniqueProcessing)
   if (total !== null && parts.every(part => part !== null) &&
     parts.reduce<number>((sum, part) => sum + (part ?? 0), 0) !== total) invalid()
   return { total, processing, review: { low: count(r.low), moderate: count(r.moderate), high: count(r.high),
@@ -124,39 +128,38 @@ export async function financial(context: BackendContext, range: DateRange, signa
   }) }
 }
 
-function account(value: unknown) {
-  const row = object(value)
-  return { id: identifier(row.accountId), displayName: typeof row.displayName === 'string' ? row.displayName : invalid(),
-    roles: array(row.roles, role => oneOf(role, accountRoles)), status: oneOf(row.status, accountStatuses), version: integer(row.version, 1) }
+function ensureAdmin(context: BackendContext) {
+  if (!context.roles.includes('SYSTEM_ADMIN')) throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
 }
 export async function accounts(context: BackendContext, cursor: string | null, signal: AbortSignal) {
-  return page(await admin(context, '/accounts?' + new URLSearchParams(paging(cursor)), signal), account)
+  ensureAdmin(context)
+  const result = await listAdminAccounts(context, { limit: 20, ...(cursor ? { cursor } : {}) }, signal)
+  return { nextCursor: result.nextCursor, items: result.items.map(row => ({ id: row.accountId,
+    displayName: row.displayName, roles: row.roles, status: row.status, version: row.version })) }
 }
 export async function changeAccount(context: BackendContext, id: string, change: VersionChange &
   ({ status: typeof accountStatuses[number] } | { roles: typeof accountRoles[number][] }), signal: AbortSignal) {
-  const field = 'roles' in change ? 'roles' : 'status'
-  const saved = account(await admin(context, '/accounts/' + identifier(id) + '/' + field, signal,
-    'PATCH', change))
-  if (saved.id !== id || saved.version <= change.expectedVersion) invalid()
+  ensureAdmin(context)
+  const saved = 'roles' in change ? await updateAdminAccountRoles(context, id, change, signal)
+    : await updateAdminAccountStatus(context, id, change, signal)
+  if (saved.accountId !== id || saved.version <= change.expectedVersion) invalid()
 }
 export async function clinics(context: BackendContext, cursor: string | null, signal: AbortSignal) {
-  return page(await admin(context, '/clinics?' + new URLSearchParams(paging(cursor)), signal), value => {
-    const row = object(value)
-    return { id: identifier(row.clinicId), name: string(row.name), status: oneOf(row.status, clinicStatuses),
-      version: integer(row.version, 1) }
-  })
+  ensureAdmin(context)
+  const result = await listAdminClinics(context, { limit: 20, ...(cursor ? { cursor } : {}) }, signal)
+  return { nextCursor: result.nextCursor, items: result.items.map(row => ({ id: row.clinicId,
+    name: row.name, status: row.status, version: row.version })) }
 }
 export async function changeClinicStatus(context: BackendContext, id: string,
-  status: typeof clinicStatuses[number], reason: string, signal: AbortSignal) {
-  const saved = object(await admin(context, '/clinics/' + identifier(id) + '/status', signal, 'PATCH', { status, reason }))
-  if (saved.clinicId !== id || saved.status !== status) invalid()
+  change: VersionChange & { status: typeof clinicStatuses[number] }, signal: AbortSignal) {
+  ensureAdmin(context)
+  const saved = await updateAdminClinicStatus(context, id, change, signal)
+  if (saved.clinicId !== id || saved.status !== change.status || saved.version <= change.expectedVersion) invalid()
 }
 export async function changeDoctorCapability(context: BackendContext, id: string, approved: boolean,
   reason: string, signal: AbortSignal) {
-  if (!context.roles.includes('SYSTEM_ADMIN')) throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
-  const response = await authorizedApiResponse('/api/v1/admin/accounts/' + identifier(id) + '/doctor-capability',
-    context, signal, 'PUT', JSON.stringify({ approved, reason }))
-  if (response.status !== 204) invalid()
+  ensureAdmin(context)
+  await setDoctorCapability(context, id, { approved, reason }, signal)
 }
 
 function price(value: unknown) {
@@ -212,12 +215,11 @@ export async function saveTemplate(context: BackendContext, id: string, data: Ve
   if (saved.id !== id || saved.version <= data.expectedVersion) invalid()
 }
 export async function audit(context: BackendContext, range: DateRange, cursor: string | null, signal: AbortSignal) {
-  return page(await admin(context, '/audit-events?' + new URLSearchParams({ ...range, ...paging(cursor) }), signal), value => {
-    const row = object(value)
-    return { id: identifier(row.eventId), service: string(row.sourceService), action: string(row.action),
-      resourceType: string(row.resourceType), resourceHash: string(row.resourceIdHash),
-      correlation: string(row.correlationId), time: date(row.occurredAt), outcome: oneOf(row.outcome, ['ALLOW', 'DENY', 'FAIL']) }
-  })
+  ensureAdmin(context)
+  const result = await listAdminAuditEvents(context, { ...range, limit: 20, ...(cursor ? { cursor } : {}) }, signal)
+  return { nextCursor: result.nextCursor, items: result.items.map(row => ({ id: row.eventId,
+    service: row.sourceService, action: row.action, resourceType: row.resourceType, resourceHash: row.resourceIdHash,
+    correlation: row.correlationId, time: row.occurredAt, outcome: row.outcome })) }
 }
 
 export function portalError(cause: unknown) {

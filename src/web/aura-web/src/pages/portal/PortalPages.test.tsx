@@ -86,7 +86,7 @@ describe('SCRUM-393 protected portal', () => {
   it('shows missing values separately from zero and keeps review risk separate from processing totals', async () => {
     request.mockImplementation(async (path: string) => path.includes('/analytics/') ? json({
       ...range, asOf: time, unit: 'UNIQUE_ANALYSIS', total: 3,
-      processing: { active: 1, completed: 1, failed: 1, lowQuality: 0, rejected: 0, duplicate: 0 },
+      processing: { active: 1, completed: 1, failed: 1, lowQuality: 0, rejected: 0, duplicate: 2 },
       riskSource: 'LATEST_CLINICIAN_REVIEW', reviewRisk: { low: 0, moderate: 0, high: 1, unavailable: 0, unreviewed: 2 },
       measurementAvailable: 0, measurementUnavailable: null,
     }) : json({ ...range, groups: [] }))
@@ -94,6 +94,7 @@ describe('SCRUM-393 protected portal', () => {
     const panel = await screen.findByRole('region', { name: 'Tổng quan phân tích' })
     expect((await within(panel).findByText('Tổng ca phân tích duy nhất')).nextElementSibling?.textContent).toBe('3')
     expect(within(panel).getByText('Có số đo').nextElementSibling?.textContent).toBe('0')
+    expect(within(panel).getByText('Ảnh trùng (ngoài tổng ca duy nhất)').nextElementSibling?.textContent).toBe('2')
     expect(within(panel).getByText('Thiếu số đo').nextElementSibling?.textContent).toBe('Chưa có dữ liệu')
     expect(await screen.findByText('Chưa có dữ liệu trong phạm vi đã chọn.')).toBeTruthy()
   })
@@ -136,4 +137,50 @@ describe('SCRUM-393 protected portal', () => {
     expect(unknown.nextElementSibling?.textContent).toBe('1')
     expect(request.mock.calls[1][0]).toMatch(new RegExp('^/api/v1/doctors/me/summary\\?.*clinicContextId=' + clinicId))
   })
+})
+
+it('uses the merged clinic contract, sends expectedVersion and removes stale data on 409', async () => {
+  request.mockImplementation(async (_path, _context, _signal, method) => {
+    if (method === 'PATCH') throw new AnalysisResultError(409, 'ERR_CONFLICT')
+    return json({ items: [{ clinicId, tenantId: id(4), name: 'Clinic lifecycle fixture',
+      status: 'PENDING', version: 4 }], nextCursor: null })
+  })
+  open('/admin/clinics')
+  await screen.findByText('Clinic lifecycle fixture')
+  fireEvent.click(screen.getByText('Đổi trạng thái'))
+  fireEvent.change(screen.getByLabelText('Trạng thái'), { target: { value: 'ACTIVE' } })
+  fireEvent.change(screen.getByLabelText('Lý do'), { target: { value: 'Synthetic clinic test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Lưu thay đổi' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/Phiên bản đã thay đổi/)
+  expect(screen.queryByText('Clinic lifecycle fixture')).toBeNull()
+  const call = request.mock.calls.find(([, , , method]) => method === 'PATCH')!
+  expect(call[0]).toBe('/api/v1/admin/clinics/' + clinicId + '/status')
+  expect(JSON.parse(call[4])).toEqual({ status: 'ACTIVE', expectedVersion: 4, reason: 'Synthetic clinic test' })
+})
+
+it('renders the canonical Profile audit DTO with only hashed resource identifiers', async () => {
+  request.mockResolvedValue(json({ items: [{ eventId: id(9), sourceService: 'profile-api',
+    action: 'CLINIC_STATUS_CHANGED', resourceType: 'CLINIC', resourceIdHash: 'a'.repeat(64),
+    correlationId: 'synthetic-correlation', occurredAt: time, outcome: 'ALLOW' }], nextCursor: null }))
+  open('/admin/audit')
+  expect(await screen.findByText('CLINIC_STATUS_CHANGED')).toBeTruthy()
+  expect(screen.getByText('a'.repeat(64))).toBeTruthy()
+  expect(screen.getByText('ALLOW')).toBeTruthy()
+  expect(screen.queryByText(clinicId)).toBeNull()
+})
+
+it('uses canonical account roles and clears current account data after revoked access', async () => {
+  request.mockImplementation(async (_path, _context, _signal, method) => {
+    if (method === 'PATCH') throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
+    return json({ items: [{ accountId, firebaseUid: 'synthetic-admin', displayName: 'Account fixture',
+      roles: ['PATIENT', 'DOCTOR'], status: 'ACTIVE', version: 3 }], nextCursor: null })
+  })
+  open('/admin/accounts')
+  expect(await screen.findByText('PATIENT, DOCTOR')).toBeTruthy()
+  fireEvent.click(screen.getByText('Chỉnh sửa'))
+  const editor = screen.getByRole('group', { name: 'Trạng thái tài khoản' })
+  fireEvent.change(within(editor).getByLabelText('Lý do'), { target: { value: 'Synthetic status test' } })
+  fireEvent.click(within(editor).getByRole('button', { name: 'Lưu thay đổi' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/không có quyền/)
+  expect(screen.queryByText('Account fixture')).toBeNull()
 })

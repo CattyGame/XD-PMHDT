@@ -92,7 +92,8 @@ function Clinics({ context }: { context: BackendContext }) {
         <td><details><summary>Đổi trạng thái</summary>
           <Editor title="Trạng thái phòng khám" busy={busy} onSubmit={data => {
             const status = clinicStatuses.find(status => status === value(data, 'status'))
-            if (status) void mutate(signal => changeClinicStatus(context, row.id, status, value(data, 'reason'), signal))
+            if (status) void mutate(signal => changeClinicStatus(context, row.id,
+              { status, expectedVersion: row.version, reason: value(data, 'reason') }, signal))
           }}>
             <label>Trạng thái <select defaultValue={row.status} name="status">
               {clinicStatuses.map(status => <option key={status}>{status}</option>)}
@@ -190,8 +191,8 @@ function Templates({ context }: { context: BackendContext }) {
 }
 
 function Audit({ context, range }: { context: BackendContext; range: DateRange }) {
-  return <PortalSection title="Nhật ký hệ thống" cursor={nextPage} read={(signal, cursor) => audit(context, range, cursor, signal)}>
-    {data => <PortalTable columns={['Thời điểm', 'Dịch vụ', 'Thao tác', 'Tài nguyên', 'Mã truy vết', 'Kết quả']}>
+  return <PortalSection title="Nhật ký quản lý cơ sở y tế" cursor={nextPage} read={(signal, cursor) => audit(context, range, cursor, signal)}>
+    {data => <PortalTable columns={['Thời điểm', 'Dịch vụ', 'Thao tác', 'Tài nguyên (mã băm)', 'Mã truy vết', 'Kết quả']}>
       {data.items.map(event => <tr key={event.id}><td>{formatDate(event.time)}</td><td>{event.service}</td>
         <td>{event.action}</td><td>{event.resourceType}<br /><small>{event.resourceHash}</small></td>
         <td>{event.correlation}</td><td>{event.outcome}</td></tr>)}
@@ -205,6 +206,7 @@ function Workspace({ context, section }: { context: BackendContext; section: Sec
   return <main className={styles.page}>
     <nav aria-label="Điều hướng"><Link to="/">Trang chủ</Link> / Quản trị hệ thống</nav>
     <h1>Quản trị hệ thống</h1>
+    <Link to="/admin">Quản lý tài khoản và cơ sở y tế</Link>
     <nav className={portal.nav} aria-label="Danh mục quản trị">
       {Object.entries(sections).map(([id, label]) => <NavLink key={id} to={'/admin/' + id}>{label}</NavLink>)}
     </nav>
