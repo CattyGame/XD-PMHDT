@@ -71,7 +71,7 @@ describe('SCRUM-354: Doctor Review API', () => {
   it('binds append-only feedback to the result, model and review versions of the open case', async () => {
     const resultId = fileId
     const feedbackCase = parseDoctorAnalysis({ ...item, result: { ...item.result, resultId, modelVersion: 'frangi-v2' } })
-    fetchMock.mockResolvedValueOnce(json({ id: patientId, status: 'CREATED', version: 1 }, 201))
+    fetchMock.mockResolvedValueOnce(json({ feedbackId: patientId, status: 'ACCEPTED', version: 2 }, 201))
     await submitDoctorFeedback(context, clinicId, feedbackCase, 'SEGMENTATION', '  Synthetic note  ')
     expect(fetchMock.mock.calls[0][0]).toBe(`/api/v1/analyses/${analysisId}/feedback?clinicContextId=${clinicId}`)
     expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
@@ -79,6 +79,16 @@ describe('SCRUM-354: Doctor Review API', () => {
     })
     fetchMock.mockResolvedValueOnce(json({ error: { code: 'ERR_CONCURRENT_REVIEW' } }, 409))
     await expect(submitDoctorFeedback(context, clinicId, feedbackCase, 'QUALITY', 'Synthetic note')).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('accepts the backend feedback receipt before the first review and rejects a mismatched review version', async () => {
+    const feedbackCase = parseDoctorAnalysis({ ...item, reviewVersion: 0,
+      result: { ...item.result, resultId: fileId, modelVersion: 'frangi-v2' } })
+    fetchMock.mockResolvedValueOnce(json({ feedbackId: patientId, status: 'ACCEPTED', version: 0 }, 201))
+    await expect(submitDoctorFeedback(context, clinicId, feedbackCase, 'QUALITY', 'Synthetic note')).resolves.toBeUndefined()
+    fetchMock.mockResolvedValueOnce(json({ feedbackId: patientId, status: 'ACCEPTED', version: 1 }, 201))
+    await expect(submitDoctorFeedback(context, clinicId, feedbackCase, 'QUALITY', 'Synthetic note'))
+      .rejects.toMatchObject({ code: 'ERR_INVALID_RESPONSE' })
   })
 
   it('File Access kèm clinicContextId và không dùng ảnh không có quyền', async () => {

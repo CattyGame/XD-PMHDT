@@ -230,10 +230,10 @@ export async function submitDoctorFeedback(
   const response = await request('/api/v1/analyses/' + analysisId + '/feedback' + clinicPath(clinicId),
     'POST', context, { resultId: result.resultId, modelVersion: result.modelVersion, reviewVersion,
       feedbackType, comment: comment.trim() }, signal)
-  if (response.status !== 201 || !record(response.data) || !text(response.data.id) ||
-    !isGuid(response.data.id) || !text(response.data.status) ||
+  if (response.status !== 201 || !record(response.data) || !text(response.data.feedbackId) ||
+    !isGuid(response.data.feedbackId) || response.data.status !== 'ACCEPTED' ||
     typeof response.data.version !== 'number' ||
-    !Number.isSafeInteger(response.data.version) || response.data.version < 1) invalid()
+    !Number.isSafeInteger(response.data.version) || response.data.version !== reviewVersion) invalid()
 }
 export function doctorErrorMessage(error: unknown): string {
   if (!(error instanceof DoctorApiError || error instanceof AnalysisResultError)) return 'Không thể kết nối API. Vui lòng thử lại.'

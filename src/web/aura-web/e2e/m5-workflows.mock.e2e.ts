@@ -47,7 +47,7 @@ async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT'], research = fal
       state.feedbackPosts++
       if (state.feedbackStatus !== 201) return route.fulfill({ status: state.feedbackStatus,
         json: { error: { code: state.feedbackStatus === 409 ? 'ERR_CONCURRENT_REVIEW' : 'ERR_FORBIDDEN' } } })
-      return route.fulfill({ status: 201, json: { id: id(25), status: 'CREATED', version: 1 } })
+      return route.fulfill({ status: 201, json: { feedbackId: id(25), status: 'ACCEPTED', version: state.reviewVersion } })
     }
     if (path.startsWith('/api/v1/doctor/') || path.includes('/files/')) {
       expect(url.searchParams.get('clinicContextId')).toBe(clinic)
