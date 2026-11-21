@@ -122,12 +122,32 @@ describe('Kết quả AVR chưa khả dụng', () => {
     expect(screen.queryByText('AI đã xử lý xong')).toBeNull()
   })
 
-  it('treats low quality as terminal without an AVR or a guessed risk', async () => {
-    mocks.get.mockResolvedValue({ ...completed, processingStatus: 'LOW_QUALITY', result: null })
+  it('treats low quality as terminal without an AVR or a guessed risk and surfaces API error reason', async () => {
+    mocks.get.mockResolvedValue({
+      ...completed, processingStatus: 'LOW_QUALITY', result: null,
+      error: { code: 'LOW_QUALITY_IMAGE', message: 'Ảnh bị lóa hoặc mờ không đạt ngưỡng kỹ thuật.', retryable: false },
+    })
     show(); await settle()
     expect(screen.getByText(/Ảnh không đạt chất lượng/)).toBeTruthy()
+    const stopRegion = screen.getByRole('region', { name: 'Lý do dừng phân tích' })
+    expect(stopRegion.textContent).toContain('LOW_QUALITY_IMAGE')
+    expect(stopRegion.textContent).toContain('Ảnh bị lóa hoặc mờ')
+    expect(stopRegion.textContent).not.toMatch(/AVR:\s*0/)
     expect(screen.queryByRole('region', { name: 'Đánh giá nguy cơ từ API' })).toBeNull()
     await act(async () => { await vi.advanceTimersByTimeAsync(360_000) })
     expect(mocks.get).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows terminal FAILED error code cleanly without guessing risk or AVR', async () => {
+    mocks.get.mockResolvedValue({
+      ...completed, processingStatus: 'FAILED', result: null,
+      error: { code: 'UNSUPPORTED_MODALITY', message: 'OCT chưa được hỗ trợ; chỉ chấp nhận FUNDUS.', retryable: false },
+    })
+    show(); await settle()
+    const stopRegion = screen.getByRole('region', { name: 'Lý do dừng phân tích' })
+    expect(stopRegion.textContent).toContain('UNSUPPORTED_MODALITY')
+    expect(stopRegion.textContent).toContain('chỉ chấp nhận FUNDUS')
+    expect(screen.queryByRole('region', { name: 'Đánh giá nguy cơ từ API' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Tỷ số động/tĩnh mạch (AVR)' })).toBeNull()
   })
 })

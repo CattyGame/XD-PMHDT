@@ -46,3 +46,23 @@ assert.ok(!serializedClusters.includes('ai-core') && !serializedClusters.include
 assert.ok(!serializedRoutes.includes('ai-core') && !serializedRoutes.includes('/reload'), 'API Gateway must not expose AI Core reload endpoints.');
 assert.ok(!JSON.stringify(compose.services['ai-core'] || {}).includes('reload'), 'Compose AI Core profile must stay internal without public reload.');
 console.log('PASS: API Gateway and Compose keep AI Core internal without public reload exposure.');
+
+const aiCore = compose.services['ai-core'] || {};
+const aiCoreCmd = Array.isArray(aiCore.command) ? aiCore.command.join(' ') : String(aiCore.command || '');
+assert.ok(Number(aiCore.cpus) > 0, 'ai-core must pin CPU limit in compose.yaml');
+assert.ok(String(aiCore.mem_limit || '').trim().length > 0, 'ai-core must pin mem_limit in compose.yaml');
+assert.ok(Number(aiCore.pids_limit) > 0, 'ai-core must pin pids_limit in compose.yaml');
+assert.ok(aiCoreCmd.includes('--workers 1'), 'ai-core must pin single worker (--workers 1) for bounded memory.');
+console.log(`PASS: AI Core compose limits pinned (cpus=${aiCore.cpus}, mem_limit=${aiCore.mem_limit}, pids_limit=${aiCore.pids_limit}, --workers 1).`);
+
+const v2EvalReport = JSON.parse(fs.readFileSync(path.join(root, 'docs/benchmarks/v2_evaluation_report_s7.json'), 'utf8'));
+assert.equal(v2EvalReport.clinicalValidation, false, 'V2 report must keep clinicalValidation=false.');
+assert.equal(v2EvalReport.scientificGateScrum373?.status, 'OPEN_NOT_PASSED', 'SCRUM-373 must stay OPEN_NOT_PASSED.');
+assert.equal(v2EvalReport.scientificGateScrum373?.autoCloseAllowed, false, 'SCRUM-373 autoCloseAllowed must be false.');
+
+const w7PerfProfile = JSON.parse(fs.readFileSync(path.join(root, 'docs/benchmarks/w7_latency_ram_profile_v1.0.json'), 'utf8'));
+assert.equal(w7PerfProfile.frangiApiProfile?.srsHardSla?.maxP95Ms, 20000, 'SRS hard SLA must stay 20000 ms.');
+assert.equal(w7PerfProfile.frangiApiProfile?.srsHardSla?.passed, true, 'SRS hard SLA must pass.');
+assert.equal(w7PerfProfile.goldenParityGate?.passed, true, 'Golden parity gate must pass.');
+assert.equal(w7PerfProfile.goldenParityGate?.mismatchedPixels, 0, 'Golden parity gate must have 0 mismatched pixels.');
+console.log('PASS: Sprint 7 V2 evaluation report and latency/RAM/parity profile invariants verified.');

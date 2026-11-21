@@ -1,0 +1,126 @@
+{
+  "profileVersion": "1.0.0-s7",
+  "taskId": "W7-M4-02",
+  "jiraKey": "SCRUM-406",
+  "generatedAtUtc": "2026-11-21T00:28:12.286150Z",
+  "gitCommitSha": "9167a28ef60946c56e21650b09da85c5b7c65bb4",
+  "environment": {
+    "os": "Windows",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD",
+    "logicalCpuCount": 8,
+    "python": "3.12.14",
+    "numpy": "2.5.4",
+    "threadEnv": {
+      "OMP_NUM_THREADS": null,
+      "OPENBLAS_NUM_THREADS": null,
+      "MKL_NUM_THREADS": null
+    }
+  },
+  "composeBudget": {
+    "sourceFile": "compose.yaml",
+    "service": "ai-core",
+    "cpus": 4.0,
+    "memLimitRaw": "2g",
+    "memLimitMib": 2048,
+    "pidsLimit": 128,
+    "singleWorkerPinned": true,
+    "command": "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+  },
+  "frangiApiProfile": {
+    "endpoint": "POST /api/v1/analyze",
+    "inputSource": "CHASE_DB1_TEST_6_REAL_IMAGES",
+    "imageResolution": "999x960",
+    "warmupRuns": 1,
+    "warmSampleSize": 6,
+    "coldMs": 1518.05,
+    "warmLatenciesMs": [
+      1454.59,
+      1700.94,
+      1427.48,
+      1442.23,
+      1509.59,
+      1463.01
+    ],
+    "warmMeanMs": 1499.64,
+    "warmP50Ms": 1458.8,
+    "warmP95Ms": 1653.1,
+    "warmMaxMs": 1700.94,
+    "srsHardSla": {
+      "maxP95Ms": 20000.0,
+      "passed": true
+    },
+    "stretchTarget": {
+      "targetP95Ms": 1500.0,
+      "isOptionalStretch": true,
+      "doesNotReplaceSrs20s": true,
+      "met": false
+    }
+  },
+  "memoryProfile": {
+    "rssBeforeMb": 146.16,
+    "rssAfterMb": 151.36,
+    "peakRssMb": 157.51,
+    "peakPythonHeapMb": 104.72,
+    "retainedPythonHeapMb": 7.97,
+    "containerMemLimitMib": 2048,
+    "withinContainerLimit": true
+  },
+  "concurrencyGate": {
+    "mechanism": "BoundedSemaphore(1) per single-worker container",
+    "httpStatus": 429,
+    "errorCode": "RESEARCH_MODEL_BUSY",
+    "retryAfter": "1",
+    "passed": true
+  },
+  "goldenParityGate": {
+    "gateName": "frangi_vectorized_vs_skimage_reference",
+    "passed": true,
+    "dice": 1.0,
+    "mismatchedPixels": 0,
+    "totalPixels": 959040,
+    "maxAbsVesselDensityDiff": 0.0,
+    "maxAbsNormalizedResponseDiff": 7.348e-07,
+    "thresholds": {
+      "minDice": 1.0,
+      "maxMismatchedPixels": 0,
+      "maxAbsVesselDensityDiff": 0.0
+    },
+    "quantizationAndOnnxPolicy": {
+      "frangiOnnxFp16Int8Applicable": false,
+      "frangiRationale": "Frangi v0.2 is a weightless analytical 2D Hessian filter already vectorized in float64 with Dice=1.000000.",
+      "neuralQuantizationPolicy": "Opt-in only; blocked unless golden parity holds (max_abs_prob_diff <= 1e-4, gradcam_cosine >= 0.99)."
+    }
+  },
+  "optionalDrCnnCpuProfile": {
+    "status": "EVALUATED",
+    "optimization": "Verified read-only LRU model cache keyed by (resolved_path, verified_sha256); SHA-256 verified on every call.",
+    "modelVersion": "resnet34-8c9114c54f1b0630",
+    "checkpointSha256": "8c9114c54f1b06300081bb82b80a0ea3a10e3d035232e1c5f3570b2db42df8f7",
+    "inputImage": "datasets/HRF/images/02_dr.JPG",
+    "inputResolution": "3504x2336",
+    "modelInputGeometry": "IMAGENET_CENTER_CROP_224",
+    "coldMs": 5306.88,
+    "warmSampleSize": 3,
+    "warmLatenciesMs": [
+      529.8,
+      500.61,
+      521.7
+    ],
+    "warmP50Ms": 521.7,
+    "warmP95Ms": 528.99,
+    "warmMaxMs": 529.8,
+    "rssBeforeMb": 324.17,
+    "rssAfterMb": 539.55,
+    "rssDeltaMb": 215.38,
+    "goldenParity": {
+      "maxAbsProbDiff": 0.0,
+      "minGradcamCosine": 1.0,
+      "passed": true
+    }
+  },
+  "reproduceCommands": {
+    "runProfile": "PYTHONPATH=src/ai-core python src/ai-core/scripts/benchmark_w7_latency_ram.py --output docs/benchmarks/w7_latency_ram_profile_v1.0.json",
+    "verifyProfile": "python src/ai-core/scripts/benchmark_w7_latency_ram.py --verify docs/benchmarks/w7_latency_ram_profile_v1.0.json"
+  }
+}
