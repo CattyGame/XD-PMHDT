@@ -1,0 +1,458 @@
+{
+  "reportVersion": "2.0.0-s7",
+  "taskId": "W7-M4-01",
+  "jiraKey": "SCRUM-405",
+  "generatedAtUtc": "2026-11-21T00:24:36.142218Z",
+  "gitCommitSha": "9167a28ef60946c56e21650b09da85c5b7c65bb4",
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "numpy": "2.5.4"
+  },
+  "scope": "RESEARCH_ONLY_NOT_CLINICAL_CERTIFICATION",
+  "clinicalValidation": false,
+  "icdrGradingSupported": false,
+  "functionalPipelineStatus": "VERIFIED_RESEARCH_ONLY",
+  "scientificGateScrum373": {
+    "jiraKey": "SCRUM-373",
+    "status": "OPEN_NOT_PASSED",
+    "autoCloseAllowed": false,
+    "iowaGatePassed": false,
+    "thresholdAbsBias": 0.02,
+    "requiredCohort": "Iowa40 (40-case verified two-observer table)",
+    "lastObservedBaselineBias": -0.2136,
+    "lastObservedBaselineMae": 0.2335,
+    "reason": "Scientific agreement gate |bias| <= 0.02 on the 40-case Iowa two-observer table remains unpassed and is kept strictly separate from Sprint 7 functional delivery."
+  },
+  "rgbOnlyAudit": {
+    "rgbOnlyInferenceVerified": true,
+    "checkedFunctions": {
+      "run_frangi_segmentation": [
+        "rgb",
+        "interior",
+        "config"
+      ],
+      "process_frangi_analysis": [
+        "request",
+        "config"
+      ],
+      "screen_dr_cnn": [
+        "rgb",
+        "checkpoint_path",
+        "expected_sha256"
+      ],
+      "calculate_automatic_avr": [
+        "rgb",
+        "model",
+        "generate_visualization",
+        "include_masks"
+      ]
+    },
+    "violations": []
+  },
+  "pinnedConfigSha256": {
+    "src/ai-core/config/ai-frangi.yaml": "0b0451cad981b69471920b374c19042f169b991a26c49e2c3e29395db7c6a0ee",
+    "src/ai-core/config/ai-frangi-v1.3.yaml": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+    "src/ai-core/config/ai-frangi-hrf.yaml": "8af374dc5dc1e70df09e333730e46a27c40e51a9f76e554498d3fa8e27119aca"
+  },
+  "pinnedManifestSha256": {
+    "docs/datasets/chase_db1/manifest.csv": "b22bb7f635aad4c1ef670abd15a68e038d9c5d9a1383a01976f8ae7664a6455a",
+    "docs/datasets/hrf/manifest.csv": "a6d0d719066d01e113ca2e1ade0e89324e99ce36ef5772afd1742a55973a11ce",
+    "docs/datasets/inspire_avr/manifest.csv": "2ae7cba1d278178fc337dd622a7fba12609e2afbba0d9af1eefc980c89ac9211"
+  },
+  "cohorts": {
+    "CHASE_DB1": {
+      "cohortId": "CHASE_DB1",
+      "split": "test",
+      "task": "retinal_vessel_segmentation_frangi",
+      "manifestPath": "docs/datasets/chase_db1/manifest.csv",
+      "manifestSha256": "b22bb7f635aad4c1ef670abd15a68e038d9c5d9a1383a01976f8ae7664a6455a",
+      "configPath": "src/ai-core/config/ai-frangi.yaml",
+      "configSha256": "0b0451cad981b69471920b374c19042f169b991a26c49e2c3e29395db7c6a0ee",
+      "denominator": 6,
+      "measured": 6,
+      "unavailable": 0,
+      "coverage": 1.0,
+      "reproduceCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/evaluate_v2_protocol.py --output docs/benchmarks/v2_evaluation_report_s7.json",
+      "status": "EVALUATED",
+      "metrics": {
+        "meanDice": 0.420052,
+        "meanIou": 0.26624,
+        "meanSensitivity": 0.419782,
+        "meanSpecificity": 0.9565
+      },
+      "perImage": [
+        {
+          "subjectId": "01",
+          "eyeSide": "L",
+          "image": "datasets/CHASE_DB1/raw/Image_01L.jpg",
+          "width": 999,
+          "height": 960,
+          "metrics": {
+            "dice": 0.424641,
+            "iou": 0.269552,
+            "sensitivity": 0.385602,
+            "specificity": 0.967723,
+            "tp": 25791,
+            "fp": 28796,
+            "fn": 41094,
+            "tn": 863359
+          }
+        },
+        {
+          "subjectId": "01",
+          "eyeSide": "R",
+          "image": "datasets/CHASE_DB1/raw/Image_01R.jpg",
+          "width": 999,
+          "height": 960,
+          "metrics": {
+            "dice": 0.398377,
+            "iou": 0.248733,
+            "sensitivity": 0.334235,
+            "specificity": 0.971747,
+            "tp": 24345,
+            "fp": 25038,
+            "fn": 48493,
+            "tn": 861164
+          }
+        },
+        {
+          "subjectId": "02",
+          "eyeSide": "L",
+          "image": "datasets/CHASE_DB1/raw/Image_02L.jpg",
+          "width": 999,
+          "height": 960,
+          "metrics": {
+            "dice": 0.40457,
+            "iou": 0.25358,
+            "sensitivity": 0.412041,
+            "specificity": 0.944816,
+            "tp": 32065,
+            "fp": 48629,
+            "fn": 45755,
+            "tn": 832591
+          }
+        },
+        {
+          "subjectId": "02",
+          "eyeSide": "R",
+          "image": "datasets/CHASE_DB1/raw/Image_02R.jpg",
+          "width": 999,
+          "height": 960,
+          "metrics": {
+            "dice": 0.383643,
+            "iou": 0.23735,
+            "sensitivity": 0.466003,
+            "specificity": 0.918401,
+            "tp": 34899,
+            "fp": 72146,
+            "fn": 39991,
+            "tn": 812004
+          }
+        },
+        {
+          "subjectId": "11",
+          "eyeSide": "L",
+          "image": "datasets/CHASE_DB1/raw/Image_11L.jpg",
+          "width": 999,
+          "height": 960,
+          "metrics": {
+            "dice": 0.45417,
+            "iou": 0.293803,
+            "sensitivity": 0.490992,
+            "specificity": 0.962211,
+            "tp": 25099,
+            "fp": 34309,
+            "fn": 26020,
+            "tn": 873612
+          }
+        },
+        {
+          "subjectId": "11",
+          "eyeSide": "R",
+          "image": "datasets/CHASE_DB1/raw/Image_11R.jpg",
+          "width": 999,
+          "height": 960,
+          "metrics": {
+            "dice": 0.454909,
+            "iou": 0.294422,
+            "sensitivity": 0.42982,
+            "specificity": 0.9741,
+            "tp": 21978,
+            "fp": 23515,
+            "fn": 29155,
+            "tn": 884392
+          }
+        }
+      ]
+    },
+    "HRF45": {
+      "cohortId": "HRF45",
+      "task": "hrf_dr_vs_healthy_binary_screening_and_gradcam",
+      "notIcdrGrading": true,
+      "clinicalValidation": false,
+      "glaucomaOodExcludedFromTestAuc": true,
+      "gradcamMethod": "GRAD_CAM",
+      "gradcamGeometry": "IMAGENET_CENTER_CROP_224",
+      "gradcamTransformContract": "Resize(shorter_edge=256) -> CenterCrop(224x224) -> Normalize(ImageNet)",
+      "manifestPath": "docs/datasets/hrf/manifest.csv",
+      "manifestSha256": "a6d0d719066d01e113ca2e1ade0e89324e99ce36ef5772afd1742a55973a11ce",
+      "checkpointPath": "model-artifacts/dr-resnet34-hrf-v1/model.pt",
+      "checkpointSha256": "8c9114c54f1b06300081bb82b80a0ea3a10e3d035232e1c5f3570b2db42df8f7",
+      "denominator": 6,
+      "measured": 6,
+      "unavailable": 0,
+      "coverage": 1.0,
+      "reproduceCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/evaluate_v2_protocol.py --output docs/benchmarks/v2_evaluation_report_s7.json",
+      "status": "EVALUATED",
+      "splits": {
+        "validation_dr_vs_h": {
+          "count": 6,
+          "meanProbabilityDr": 0.455005,
+          "minProbabilityDr": 0.369387,
+          "maxProbabilityDr": 0.563707,
+          "gradcamContractVerified": true,
+          "cases": [
+            {
+              "patientId": "hrf_dr_03",
+              "category": "dr",
+              "label": 1,
+              "probabilityDr": 0.563707
+            },
+            {
+              "patientId": "hrf_dr_05",
+              "category": "dr",
+              "label": 1,
+              "probabilityDr": 0.416516
+            },
+            {
+              "patientId": "hrf_dr_13",
+              "category": "dr",
+              "label": 1,
+              "probabilityDr": 0.500824
+            },
+            {
+              "patientId": "hrf_h_03",
+              "category": "h",
+              "label": 0,
+              "probabilityDr": 0.369387
+            },
+            {
+              "patientId": "hrf_h_05",
+              "category": "h",
+              "label": 0,
+              "probabilityDr": 0.394697
+            },
+            {
+              "patientId": "hrf_h_13",
+              "category": "h",
+              "label": 0,
+              "probabilityDr": 0.4849
+            }
+          ],
+          "rocAuc": 0.888889,
+          "accuracyAt05": 0.833333
+        },
+        "test_dr_vs_h": {
+          "count": 6,
+          "meanProbabilityDr": 0.469521,
+          "minProbabilityDr": 0.37313,
+          "maxProbabilityDr": 0.537047,
+          "gradcamContractVerified": true,
+          "cases": [
+            {
+              "patientId": "hrf_dr_02",
+              "category": "dr",
+              "label": 1,
+              "probabilityDr": 0.526169
+            },
+            {
+              "patientId": "hrf_dr_09",
+              "category": "dr",
+              "label": 1,
+              "probabilityDr": 0.537047
+            },
+            {
+              "patientId": "hrf_dr_14",
+              "category": "dr",
+              "label": 1,
+              "probabilityDr": 0.514033
+            },
+            {
+              "patientId": "hrf_h_02",
+              "category": "h",
+              "label": 0,
+              "probabilityDr": 0.452008
+            },
+            {
+              "patientId": "hrf_h_09",
+              "category": "h",
+              "label": 0,
+              "probabilityDr": 0.41474
+            },
+            {
+              "patientId": "hrf_h_14",
+              "category": "h",
+              "label": 0,
+              "probabilityDr": 0.37313
+            }
+          ],
+          "rocAuc": 1.0,
+          "accuracyAt05": 1.0
+        },
+        "glaucoma_ood_separate": {
+          "count": 15,
+          "meanProbabilityDr": 0.422578,
+          "minProbabilityDr": 0.317232,
+          "maxProbabilityDr": 0.527451,
+          "gradcamContractVerified": true,
+          "cases": [
+            {
+              "patientId": "hrf_g_01",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.403497
+            },
+            {
+              "patientId": "hrf_g_02",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.317772
+            },
+            {
+              "patientId": "hrf_g_03",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.366966
+            },
+            {
+              "patientId": "hrf_g_04",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.317232
+            },
+            {
+              "patientId": "hrf_g_05",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.461735
+            },
+            {
+              "patientId": "hrf_g_06",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.361162
+            },
+            {
+              "patientId": "hrf_g_07",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.421749
+            },
+            {
+              "patientId": "hrf_g_08",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.45286
+            },
+            {
+              "patientId": "hrf_g_09",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.374255
+            },
+            {
+              "patientId": "hrf_g_10",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.476659
+            },
+            {
+              "patientId": "hrf_g_11",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.478012
+            },
+            {
+              "patientId": "hrf_g_12",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.459204
+            },
+            {
+              "patientId": "hrf_g_13",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.518572
+            },
+            {
+              "patientId": "hrf_g_14",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.527451
+            },
+            {
+              "patientId": "hrf_g_15",
+              "category": "g",
+              "label": 0,
+              "probabilityDr": 0.401541
+            }
+          ],
+          "rocAuc": null,
+          "note": "Glaucoma OOD cohort reported separately; excluded from DR vs Healthy AUC."
+        }
+      }
+    },
+    "AVRDB100": {
+      "cohortId": "AVRDB100",
+      "task": "zone_b_avr_measurement_and_abstention_coverage",
+      "status": "REFERENCED_BENCHMARK_NO_LOCAL_AVR_WEIGHTS",
+      "manifestPath": "docs/datasets/inspire_avr/manifest.csv",
+      "manifestSha256": "2ae7cba1d278178fc337dd622a7fba12609e2afbba0d9af1eefc980c89ac9211",
+      "denominator": 99,
+      "measured": 0,
+      "unavailable": 99,
+      "coverage": 0.0,
+      "unavailableIncludedInDenominator": true,
+      "abstentionPolicy": {
+        "returnsNullWithReason": true,
+        "neverSubstitutesZeroOrLowRisk": true
+      },
+      "note": "Automatic RRWNet/ONNX weights are not bundled in Git; coverage preserves unavailable cases in denominator and historical INSPIRE_AVR reference metrics are cited without fabricating a new runtime score.",
+      "referenceBenchmarkPath": "docs/benchmarks/inspire_avr_benchmark_v1.0.json",
+      "referenceBenchmarkSha256": "e8cbdf68e9579892172d0f9da5441e8c25a68097792a42b9b4dccc0192da9120",
+      "referenceEvaluationCohortSize": 29,
+      "referenceMetrics": {
+        "meanAvr": 0.5415,
+        "stdAvr": 0.126,
+        "meanCraePx": 5.71,
+        "meanCrvePx": 10.89,
+        "meanGtAvr": 0.7551,
+        "meanAvrMae": 0.2335,
+        "meanAvrBias": -0.2136,
+        "meanVesselDice": 0.3494,
+        "p50LatencyMs": 1268.78,
+        "p95LatencyMs": 1639.29
+      }
+    },
+    "Iowa40": {
+      "cohortId": "Iowa40",
+      "task": "independent_two_observer_avr_agreement_benchmark",
+      "status": "NOT_TESTED_MISSING_EXTERNAL_DATASET",
+      "manifestPath": null,
+      "manifestSha256": null,
+      "denominator": 40,
+      "measured": 0,
+      "unavailable": 40,
+      "coverage": 0.0,
+      "calibrationAllowed": false,
+      "redistributedInGit": false,
+      "reason": "External 40-case University of Iowa two-observer table is not bundled in workspace/CI; reported honestly as NOT_TESTED."
+    }
+  },
+  "reproduceCommands": {
+    "generateReport": "PYTHONPATH=src/ai-core python src/ai-core/scripts/evaluate_v2_protocol.py --output docs/benchmarks/v2_evaluation_report_s7.json",
+    "verifyReport": "python src/ai-core/scripts/evaluate_v2_protocol.py --verify docs/benchmarks/v2_evaluation_report_s7.json",
+    "verifyModelCardRegistry": "python src/ai-core/scripts/verify_model_card_v2_registry.py"
+  }
+}

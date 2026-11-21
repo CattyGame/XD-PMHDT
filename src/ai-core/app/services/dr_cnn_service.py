@@ -2,12 +2,30 @@
 from __future__ import annotations
 
 import hashlib
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
 from .dr_screening_service import render_saliency_overlay_b64
+
+
+@lru_cache(maxsize=2)
+def _load_verified_dr_model(resolved_path: str, verified_digest: str):
+    """Cache verified immutable ResNet34 weights by (path, verified_sha256) to avoid per-request reload churn."""
+    _ = verified_digest
+    import torch
+    from torchvision.models import resnet34
+
+    checkpoint = torch.load(Path(resolved_path), map_location="cpu", weights_only=True)
+    if checkpoint["metadata"]["architecture"] != "resnet34" or checkpoint["metadata"]["task"] != "hrf_dr_vs_healthy":
+        raise ValueError("Unsupported CNN checkpoint task or architecture.")
+    model = resnet34(weights=None)
+    model.fc = torch.nn.Linear(model.fc.in_features, 1)
+    model.load_state_dict(checkpoint["state_dict"], strict=True)
+    model.eval()
+    return model, checkpoint["metadata"]
 
 
 def gradient_cam(model, tensor):
@@ -27,8 +45,7 @@ def gradient_cam(model, tensor):
 
 
 def screen_dr_cnn(rgb: np.ndarray, checkpoint_path: str, expected_sha256: str):
-    import torch
-    from torchvision.models import ResNet34_Weights, resnet34
+    from torchvision.models import ResNet34_Weights
 
     if rgb.ndim != 3 or rgb.shape[2] != 3 or rgb.dtype != np.uint8:
         raise ValueError("Expected uint8 RGB image.")
@@ -36,13 +53,7 @@ def screen_dr_cnn(rgb: np.ndarray, checkpoint_path: str, expected_sha256: str):
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     if digest != expected_sha256:
         raise ValueError("CNN checkpoint SHA-256 does not match the configured artifact.")
-    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
-    if checkpoint["metadata"]["architecture"] != "resnet34" or checkpoint["metadata"]["task"] != "hrf_dr_vs_healthy":
-        raise ValueError("Unsupported CNN checkpoint task or architecture.")
-    model = resnet34(weights=None)
-    model.fc = torch.nn.Linear(model.fc.in_features, 1)
-    model.load_state_dict(checkpoint["state_dict"], strict=True)
-    model.eval()
+    model, metadata = _load_verified_dr_model(str(path.resolve()), digest)
     tensor = ResNet34_Weights.IMAGENET1K_V1.transforms()(Image.fromarray(rgb)).unsqueeze(0)
     probability, heatmap = gradient_cam(model, tensor)
     if not np.isfinite(probability) or not np.isfinite(heatmap).all():
@@ -56,7 +67,7 @@ def screen_dr_cnn(rgb: np.ndarray, checkpoint_path: str, expected_sha256: str):
         "status": "RESEARCH_ONLY", "risk_available": False,
         "task": "hrf_dr_vs_healthy", "probability_dr": probability,
         "model_version": f"resnet34-{digest[:16]}", "checkpoint_sha256": digest,
-        "model_metadata": checkpoint["metadata"],
+        "model_metadata": metadata,
         "explainability": {"method": "GRAD_CAM", "target": "DR_LOGIT",
                            "geometry": "IMAGENET_CENTER_CROP_224", "heatmap": heatmap.tolist(),
                            "overlay_base64_png": render_saliency_overlay_b64(crop, heatmap)},
