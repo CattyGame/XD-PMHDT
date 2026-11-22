@@ -1,4 +1,3 @@
-using System.Text.Json;
 using AURA.Billing.Api.Data;
 using AURA.Billing.Api.Models;
 using StackExchange.Redis;
@@ -11,7 +10,6 @@ public sealed class PackageCatalogService
     private readonly IDatabase _cache;
     private readonly ILogger<PackageCatalogService> _logger;
     private readonly string _cacheKey;
-    private readonly int _ttlSeconds;
 
     public PackageCatalogService(
         PackageRepository repository,
@@ -26,94 +24,18 @@ public sealed class PackageCatalogService
         _cacheKey = configuration["Cache:PackageCatalogKey"]
             ?? throw new InvalidOperationException(
                 "Missing Cache:PackageCatalogKey.");
-
-        _ttlSeconds =
-            configuration.GetValue<int>("Cache:PackageCatalogTtlSeconds");
-
-        if (_ttlSeconds <= 0)
-        {
-            throw new InvalidOperationException(
-                "Cache TTL must be greater than zero.");
-        }
-    }
-
-    public async Task<PackageCatalogResponse> GetAllAsync(
-        CancellationToken cancellationToken)
-    {
-        var redisFailed = false;
-
-        try
-        {
-            var cached = await _cache.StringGetAsync(_cacheKey);
-
-            if (cached.HasValue)
-            {
-                var packages =
-                    JsonSerializer.Deserialize<List<PackageDto>>(
-                        cached.ToString());
-
-                if (packages is not null)
-                {
-                    _logger.LogInformation(
-                        "Package catalog cache HIT.");
-
-                    return new PackageCatalogResponse(
-                        packages,
-                        "redis",
-                        true,
-                        _ttlSeconds,
-                        _repository.ReadCount);
-                }
-            }
-
-            _logger.LogInformation("Package catalog cache MISS.");
-        }
-        catch (RedisException)
-        {
-            redisFailed = true;
-
-            _logger.LogWarning(
-                "Redis read failed. Falling back to PostgreSQL.");
-        }
-        catch (JsonException)
-        {
-            _logger.LogWarning(
-                "Invalid cached JSON. Reloading from PostgreSQL.");
-        }
-
-        var data = await _repository.GetAllAsync(cancellationToken);
-
-        try
-        {
-            await _cache.StringSetAsync(
-                _cacheKey,
-                JsonSerializer.Serialize(data),
-                TimeSpan.FromSeconds(_ttlSeconds));
-        }
-        catch (RedisException)
-        {
-            redisFailed = true;
-
-            _logger.LogWarning(
-                "Redis write failed. Returning PostgreSQL data.");
-        }
-
-        return new PackageCatalogResponse(
-            data,
-            redisFailed ? "postgres-fallback" : "postgres",
-            false,
-            _ttlSeconds,
-            _repository.ReadCount);
     }
 
     public async Task<UpdatePackageResponse?> UpdateAsync(
         int id,
         UpdatePackageRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid actorAccountId,
+        string? correlationId)
     {
         // The database update completes before cache invalidation.
         var updated =
-            await _repository.UpdateAsync(id, request, cancellationToken);
+            await _repository.UpdateAsync(id, request, cancellationToken, actorAccountId, correlationId);
 
         if (updated is null)
         {

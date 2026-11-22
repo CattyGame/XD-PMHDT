@@ -14,7 +14,12 @@ public sealed class StorageOptions
 }
 
 public enum StoredFileKind { Original, Annotation }
-public sealed record PrivateContent(Stream Stream,string ContentType);
+public sealed record PrivateContent(Stream Stream,string ContentType)
+{
+    public Guid? TenantId { get; init; }
+    // Immutable file/report IDs bind a single snapshot; source result/review revisions stay in that snapshot.
+    public long? ResourceVersion { get; init; }
+}
 
 /// <param name="PatientId">Bệnh nhân của batch chứa ảnh; dùng để hỏi quyền với Profile.</param>
 public sealed record StoredFileRecord(Guid AnalysisId, Guid FileId, Guid TenantId, Guid PatientId, Guid OwnerId,
@@ -81,7 +86,7 @@ public sealed class FileAccessService
         if(record.MimeType is not ("image/png" or "image/jpeg"))throw UploadFailure.Dependency("File metadata");
         var stream=await Guard("private storage",()=>_storage.OpenReadAsync(record.Kind==StoredFileKind.Original
             ?_storageOptions.OriginalContainer:_storageOptions.AnnotationContainer,record.ObjectKey,ct));
-        return new(stream,record.MimeType);
+        return new(stream,record.MimeType){TenantId=record.TenantId,ResourceVersion=1};
     }
 
     private static async Task<T> Guard<T>(string what, Func<Task<T>> action)

@@ -5,6 +5,13 @@
   "tokenLifetimeSeconds": 300,
   "clients": [
     {
+      "clientId": "nifi-camera",
+      "principalId": "6991e61d-15d2-5107-86c0-dd3966af169c",
+      "allowedTargets": {
+        "aura-profile": ["profile:camera"]
+      }
+    },
+    {
       "clientId": "analysis-api",
       "principalId": "a1000000-0000-4000-8000-000000000001",
       "allowedTargets": {
@@ -12,7 +19,8 @@
           "identity:context"
         ],
         "aura-profile": [
-          "profile:resolve"
+          "profile:resolve",
+          "profile:audit"
         ],
         "aura-billing": [
           "billing:reserve",
@@ -27,7 +35,8 @@
       "principalId": "a1000000-0000-4000-8000-000000000002",
       "allowedTargets": {
         "aura-profile": [
-          "profile:provision"
+          "profile:provision",
+          "profile:audit"
         ]
       }
     },
@@ -36,7 +45,8 @@
       "principalId": "a1000000-0000-4000-8000-000000000003",
       "allowedTargets": {
         "aura-profile": [
-          "profile:resolve"
+          "profile:resolve",
+          "profile:audit"
         ],
         "aura-identity": [
           "identity:context"
@@ -78,7 +88,8 @@
           "identity:directory"
         ],
         "aura-profile": [
-          "profile:resolve"
+          "profile:resolve",
+          "profile:audit"
         ],
         "aura-analysis": [
           "analysis:notify"

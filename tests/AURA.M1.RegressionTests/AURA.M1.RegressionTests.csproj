@@ -1,11 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../src/gateway/AURA.ApiGateway/AURA.ApiGateway.csproj" />
+    <ProjectReference Include="../../src/services/AURA.Identity.Api/AURA.Identity.Api.csproj" />
+    <ProjectReference Include="../../src/services/AURA.Profile.Api/AURA.Profile.Api.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.12" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.30.1" />
     <ProjectReference Include="../../src/services/AURA.Notification.Api/AURA.Notification.Api.csproj" />
     <ProjectReference Include="../../src/services/AURA.Billing.Api/AURA.Billing.Api.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\common\AURA.Common.Audit\AURA.Common.Audit.csproj" />
   </ItemGroup>
 </Project>

@@ -6,6 +6,7 @@ using FirebaseAdmin;
 using FirebaseAdmin.Auth;
 using Google.Apis.Auth.OAuth2;
 using Npgsql;
+using AURA.Common.Audit;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -36,6 +37,7 @@ builder.Services.AddHttpClient("ProfileClient", (sp, client) =>
     client.Timeout = TimeSpan.FromSeconds(5);
 });
 
+builder.Services.AddOwnerAudit(builder.Configuration, AuditSource.Identity);
 var app = builder.Build();
 
 // Validate provisioned service-auth material before health or business routes start.

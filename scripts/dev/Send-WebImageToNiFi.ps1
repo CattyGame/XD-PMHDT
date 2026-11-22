@@ -73,11 +73,18 @@ Write-Host " - SHA-256 Hash:   $fileHash" -ForegroundColor Green
 Write-Host ""
 
 # 2. Xac thuc voi NiFi API
-$nifiUser = "aura-s3-admin"
-$nifiPass = "C0JbotAsPE-jQySsqgHY-xK1hefZXa5SM1bq0auqAeKpEwz-"
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-[Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
-$token = Invoke-RestMethod -Uri "https://127.0.0.1:8543/nifi-api/access/token" -Method Post -Body "username=$nifiUser&password=$nifiPass" -ContentType "application/x-www-form-urlencoded"
+$nifiOrigin = [uri]$(if ($env:AURA_LEGACY_NIFI_ORIGIN) { $env:AURA_LEGACY_NIFI_ORIGIN } else { 'https://localhost:8543' })
+if ($nifiOrigin.Scheme -ne 'https' -or $nifiOrigin.UserInfo -or $nifiOrigin.PathAndQuery -ne '/' -or $nifiOrigin.Fragment) {
+    throw 'Set AURA_LEGACY_NIFI_ORIGIN to a trusted HTTPS origin.'
+}
+$nifiUser = $env:NIFI_ADMIN_USER
+$nifiPass = $env:NIFI_ADMIN_PASSWORD
+if (-not $nifiUser -or -not $nifiPass) { throw 'Set NIFI_ADMIN_USER and NIFI_ADMIN_PASSWORD.' }
+$nifiOrigin = $nifiOrigin.GetLeftPart([UriPartial]::Authority)
+$token = Invoke-RestMethod -MaximumRedirection 0 -Uri "$nifiOrigin/nifi-api/access/token" -Method Post -Body @{
+    username = $nifiUser
+    password = $nifiPass
+} -ContentType "application/x-www-form-urlencoded"
 $headers = @{ Authorization = "Bearer $token" }
 
 # IDs
@@ -110,7 +117,7 @@ $jsonPayload = @{
 
 # 4. Cap nhat Seed-New-Receipt-41
 Write-Host "[1/5] Cap nhat cau hinh FlowFile trong NiFi..." -ForegroundColor White
-$seedProc = Invoke-RestMethod -Uri "https://127.0.0.1:8543/nifi-api/processors/$seedProcId" -Headers $headers
+$seedProc = Invoke-RestMethod -MaximumRedirection 0 -Uri "$nifiOrigin/nifi-api/processors/$seedProcId" -Headers $headers
 $updatePayload = @{
     revision = $seedProc.revision
     component = @{
@@ -135,43 +142,43 @@ $updatePayload = @{
     }
 } | ConvertTo-Json -Depth 5
 
-$updated = Invoke-RestMethod -Uri "https://127.0.0.1:8543/nifi-api/processors/$seedProcId" -Method Put -Headers $headers -Body $updatePayload -ContentType "application/json"
+$updated = Invoke-RestMethod -MaximumRedirection 0 -Uri "$nifiOrigin/nifi-api/processors/$seedProcId" -Method Put -Headers $headers -Body $updatePayload -ContentType "application/json"
 
 # Helper ham doi trang thai
 function Set-ComponentState($url, $desiredState) {
-    $comp = Invoke-RestMethod -Uri $url -Headers $headers
+    $comp = Invoke-RestMethod -MaximumRedirection 0 -Uri $url -Headers $headers
     $body = @{ revision = $comp.revision; state = $desiredState } | ConvertTo-Json
-    Invoke-RestMethod -Uri "$url/run-status" -Method Put -Headers $headers -Body $body -ContentType "application/json" | Out-Null
+    Invoke-RestMethod -MaximumRedirection 0 -Uri "$url/run-status" -Method Put -Headers $headers -Body $body -ContentType "application/json" | Out-Null
 }
 
 # 5. Bat cac thanh phan tiep nhan va xu ly
 Write-Host "[2/5] Khoi dong cac cong ket noi va Processor Record-Camera-Receipt..." -ForegroundColor White
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/output-ports/$outPortId" "STOPPED"
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/output-ports/$outPortId" "RUNNING"
+Set-ComponentState "$nifiOrigin/nifi-api/output-ports/$outPortId" "STOPPED"
+Set-ComponentState "$nifiOrigin/nifi-api/output-ports/$outPortId" "RUNNING"
 
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/input-ports/$inPortId" "STOPPED"
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/input-ports/$inPortId" "RUNNING"
+Set-ComponentState "$nifiOrigin/nifi-api/input-ports/$inPortId" "STOPPED"
+Set-ComponentState "$nifiOrigin/nifi-api/input-ports/$inPortId" "RUNNING"
 
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$recordProcId" "STOPPED"
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$recordProcId" "RUNNING"
+Set-ComponentState "$nifiOrigin/nifi-api/processors/$recordProcId" "STOPPED"
+Set-ComponentState "$nifiOrigin/nifi-api/processors/$recordProcId" "RUNNING"
 
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$routeProcId" "STOPPED"
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$routeProcId" "RUNNING"
+Set-ComponentState "$nifiOrigin/nifi-api/processors/$routeProcId" "STOPPED"
+Set-ComponentState "$nifiOrigin/nifi-api/processors/$routeProcId" "RUNNING"
 
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$retryProcId" "STOPPED"
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$retryProcId" "RUNNING"
+Set-ComponentState "$nifiOrigin/nifi-api/processors/$retryProcId" "STOPPED"
+Set-ComponentState "$nifiOrigin/nifi-api/processors/$retryProcId" "RUNNING"
 
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$seedProcId" "STOPPED"
+Set-ComponentState "$nifiOrigin/nifi-api/processors/$seedProcId" "STOPPED"
 
 # 6. Phat FlowFile
 Write-Host "[3/5] Phat FlowFile vao pipeline NiFi..." -ForegroundColor White
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$seedProcId" "RUN_ONCE"
+Set-ComponentState "$nifiOrigin/nifi-api/processors/$seedProcId" "RUN_ONCE"
 
 Start-Sleep -Seconds 3
 
 # 7. Dung lai de giu trang thai on dinh
 Write-Host "[4/5] Hoan tat xu ly tren NiFi Canvas..." -ForegroundColor White
-Set-ComponentState "https://127.0.0.1:8543/nifi-api/processors/$seedProcId" "STOPPED"
+Set-ComponentState "$nifiOrigin/nifi-api/processors/$seedProcId" "STOPPED"
 
 Start-Sleep -Seconds 2
 

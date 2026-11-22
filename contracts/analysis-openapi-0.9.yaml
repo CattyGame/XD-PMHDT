@@ -21,6 +21,62 @@ tags:
 security:
 - bearerAuth: []
 paths:
+  /api/v1/analyses/camera:
+    post:
+      operationId: admitCameraImage
+      description: >
+        Receive one native fundus image. Profile verifies the camera bearer (aura-profile,
+        profile:camera), grant, clinic and current actor. A same-event replay returns the original
+        receipt only after current authorization is checked. Version 1 binds metadata and image SHA-256.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Tenant-Id, in: header, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Device-Id, in: header, required: true, schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,128}$'}}
+        - {name: X-Camera-SHA256, in: header, required: true, schema: {type: string, pattern: '^[a-f0-9]{64}$'}}
+        - {name: X-Camera-Version, in: header, required: true, schema: {type: string, enum: ['1']}}
+        - {name: clinicContextId, in: query, required: false, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [patientId, images]
+              properties:
+                patientId: {type: string, format: uuid}
+                modality: {type: string, enum: [FUNDUS]}
+                eyeSide: {type: string, enum: [left, right, unknown]}
+                images: {type: string, format: binary}
+      responses:
+        '202':
+          description: Stable persisted receipt, also returned for a matching replay.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId, deviceId, imageSha256, version, batchId, imageCount, sourceAcceptedAt, correlationId, analysisId, processingStatus]
+                properties:
+                  requestId: {type: string, format: uuid}
+                  deviceId: {type: string}
+                  imageSha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+                  version: {type: integer, enum: [1]}
+                  batchId: {type: string, format: uuid}
+                  imageCount: {type: integer, enum: [1]}
+                  sourceAcceptedAt: {type: string, format: date-time}
+                  correlationId: {type: string, format: uuid}
+                  analysisId: {type: string, format: uuid}
+                  processingStatus: {type: string, enum: [QUEUED, DUPLICATE]}
+        '400': {description: 'Invalid camera metadata or checksum, or plaintext camera request in the TLS demo profile.'}
+        '401': {description: Missing or invalid camera bearer.}
+        '402': {description: Insufficient credit.}
+        '403': {description: Camera delegation denied.}
+        '404': {description: Scope changed before admission.}
+        '409': {description: Event conflicts with committed metadata or admission is still in progress.}
+        '413': {description: Image or multipart request exceeds admission limit.}
+        '415': {description: Unsupported image or request media type.}
+        '503': {description: Dependency unavailable. The exact event can be retried.}
   /api/v1/clinics/{clinicId}/alerts:
     get:
       operationId: listClinicAlerts
