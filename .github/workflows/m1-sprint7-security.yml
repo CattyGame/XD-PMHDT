@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: m1-sprint7-security-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   research-image-security:
     runs-on: ubuntu-latest
