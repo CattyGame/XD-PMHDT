@@ -53,6 +53,23 @@ def classify_real_result(detail):
             'unavailableReason':research.get('unavailable_reason')}
 
 
+def retry_busy_upload(operation,deadline):
+    while True:
+        try:return operation()
+        except urllib.error.HTTPError as error:
+            if error.code not in (409,429):raise
+            try:body=json.loads(error.read(8193))
+            except (ValueError,OSError):raise error
+            if not isinstance(body,dict):raise error
+            problem=body.get('error',{})
+            if not isinstance(problem,dict):raise error
+            if problem.get('retryable') is not True or error.code==409 and problem.get('code')!='ERR_REQUEST_IN_PROGRESS':raise error
+            try:delay=float(error.headers.get('Retry-After','1'))
+            except ValueError:raise error
+            if not math.isfinite(delay) or not 0<delay<=60 or time.monotonic()+delay>=deadline:raise error
+            time.sleep(delay)
+
+
 def request(base, token, path, method="GET", body=None, content_type="application/json", key=None):
     headers = {"Authorization": "Bearer " + token, "Content-Type": content_type}
     if key:
@@ -203,7 +220,8 @@ def main():
             mime = "image/png" if file.suffix.lower() == ".png" else "image/jpeg"
             body = (f'--{boundary}\r\nContent-Disposition: form-data; name="image"; filename="image{file.suffix.lower()}"\r\nContent-Type: {mime}\r\n\r\n'.encode()
                     + file.read_bytes() + f"\r\n--{boundary}--\r\n".encode())
-            return api(f"/api/v1/analysis-upload-batches/{batch}/items/{item['itemId']}", "PUT", body, "multipart/form-data; boundary=" + boundary, item["itemId"])
+            return retry_busy_upload(lambda:api(f"/api/v1/analysis-upload-batches/{batch}/items/{item['itemId']}",
+                "PUT",body,"multipart/form-data; boundary="+boundary,item["itemId"]),started+args.timeout)
         pending = [(item, file) for item, file in zip(items, files) if item["uploadStatus"] == "DECLARED"]
         if args.stop_after_uploads is not None:
             pending = pending[:args.stop_after_uploads]

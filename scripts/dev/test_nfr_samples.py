@@ -1,9 +1,26 @@
 import math
+import io
+import json
+import urllib.error
+from unittest.mock import patch
 import unittest
 import test_real_batch as batch
 
 
 class NfrSamplesTests(unittest.TestCase):
+    def test_only_explicit_busy_response_is_retried_with_same_operation(self):
+        def busy(code):return urllib.error.HTTPError('http://localhost',409,'busy',{},io.BytesIO(json.dumps(
+            {'error':{'code':code,'retryable':True}}).encode()))
+        calls=[]
+        def operation():
+            calls.append(1)
+            if len(calls)==1:raise busy('ERR_REQUEST_IN_PROGRESS')
+            return 'accepted'
+        with patch.object(batch.time,'sleep'):
+            self.assertEqual('accepted',batch.retry_busy_upload(operation,batch.time.monotonic()+30))
+        self.assertEqual(2,len(calls))
+        with self.assertRaises(urllib.error.HTTPError):
+            batch.retry_busy_upload(lambda:(_ for _ in ()).throw(busy('ERR_IDEMPOTENCY_KEY_REUSED')),batch.time.monotonic()+30)
     def test_cold_is_separate_and_p95_is_nearest_rank(self):
         value=batch.latency_summary([900]+list(range(1,101)))
         self.assertEqual(900,value['coldMs'])
