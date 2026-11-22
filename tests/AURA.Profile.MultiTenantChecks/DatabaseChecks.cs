@@ -5,17 +5,18 @@ internal static class DatabaseChecks
 {
     public static async Task RunAsync(string connectionString)
     {
-        var builder=new NpgsqlConnectionStringBuilder(connectionString);
+        var builder=new NpgsqlConnectionStringBuilder(connectionString){ MaxPoolSize = 4 };
         if(!builder.Database!.Contains("test",StringComparison.OrdinalIgnoreCase) && !(builder.Database=="aura_dev" && builder.Host=="127.0.0.1" && builder.Port==55432 && Environment.GetEnvironmentVariable("AURA_TEST_ALLOW_DATABASE")=="aura_dev"))throw new InvalidOperationException("Database checks require an isolated test database.");
-        await using var admin=NpgsqlDataSource.Create(connectionString);
+        await using var admin=NpgsqlDataSource.Create(builder.ConnectionString);
         var tenant=Guid.NewGuid();var clinic=Guid.NewGuid();var otherTenant=Guid.NewGuid();var otherClinic=Guid.NewGuid();
         var owner=Guid.NewGuid();var doctor=Guid.NewGuid();var doctor2=Guid.NewGuid();var pendingDoctor=Guid.NewGuid();var staff=Guid.NewGuid();var stranger=Guid.NewGuid();
-        var patient=Guid.NewGuid();var unassigned=Guid.NewGuid();var caseId=Guid.NewGuid();
+        var patient=Guid.NewGuid();var unassigned=Guid.NewGuid();var caseId=Guid.NewGuid();var patientAccount=Guid.NewGuid();
         var authority=new Accounts(new Dictionary<Guid,AccountAuthoritySnapshot>
         {
             [owner]=new(owner,"ACTIVE",new[]{"PATIENT"}),[doctor]=new(doctor,"ACTIVE",new[]{"DOCTOR"}),
             [doctor2]=new(doctor2,"ACTIVE",new[]{"DOCTOR"}),[pendingDoctor]=new(pendingDoctor,"ACTIVE",new[]{"PATIENT"}),
-            [staff]=new(staff,"ACTIVE",new[]{"PATIENT"}),[stranger]=new(stranger,"ACTIVE",new[]{"SYSTEM_ADMIN"})
+            [staff]=new(staff,"ACTIVE",new[]{"PATIENT"}),[stranger]=new(stranger,"ACTIVE",new[]{"SYSTEM_ADMIN"}),
+            [patientAccount]=new(patientAccount,"ACTIVE",new[]{"PATIENT"})
         });
         var bindings=new Bindings(new(caseId,tenant,patient));
         async Task Sql(string sql,params object[] values)
@@ -81,7 +82,70 @@ internal static class DatabaseChecks
         Verify(!(await repository.AcceptClinicInvitationExplicitAsync(Guid.NewGuid(),second.Result.InvitedEmail,second.Result.MembershipId,second.Result.InvitationToken!)).Succeeded,"Expired invitation denied");
         var reissued=await repository.InviteClinicMemberAsync(clinic,second.Result.InvitedEmail!,"STAFF",owner);
         Verify(reissued.Result!.InvitationToken!=second.Result.InvitationToken && !(await repository.AcceptClinicInvitationExplicitAsync(Guid.NewGuid(),second.Result.InvitedEmail,second.Result.MembershipId,second.Result.InvitationToken!)).Succeeded,"Reinvite rotates hash and invalidates old token");
-        await HttpChecks.RunAsync(repository,owner,stranger,clinic,staff,patient);
+
+        // W6-M6-01: Consultation Chat Authority & Admin Clinic Lifecycle DB Checks
+        await Sql("UPDATE profile.patients SET linked_account_id=$1 WHERE patient_id=$2", patientAccount, patient);
+        var patientConsult = await repository.ResolveConsultationAccessAsync(new(patientAccount, clinic, caseId, "CONSULTATION_CREATE", doctor2));
+        Verify(patientConsult.Allowed && !patientConsult.Revoked && patientConsult.ParticipantRole == "PATIENT" && patientConsult.DoctorAccountId == doctor2,
+            "Linked patient can create consultation with actively assigned doctor2");
+        var doctorConsult = await repository.ResolveConsultationAccessAsync(new(doctor2, clinic, caseId, "CONSULTATION_SEND", doctor2));
+        Verify(doctorConsult.Allowed && !doctorConsult.Revoked && doctorConsult.ParticipantRole == "DOCTOR",
+            "Assigned doctor2 can send consultation messages");
+        var unassignedConsult = await repository.ResolveConsultationAccessAsync(new(doctor, clinic, caseId, "CONSULTATION_JOIN"));
+        Verify(!unassignedConsult.Allowed && unassignedConsult.Revoked && unassignedConsult.Code == "ACCESS_REVOKED",
+            "Unassigned doctor receives ACCESS_REVOKED");
+        var adminConsult = await repository.ResolveConsultationAccessAsync(new(owner, clinic, caseId, "CONSULTATION_READ"));
+        Verify(!adminConsult.Allowed && adminConsult.Revoked && adminConsult.Code == "ACCESS_REVOKED",
+            "Clinic admin without doctor assignment receives ACCESS_REVOKED");
+        var patientAccessViaAccessResolve = await repository.ResolveAccessAsync(patientAccount, patient, clinic, "CONSULTATION_CREATE", caseId);
+        Verify(patientAccessViaAccessResolve.Allowed, "AccessResolve supports CONSULTATION_CREATE for linked patient");
+        var adminAccessViaAccessResolve = await repository.ResolveAccessAsync(owner, patient, clinic, "CONSULTATION_CREATE", caseId);
+        Verify(!adminAccessViaAccessResolve.Allowed, "AccessResolve blocks CLINIC_ADMIN from CONSULTATION_CREATE");
+
+        var clinicList = await repository.ListClinicsAdminAsync(20);
+        Verify(clinicList.Items.Any(c => c.ClinicId == clinic && c.Version >= 1), "Admin clinic listing returns clinics with version");
+        var staleClinicUpdate = await repository.UpdateClinicStatusWithVersionAsync(stranger, clinic, "SUSPENDED", "Stale test", expectedVersion: 999);
+        Verify(staleClinicUpdate.VersionConflict && !staleClinicUpdate.NotFound, "Stale clinic expectedVersion returns conflict");
+        var suspendClinic = await repository.UpdateClinicStatusWithVersionAsync(stranger, clinic, "SUSPENDED", "Audit suspension test", expectedVersion: 1, correlationId: "w6-m6-01-db");
+        Verify(suspendClinic.Clinic?.Status == "SUSPENDED" && suspendClinic.Clinic.Version == 2, "Clinic status update bumps version and writes audit event");
+        var suspendedConsult = await repository.ResolveConsultationAccessAsync(new(doctor2, clinic, caseId, "CONSULTATION_SEND", doctor2));
+        Verify(!suspendedConsult.Allowed && suspendedConsult.Revoked && suspendedConsult.Code == "ACCESS_REVOKED" && suspendedConsult.Reason == "CLINIC_SUSPENDED",
+            "Suspended clinic immediately revokes active consultation chat");
+        var auditPage = await repository.ListAuditEventsAdminAsync(DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow.AddHours(1), 20);
+        Verify(auditPage.Items.Any(e => e.Action == "CLINIC_STATUS_UPDATE" && e.ResourceIdHash == ProfileRepository.HashResourceId(clinic.ToString("D")) && e.Outcome == "ALLOW"),
+            "Audit event query returns hashed clinic resource without PHI");
+        await repository.UpdateClinicStatusWithVersionAsync(stranger, clinic, "ACTIVE", "Restore clinic for HTTP checks", expectedVersion: 2);
+
+        // Canonical operation authority checks (ANALYTICS_READ, RESEARCH_EXPORT, CHAT_PARTICIPATE)
+        var unknownOp = await repository.ResolveOperationAuthorityAsync(new(owner, "ARBITRARY_OP", ClinicId: clinic));
+        Verify(!unknownOp.Allowed && unknownOp.Reason == "UNKNOWN_OPERATION" && unknownOp.PermissionVersion == 1,
+            "Unknown canonical operation always denies fail-closed");
+
+        var clinicAnalytics = await repository.ResolveOperationAuthorityAsync(new(owner, "ANALYTICS_READ", "CLINIC", clinic));
+        Verify(clinicAnalytics.Allowed && clinicAnalytics.ClinicId == clinic && clinicAnalytics.TenantId is not null,
+            "CLINIC_ADMIN allowed ANALYTICS_READ on own clinic");
+
+        var doctorAnalytics = await repository.ResolveOperationAuthorityAsync(new(doctor2, "ANALYTICS_READ", "DOCTOR_ASSIGNMENT", clinic));
+        Verify(doctorAnalytics.Allowed && doctorAnalytics.AuthorizedPatientIds is not null && doctorAnalytics.AuthorizedPatientIds.Contains(patient),
+            "Assigned doctor allowed DOCTOR_ASSIGNMENT analytics scoped to assigned patients");
+
+        var exportNoConsent = await repository.ResolveOperationAuthorityAsync(new(owner, "RESEARCH_EXPORT", ClinicId: clinic, Purpose: "Diabetic study", IncludeMasks: true, MasksConsentGranted: false));
+        Verify(!exportNoConsent.Allowed && exportNoConsent.Reason == "MASK_POLICY_CONSENT_REQUIRED",
+            "RESEARCH_EXPORT with masks requires explicit consent");
+
+        var exportWithConsent = await repository.ResolveOperationAuthorityAsync(new(owner, "RESEARCH_EXPORT", ClinicId: clinic, Purpose: "Diabetic study", IncludeMasks: true, MasksConsentGranted: true));
+        Verify(exportWithConsent.Allowed && exportWithConsent.IncludeMasksAllowed,
+            "RESEARCH_EXPORT allowed when purpose and mask consent are satisfied");
+
+        var exportAdminNoMembership = await repository.ResolveOperationAuthorityAsync(new(stranger, "RESEARCH_EXPORT", ClinicId: clinic, Purpose: "Admin export test"));
+        Verify(!exportAdminNoMembership.Allowed && exportAdminNoMembership.Reason == "ADMIN_NO_PHI_WILDCARD",
+            "SYSTEM_ADMIN without clinic membership blocked from RESEARCH_EXPORT (no wildcard PHI)");
+
+        var chatOp = await repository.ResolveOperationAuthorityAsync(new(patientAccount, "CHAT_PARTICIPATE", ClinicId: clinic, AnalysisId: caseId, DoctorAccountId: doctor2));
+        Verify(chatOp.Allowed && !chatOp.Revoked && chatOp.ParticipantRole == "PATIENT",
+            "CHAT_PARTICIPATE delegates to live consultation authority");
+
+        await HttpChecks.RunAsync(repository,owner,stranger,clinic,staff,patient,caseId,doctor2,doctor,patientAccount);
         await ConcurrencyChecks.RunAsync(admin,connectionString,clinic,owner,Guid.NewGuid());
         await IdentityConnectionChecks.RunAsync(admin,connectionString);
         Console.WriteLine($"Profile PostgreSQL security: {passed}/{passed} PASS under aura_profile_app; Identity/Analysis authority boundaries are explicit test doubles.");

@@ -9,7 +9,7 @@ internal static class ConcurrencyChecks
         var ct = timeout.Token;
         var application = "profile-revoke-" + Guid.NewGuid().ToString("N");
         await using var runtime = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(connectionString)
-            { Options = "-c role=aura_profile_app", ApplicationName = application }.ConnectionString);
+            { Options = "-c role=aura_profile_app", ApplicationName = application, MaxPoolSize = 4 }.ConnectionString);
         var repository = new ProfileRepository(runtime);
         await using (var seed = admin.CreateCommand("INSERT INTO profile.memberships(clinic_id,account_id,role,status) VALUES($1,$2,'CLINIC_ADMIN','ACTIVE')"))
         {

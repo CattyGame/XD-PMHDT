@@ -64,5 +64,96 @@ app.MapPost("/api/v1/clinics/invitations/{membershipId:guid}/accept", async (
 })
 .WithName("AcceptClinicInvitation")
 .WithTags("Clinics");
+
+        static async Task<IResult> HandleConsultationDoctorsAsync(
+            Guid clinicId,
+            Guid analysisId,
+            HttpRequest request,
+            ProfileRepository repository,
+            UserIdentityResolver identityResolver,
+            CancellationToken ct)
+        {
+            request.HttpContext.Response.Headers.CacheControl = "no-store";
+            var correlationId = request.HttpContext.Items["CorrelationId"] as string ?? Guid.NewGuid().ToString("D");
+            if (clinicId == Guid.Empty || analysisId == Guid.Empty)
+            {
+                return Results.Json(
+                    new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "clinicContextId và analysisId phải là UUID hợp lệ.", correlationId, false)),
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            var identity = await identityResolver.ResolveAsync(request, ct);
+            if (!identity.Succeeded)
+            {
+                return Results.Json(
+                    new ErrorEnvelope(new ErrorDetails(identity.Code, identity.Message, correlationId, identity.Retryable)),
+                    statusCode: identity.StatusCode);
+            }
+
+            try
+            {
+                var decision = await repository.ResolveConsultationAccessAsync(
+                    new ConsultationAccessResolveRequest(identity.AccountId, clinicId, analysisId, ConsultationActions.Doctors),
+                    ct);
+
+                if (!decision.Allowed)
+                {
+                    if (decision.Reason is "ANALYSIS_NOT_FOUND" or "CLINIC_NOT_FOUND" or "PATIENT_OR_CLINIC_NOT_FOUND" or "WRONG_CLINIC")
+                    {
+                        return Results.Json(
+                            new ErrorEnvelope(new ErrorDetails("ERR_NOT_FOUND", "Không tìm thấy ca phân tích hoặc phòng khám tương ứng.", correlationId, false)),
+                            statusCode: StatusCodes.Status404NotFound);
+                    }
+
+                    return Results.Json(
+                        new ErrorEnvelope(new ErrorDetails("ERR_FORBIDDEN", "Không có quyền truy cập danh sách bác sĩ tư vấn cho ca này.", correlationId, false)),
+                        statusCode: StatusCodes.Status403Forbidden);
+                }
+
+                return Results.Ok(new ConsultationDoctorsResponse(analysisId, decision.EligibleDoctors));
+            }
+            catch (Exception e) when (e is HttpRequestException or IOException or System.Text.Json.JsonException or TimeoutException
+                || (e is OperationCanceledException && !ct.IsCancellationRequested))
+            {
+                return Results.Json(
+                    new ErrorEnvelope(new ErrorDetails("ERR_DEPENDENCY_UNAVAILABLE", "Không thể xác minh thẩm quyền tư vấn lúc này.", correlationId, true)),
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+        }
+
+        app.MapGet("/api/v1/analyses/{analysisId:guid}/consultation-doctors", async (
+            Guid analysisId,
+            HttpRequest request,
+            ProfileRepository repository,
+            UserIdentityResolver identityResolver,
+            CancellationToken ct) =>
+        {
+            request.HttpContext.Response.Headers.CacheControl = "no-store";
+            var correlationId = request.HttpContext.Items["CorrelationId"] as string ?? Guid.NewGuid().ToString("D");
+            if (!request.Query.TryGetValue("clinicContextId", out var values)
+                || values.Count != 1
+                || !Guid.TryParse(values[0], out var clinicId)
+                || clinicId == Guid.Empty)
+            {
+                return Results.Json(
+                    new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số clinicContextId là bắt buộc và phải là UUID hợp lệ.", correlationId, false)),
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            return await HandleConsultationDoctorsAsync(clinicId, analysisId, request, repository, identityResolver, ct);
+        })
+        .WithName("GetAnalysisConsultationDoctors")
+        .WithTags("Consultations");
+
+        app.MapGet("/api/v1/clinics/{clinicId:guid}/analyses/{analysisId:guid}/consultation-doctors", async (
+            Guid clinicId,
+            Guid analysisId,
+            HttpRequest request,
+            ProfileRepository repository,
+            UserIdentityResolver identityResolver,
+            CancellationToken ct) =>
+            await HandleConsultationDoctorsAsync(clinicId, analysisId, request, repository, identityResolver, ct))
+        .WithName("GetClinicAnalysisConsultationDoctors")
+        .WithTags("Consultations");
     }
 }

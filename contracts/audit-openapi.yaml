@@ -6,6 +6,8 @@ info:
     SCRUM-380. Owner-local append-only audit/outbox; Profile owns the inbox/projection.
     Public audit metadata contains hashed resource identifiers and correlation values.
     Audit schemaVersion is 1; resourceVersion is null when the owning operation has no revision.
+    Immutable image/report artifacts have resourceVersion 1; resourceId identifies the snapshot
+    containing the pinned result/review versions, including batch and research export sources.
     Reads record authorization before streaming, not proof of a completed client download.
     The 180-day retention is a course policy; pending delivery obligations and opaque replay
     tombstones are retained. No clinical content, credentials, free-text reasons or raw request paths.

@@ -2,6 +2,8 @@ using AURA.Billing.Api.Auth;
 using AURA.Billing.Api.Data;
 using AURA.Billing.Api.Models;
 using AURA.Identity.Api;
+using AURA.Common.Audit;
+using System.Text.Json;
 using AURA.Profile.Api;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
@@ -11,6 +13,31 @@ namespace AURA.M1.RegressionTests;
 
 public class AuditMutationTests
 {
+    [M1PostgresFact]
+    public async Task Admin_role_change_records_versioned_shared_audit_and_rolls_back_with_outbox()
+    {
+        await using var db=await Database.CreateAsync();var identities=new IdentityRepository(db.Identity);
+        var actor=await identities.CreateAccountAsync("admin-audit-"+Guid.NewGuid());
+        var target=await identities.CreateAccountAsync("target-audit-"+Guid.NewGuid());
+        await db.SqlAsync("INSERT INTO identity.account_roles(account_id,role_name) VALUES($1,'SYSTEM_ADMIN')",actor.AccountId);
+        var changed=await identities.UpdateAccountRolesAdminAsync(actor.AccountId,target.AccountId,["PATIENT","SYSTEM_ADMIN"],1,"private reason","role-audit");
+        Assert.True(changed.Success);Assert.Equal(2,changed.Account!.Version);
+        var json=await db.ScalarAsync<string>("SELECT payload::text FROM identity.audit_events");
+        var audit=JsonSerializer.Deserialize<AuditEvent>(json,AuditJson.Options)!;
+        Assert.Equal(AuditAction.RoleChanged,audit.Action);Assert.Equal(2,audit.ResourceVersion);
+        Assert.Equal(target.AccountId.ToString("D"),audit.ResourceId);
+        Assert.DoesNotContain("private reason",json);
+        await db.SqlAsync("""
+            CREATE FUNCTION identity.role_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'test-only audit outage'; END $$;
+            CREATE TRIGGER role_audit_failure BEFORE INSERT ON identity.audit_outbox FOR EACH ROW EXECUTE FUNCTION identity.role_audit_failure();
+            """);
+        await Assert.ThrowsAsync<PostgresException>(()=>identities.UpdateAccountRolesAdminAsync(actor.AccountId,target.AccountId,["PATIENT"],2,"remove admin","role-audit-failure"));
+        Assert.Contains("SYSTEM_ADMIN",(await identities.GetAccountByIdAsync(target.AccountId))!.Roles);
+        Assert.Equal(2,(await identities.GetAdminAccountByIdAsync(target.AccountId))!.Version);
+        Assert.Equal(1L,await db.ScalarAsync<long>("SELECT count(*) FROM identity.account_lifecycle_audit WHERE target_account_id=$1",target.AccountId));
+        Assert.Equal(1L,await db.ScalarAsync<long>("SELECT count(*) FROM identity.audit_events"));
+    }
     [M1PostgresFact]
     public async Task Clinic_membership_grant_and_revoke_cannot_commit_without_their_audit()
     {

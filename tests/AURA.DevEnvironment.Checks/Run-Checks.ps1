@@ -53,6 +53,20 @@ try {
     $gateway = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src/gateway/AURA.ApiGateway/appsettings.json') -Raw | ConvertFrom-Json
     $clinicApproval = $gateway.ReverseProxy.Routes.'clinic-admin-status'
     Assert-Check ($clinicApproval.ClusterId -eq 'profile-cluster' -and $clinicApproval.Match.Path -eq '/api/v1/admin/clinics/{clinicId}/status' -and $clinicApproval.Match.Methods -contains 'PATCH') 'Clinic approval is routed through the authenticated Gateway to Profile'
+    $adminAccounts = $gateway.ReverseProxy.Routes.'identity-admin-accounts'
+    Assert-Check ($adminAccounts.ClusterId -eq 'identity-cluster' -and $adminAccounts.Match.Path -eq '/api/v1/admin/accounts' -and $adminAccounts.Match.Methods -contains 'GET') 'Admin account listing is routed through Gateway to Identity'
+    $adminAccountStatus = $gateway.ReverseProxy.Routes.'identity-admin-account-status'
+    Assert-Check ($adminAccountStatus.ClusterId -eq 'identity-cluster' -and $adminAccountStatus.Match.Path -eq '/api/v1/admin/accounts/{accountId}/status' -and $adminAccountStatus.Match.Methods -contains 'PATCH') 'Admin account status update is routed through Gateway to Identity'
+    $adminAccountRoles = $gateway.ReverseProxy.Routes.'identity-admin-account-roles'
+    Assert-Check ($adminAccountRoles.ClusterId -eq 'identity-cluster' -and $adminAccountRoles.Match.Path -eq '/api/v1/admin/accounts/{accountId}/roles' -and $adminAccountRoles.Match.Methods -contains 'PATCH') 'Admin account role update is routed through Gateway to Identity'
+    $adminClinics = $gateway.ReverseProxy.Routes.'profile-admin-clinics'
+    Assert-Check ($adminClinics.ClusterId -eq 'profile-cluster' -and $adminClinics.Match.Path -eq '/api/v1/admin/clinics' -and $adminClinics.Match.Methods -contains 'GET') 'Admin clinic listing is routed through Gateway to Profile'
+    $adminAudit = $gateway.ReverseProxy.Routes.'profile-admin-audit'
+    Assert-Check ($adminAudit.ClusterId -eq 'profile-cluster' -and $adminAudit.Match.Path -eq '/api/v1/admin/audit-events' -and $adminAudit.Match.Methods -contains 'GET') 'Admin audit log is routed through Gateway to Profile'
+    $profileProgram = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src/services/AURA.Profile.Api/Program.cs') -Raw
+    Assert-Check ($profileProgram.Contains('app.MapAuditEndpoints();') -and -not $profileProgram.Contains('app.MapGet("/api/v1/admin/audit-events"')) 'One canonical shared audit handler replaces the legacy route'
+    $consultationDoctors = $gateway.ReverseProxy.Routes.'profile-consultation-doctors'
+    Assert-Check ($consultationDoctors.ClusterId -eq 'profile-cluster' -and $consultationDoctors.Match.Path -eq '/api/v1/analyses/{analysisId}/consultation-doctors' -and $consultationDoctors.Match.Methods -contains 'GET') 'Consultation doctors route is routed through Gateway to Profile'
     foreach ($service in @('AURA.Profile.Api', 'AURA.Identity.Api')) {
         foreach ($file in @('appsettings.json', 'appsettings.Development.json')) {
             $settings = Get-Content -LiteralPath (Join-Path $repositoryRoot "src/services/$service/$file") -Raw | ConvertFrom-Json
@@ -100,7 +114,8 @@ try {
     $global:AuraM1EnvironmentCheckState.emptyAt = -1
 
     $plan = @(& $initialize -PlanOnly)
-    Assert-Check ($plan.Count -eq 39) "Migration plan includes versioned catalog and push templates"
+    Assert-Check ($plan.Count -eq 42) "Migration plan includes versioned catalog and push templates"
+    Assert-Check ($plan -contains "infra/postgres/migrations/020_notification_consultations.sql") "Integrated consultation persistence is provisioned before shared audit grants"
     Assert-Check ($plan[0] -eq "infra/postgres/migrations/001_notification_devices.sql") "Notification schema is bootstrapped first"
     Assert-Check ($plan[2] -eq "infra/postgres/migrations/002_identity_and_profile.sql") "Identity/Profile migration is included"
     Assert-Check ($plan[3] -eq "infra/postgres/migrations/003_doctor_assignments.sql") "Doctor assignments follow Profile schema"
@@ -113,15 +128,15 @@ try {
     Assert-Check ($plan[13] -eq "infra/postgres/migrations/analysis/007_batch_engine_progress.sql") "Batch progress cache reconstruction follows campaign schema"
     Assert-Check ($plan[14] -eq "infra/postgres/migrations/analysis/008_doctor_review_icdr.sql") "Doctor-approved ICDR grade follows the review schema"
     Assert-Check ($plan[19] -eq "infra/postgres/migrations/analysis/011_research_annotations.sql") "Research annotation types follow report snapshots"
-    Assert-Check ($plan[20] -eq "infra/postgres/migrations/005_camera_grants.sql") "Camera delegation grants follow Analysis core"
-    Assert-Check ($plan[21] -eq "infra/postgres/migrations/005_notification_inbox.sql") "Notification inbox follows camera grants"
-    Assert-Check ($plan[22] -eq "infra/postgres/migrations/006_billing_settlement_inbox.sql") "Billing settlement inbox follows notification inbox"
-    Assert-Check ($plan[23] -eq "infra/postgres/migrations/008_billing_payments.sql") "Billing payments follows settlement inbox"
-    Assert-Check ($plan[24] -eq "infra/postgres/migrations/009_billing_clinic_and_reconciliation.sql") "Billing clinic packages and reconciliation follow payments"
-    Assert-Check ($plan[26] -eq "infra/postgres/migrations/010_clinic_lifecycle_and_memberships.sql") "Clinic lifecycle and memberships follow billing clinic reconciliation"
-    Assert-Check ($plan[27] -eq "infra/postgres/migrations/011_clinic_patients_and_assignments.sql") "Clinic patients and doctor assignments extension follow clinic lifecycle"
-    Assert-Check ($plan[31] -eq "infra/postgres/migrations/002_service_database_roles.sql" -and $plan[32] -eq "infra/postgres/migrations/015_runtime_boundary_hardening.sql" -and $plan[33] -eq "infra/postgres/migrations/016_billing_event_compatibility.sql") "Final blanket grants are followed by ADR005 append-only and runtime boundary hardening"
-    Assert-Check ($plan[34] -eq "infra/postgres/migrations/017_notification_payment_and_delivery_jobs.sql" -and $plan[35] -eq "infra/postgres/migrations/018_billing_payment_outbox.sql") "Durable notification delivery precedes the canonical payment outbox"
+    Assert-Check ($plan[21] -eq "infra/postgres/migrations/005_camera_grants.sql") "Camera delegation grants follow Analysis core"
+    Assert-Check ($plan[22] -eq "infra/postgres/migrations/005_notification_inbox.sql") "Notification inbox follows camera grants"
+    Assert-Check ($plan[23] -eq "infra/postgres/migrations/006_billing_settlement_inbox.sql") "Billing settlement inbox follows notification inbox"
+    Assert-Check ($plan[24] -eq "infra/postgres/migrations/008_billing_payments.sql") "Billing payments follows settlement inbox"
+    Assert-Check ($plan[25] -eq "infra/postgres/migrations/009_billing_clinic_and_reconciliation.sql") "Billing clinic packages and reconciliation follow payments"
+    Assert-Check ($plan[27] -eq "infra/postgres/migrations/010_clinic_lifecycle_and_memberships.sql") "Clinic lifecycle and memberships follow billing clinic reconciliation"
+    Assert-Check ($plan[28] -eq "infra/postgres/migrations/011_clinic_patients_and_assignments.sql") "Clinic patients and doctor assignments extension follow clinic lifecycle"
+    Assert-Check ($plan[33] -eq "infra/postgres/migrations/002_service_database_roles.sql" -and $plan[34] -eq "infra/postgres/migrations/015_runtime_boundary_hardening.sql" -and $plan[35] -eq "infra/postgres/migrations/016_billing_event_compatibility.sql") "Final blanket grants are followed by ADR005 append-only and runtime boundary hardening"
+    Assert-Check ($plan[36] -eq "infra/postgres/migrations/017_notification_payment_and_delivery_jobs.sql" -and $plan[37] -eq "infra/postgres/migrations/018_billing_payment_outbox.sql") "Durable notification delivery precedes the canonical payment outbox"
     Assert-Check ($plan[-3] -eq "infra/postgres/migrations/019_shared_audit.sql" -and
         $plan[-2] -eq "infra/postgres/migrations/020_camera_clinic_binding.sql" -and
         $plan[-1] -eq "infra/postgres/migrations/021_versioned_catalog_and_push_templates.sql") "Audit, camera and catalog permissions follow all legacy blanket grants"

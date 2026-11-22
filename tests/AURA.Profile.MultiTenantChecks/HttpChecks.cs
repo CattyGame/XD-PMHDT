@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 internal static class HttpChecks
 {
-    public static async Task RunAsync(ProfileRepository repository,Guid owner,Guid stranger,Guid clinic,Guid staff,Guid patient)
+    public static async Task RunAsync(ProfileRepository repository,Guid owner,Guid stranger,Guid clinic,Guid staff,Guid patient,Guid caseId = default,Guid assignedDoctor = default,Guid unassignedDoctor = default,Guid linkedPatientAccount = default)
     {
         var authority=new IdentityTransport { AccountId=owner };
         var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>
@@ -91,8 +91,45 @@ internal static class HttpChecks
         using(var response=await Accept("invalid"))Verify(response.StatusCode==HttpStatusCode.BadRequest,"Wrong one-time token denied via actual HTTP endpoint");
         using(var response=await Accept(membership.InvitationToken!))Verify(response.StatusCode==HttpStatusCode.OK,"Verified email and valid token accept via actual HTTP endpoint");
         using(var response=await Accept(membership.InvitationToken!))Verify(response.StatusCode!=HttpStatusCode.OK,"Invitation replay denied via actual HTTP endpoint");
+
+        if (caseId != Guid.Empty && assignedDoctor != Guid.Empty && linkedPatientAccount != Guid.Empty)
+        {
+            var doctorsRoute = $"/api/v1/analyses/{caseId:D}/consultation-doctors?clinicContextId={clinic:D}";
+            authority.AccountId = linkedPatientAccount;
+            using (var response = await Patient(HttpMethod.Get, doctorsRoute))
+            {
+                var body = await response.Content.ReadFromJsonAsync<ConsultationDoctorsResponse>();
+                Verify(response.StatusCode == HttpStatusCode.OK && body!.AnalysisId == caseId && body.Items.Any(d => d.AccountId == assignedDoctor),
+                    "Linked patient reads eligible consultation doctors HTTP200");
+            }
+
+            authority.AccountId = assignedDoctor;
+            using (var response = await Patient(HttpMethod.Get, doctorsRoute))
+                Verify(response.StatusCode == HttpStatusCode.OK, "Assigned doctor reads consultation doctors HTTP200");
+
+            authority.AccountId = unassignedDoctor;
+            using (var response = await Patient(HttpMethod.Get, doctorsRoute))
+                Verify(response.StatusCode == HttpStatusCode.Forbidden, "Unassigned doctor denied consultation doctors HTTP403");
+
+            authority.AccountId = owner;
+            using (var response = await Patient(HttpMethod.Get, doctorsRoute))
+                Verify(response.StatusCode == HttpStatusCode.Forbidden, "Clinic admin without doctor assignment denied consultation doctors HTTP403");
+
+            using (var response = await Patient(HttpMethod.Get, $"/api/v1/analyses/{caseId:D}/consultation-doctors"))
+                Verify(response.StatusCode == HttpStatusCode.BadRequest, "Missing clinicContextId denied HTTP400");
+
+            using (var response = await Patient(HttpMethod.Get, $"/api/v1/analyses/{Guid.NewGuid():D}/consultation-doctors?clinicContextId={clinic:D}"))
+                Verify(response.StatusCode == HttpStatusCode.NotFound, "Member probing unknown analysis returns HTTP404");
+
+            authority.AccountId = stranger;
+            using (var response = await Patient(HttpMethod.Get, $"/api/v1/analyses/{Guid.NewGuid():D}/consultation-doctors?clinicContextId={clinic:D}"))
+                Verify(response.StatusCode == HttpStatusCode.Forbidden, "Non-member probing returns HTTP403 without leaking analysis existence");
+        }
+
         Console.WriteLine($"Profile actual HTTP endpoints: {passed}/{passed} PASS; Identity transport is an explicit authoritative-boundary test double.");
     }
+    private sealed record ConsultationDoctorItem(Guid AccountId, string DisplayName);
+    private sealed record ConsultationDoctorsResponse(Guid AnalysisId, ConsultationDoctorItem[] Items);
     private sealed record ClinicList(ActorClinic[] Items);
     private sealed class Clients(HttpMessageHandler handler):IHttpClientFactory
     {public HttpClient CreateClient(string name)=>new(handler,false){BaseAddress=new Uri("https://identity.test"),Timeout=TimeSpan.FromSeconds(5)};}

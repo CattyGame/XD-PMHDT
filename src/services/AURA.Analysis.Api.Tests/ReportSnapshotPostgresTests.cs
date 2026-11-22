@@ -135,6 +135,7 @@ public sealed class ReportSnapshotPostgresTests
                 Assert.Equal("application/pdf",response.Content.Headers.ContentType!.MediaType);
                 var audit=Assert.Single(auditWriter.Events);Assert.Equal(AuditAction.ReportDownload,audit.Action);
                 Assert.Equal(exported.ReportId.ToString("D"),audit.ResourceId);Assert.Equal(actor,audit.ActorAccountId);
+                Assert.Equal(tenant,audit.TenantId);Assert.Equal(1,audit.ResourceVersion);
             }
             auditWriter.Down=true;
             using var blocked=await client.GetAsync($"/api/v1/reports/{exported.ReportId:D}/content");

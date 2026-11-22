@@ -162,10 +162,7 @@ app.UseAuraPrometheusMetrics();
 
 app.Use(async (context, next) =>
 {
-    context.Request.Headers.Remove("X-Account-Id");
-    context.Request.Headers.Remove("X-Role");
-    context.Request.Headers.Remove("X-Tenant-Id");
-    context.Request.Headers.Remove("X-User-Authorization");
+    GatewayFirebaseAuthMiddleware.RemoveUntrustedIdentityHeaders(context.Request);
 
     await next(context);
 });

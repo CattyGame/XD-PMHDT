@@ -122,7 +122,8 @@ public sealed record RegisterClinicRequest(
 
 public sealed record UpdateClinicStatusRequest(
     [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("reason")] string? Reason
+    [property: JsonPropertyName("reason")] string? Reason,
+    [property: JsonPropertyName("expectedVersion")] int? ExpectedVersion = null
 );
 
 public sealed record InviteClinicMemberRequest(
@@ -141,7 +142,8 @@ public sealed record ClinicDto(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("auditReason")] string? AuditReason,
     [property: JsonPropertyName("createdAt")] DateTimeOffset CreatedAt,
-    [property: JsonPropertyName("updatedAt")] DateTimeOffset UpdatedAt
+    [property: JsonPropertyName("updatedAt")] DateTimeOffset UpdatedAt,
+    [property: JsonPropertyName("version")] int Version = 1
 );
 
 public sealed record AddClinicMemberRequest(
@@ -297,3 +299,118 @@ public sealed record TransferDoctorAssignmentRequest(
 );
 
 public sealed record AcceptClinicInvitationRequest(string Token);
+
+// --- Models cho Admin Clinic Lifecycle, Audit & Consultation Chat Authority (Task W6-M6-01) ---
+
+public sealed record AdminClinicListResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<ClinicDto> Items,
+    [property: JsonPropertyName("nextCursor")] string? NextCursor
+);
+
+public sealed record AuditEventDto(
+    [property: JsonPropertyName("eventId")] Guid EventId,
+    [property: JsonPropertyName("sourceService")] string SourceService,
+    [property: JsonPropertyName("action")] string Action,
+    [property: JsonPropertyName("resourceType")] string ResourceType,
+    [property: JsonPropertyName("resourceIdHash")] string ResourceIdHash,
+    [property: JsonPropertyName("correlationId")] string CorrelationId,
+    [property: JsonPropertyName("occurredAt")] DateTimeOffset OccurredAt,
+    [property: JsonPropertyName("outcome")] string Outcome
+);
+
+public sealed record AuditEventPageResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<AuditEventDto> Items,
+    [property: JsonPropertyName("nextCursor")] string? NextCursor
+);
+
+public static class ConsultationActions
+{
+    public const string Doctors = "CONSULTATION_DOCTORS";
+    public const string Create = "CONSULTATION_CREATE";
+    public const string Join = "CONSULTATION_JOIN";
+    public const string Read = "CONSULTATION_READ";
+    public const string Send = "CONSULTATION_SEND";
+    public const string ChatParticipate = "CHAT_PARTICIPATE";
+
+    public static readonly HashSet<string> All = new(StringComparer.OrdinalIgnoreCase)
+    {
+        Doctors, Create, Join, Read, Send, ChatParticipate
+    };
+}
+
+public static class CanonicalOperations
+{
+    public const string AnalyticsRead = "ANALYTICS_READ";
+    public const string ResearchExport = "RESEARCH_EXPORT";
+    public const string ChatParticipate = "CHAT_PARTICIPATE";
+
+    public static readonly HashSet<string> All = new(StringComparer.Ordinal)
+    {
+        AnalyticsRead,
+        ResearchExport,
+        ChatParticipate
+    };
+}
+
+public sealed record OperationAuthorityRequest(
+    [property: JsonPropertyName("actorAccountId")] Guid ActorAccountId,
+    [property: JsonPropertyName("operation")] string Operation,
+    [property: JsonPropertyName("resourceScope")] string? ResourceScope = null,
+    [property: JsonPropertyName("clinicId")] Guid? ClinicId = null,
+    [property: JsonPropertyName("patientId")] Guid? PatientId = null,
+    [property: JsonPropertyName("analysisId")] Guid? AnalysisId = null,
+    [property: JsonPropertyName("doctorAccountId")] Guid? DoctorAccountId = null,
+    [property: JsonPropertyName("purpose")] string? Purpose = null,
+    [property: JsonPropertyName("includeMasks")] bool IncludeMasks = false,
+    [property: JsonPropertyName("masksConsentGranted")] bool MasksConsentGranted = false
+);
+
+public sealed record OperationAuthorityResponse(
+    [property: JsonPropertyName("permissionVersion")] int PermissionVersion,
+    [property: JsonPropertyName("allowed")] bool Allowed,
+    [property: JsonPropertyName("revoked")] bool Revoked,
+    [property: JsonPropertyName("code")] string? Code,
+    [property: JsonPropertyName("reason")] string? Reason,
+    [property: JsonPropertyName("tenantId")] Guid? TenantId,
+    [property: JsonPropertyName("clinicId")] Guid? ClinicId,
+    [property: JsonPropertyName("patientId")] Guid? PatientId,
+    [property: JsonPropertyName("participantRole")] string? ParticipantRole,
+    [property: JsonPropertyName("authorizedPatientIds")] IReadOnlyList<Guid>? AuthorizedPatientIds,
+    [property: JsonPropertyName("includeMasksAllowed")] bool IncludeMasksAllowed
+);
+
+public sealed record ConsultationDoctorDto(
+    [property: JsonPropertyName("accountId")] Guid AccountId,
+    [property: JsonPropertyName("displayName")] string DisplayName
+);
+
+public sealed record ConsultationDoctorsResponse(
+    [property: JsonPropertyName("analysisId")] Guid AnalysisId,
+    [property: JsonPropertyName("items")] IReadOnlyList<ConsultationDoctorDto> Items
+);
+
+public sealed record ConsultationAccessResolveRequest(
+    [property: JsonPropertyName("actorAccountId")] Guid ActorAccountId,
+    [property: JsonPropertyName("clinicContextId")] Guid ClinicContextId,
+    [property: JsonPropertyName("analysisId")] Guid AnalysisId,
+    [property: JsonPropertyName("action")] string Action,
+    [property: JsonPropertyName("doctorAccountId")] Guid? DoctorAccountId = null,
+    [property: JsonPropertyName("patientId")] Guid? PatientId = null
+);
+
+public sealed record ConsultationAccessResolveResponse(
+    [property: JsonPropertyName("allowed")] bool Allowed,
+    [property: JsonPropertyName("revoked")] bool Revoked,
+    [property: JsonPropertyName("code")] string? Code,
+    [property: JsonPropertyName("reason")] string? Reason,
+    [property: JsonPropertyName("tenantId")] Guid? TenantId,
+    [property: JsonPropertyName("clinicContextId")] Guid? ClinicContextId,
+    [property: JsonPropertyName("patientId")] Guid? PatientId,
+    [property: JsonPropertyName("patientAccountId")] Guid? PatientAccountId,
+    [property: JsonPropertyName("analysisId")] Guid? AnalysisId,
+    [property: JsonPropertyName("participantRole")] string? ParticipantRole,
+    [property: JsonPropertyName("doctorAccountId")] Guid? DoctorAccountId,
+    [property: JsonPropertyName("assignmentId")] Guid? AssignmentId,
+    [property: JsonPropertyName("permissionVersion")] int PermissionVersion,
+    [property: JsonPropertyName("eligibleDoctors")] IReadOnlyList<ConsultationDoctorDto> EligibleDoctors
+);

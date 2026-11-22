@@ -304,10 +304,12 @@ public sealed class AnalysisReportService(
         var stream=await ReadDownloadAsync(requesterId,clinicId,reportId,correlation,ct);
         try
         {
-            await using var command=dataSource.CreateCommand("SELECT content_type FROM analysis.report_snapshots WHERE id=$1");command.Parameters.AddWithValue(reportId);
-            var type=await command.ExecuteScalarAsync(ct) as string;
+            await using var command=dataSource.CreateCommand("SELECT content_type,tenant_id FROM analysis.report_snapshots WHERE id=$1");command.Parameters.AddWithValue(reportId);
+            await using var reader=await command.ExecuteReaderAsync(ct);
+            if(!await reader.ReadAsync(ct))throw UploadFailure.Dependency("Report metadata");
+            var type=reader.GetString(0);
             if(type is not ("application/pdf" or "text/csv" or "application/zip"))throw UploadFailure.Dependency("Report metadata");
-            return new(stream,type);
+            return new(stream,type){TenantId=reader.GetGuid(1),ResourceVersion=1};
         }
         catch{await stream.DisposeAsync();throw;}
     }

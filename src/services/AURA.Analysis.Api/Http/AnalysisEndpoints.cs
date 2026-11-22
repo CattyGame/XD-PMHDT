@@ -1,4 +1,5 @@
 using AURA.Analysis.Api.Auth;
+using AURA.Analysis.Api.Exports;
 using AURA.Analysis.Api.Upload;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.WebUtilities;
@@ -38,9 +39,14 @@ public static class AnalysisEndpoints
         }));
         app.MapGet("/api/v1/reports/{reportId}/content",(HttpContext c,string reportId)=>Handle(c,async()=>
         {
-            var user=await User(c);
-            var content=await ReadAudited(c,user.AccountId,AuditAction.ReportDownload,AuditResource.Report,ResourceId(reportId),
-                ()=>c.RequestServices.GetRequiredService<AnalysisReportService>().ReadDownloadContentAsync(user.AccountId,Clinic(c),ResourceId(reportId),Correlation(c),c.RequestAborted));
+            var user=await User(c);var id=ResourceId(reportId);var clinic=Clinic(c);
+            var content=await ReadAudited(c,user.AccountId,AuditAction.ReportDownload,AuditResource.Report,id,async () =>
+            {
+                var exports=c.RequestServices.GetService<ExportService>();
+                if(exports is not null && await exports.HasSnapshotAsync(id,c.RequestAborted))
+                    return await exports.OpenContentAsync(user.AccountId,clinic??throw UploadFailure.Validation(new ErrorDetail("clinicContextId","required")),id,Correlation(c),c.RequestAborted);
+                return await c.RequestServices.GetRequiredService<AnalysisReportService>().ReadDownloadContentAsync(user.AccountId,clinic,id,Correlation(c),c.RequestAborted);
+            });
             c.Response.Headers["X-Content-Type-Options"]="nosniff";return Results.Stream(content.Stream,content.ContentType);
         }));
         app.MapGet("/api/v1/analyses/{analysisId}/files/{fileId}/content",(HttpContext c,string analysisId,string fileId)=>Handle(c,async()=>
@@ -166,6 +172,20 @@ public static class AnalysisEndpoints
             return Results.Json(await c.RequestServices.GetRequiredService<InternalResolversService>().ResolveNotificationContextAsync(
                 request,c.RequestAborted),UploadJson.Options);
         }));
+        app.MapGet("/api/v1/admin/ai/config",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
+        {
+            await AdminUser(c);
+            return Results.Json(await c.RequestServices.GetRequiredService<AiConfigService>().GetActiveAsync(c.RequestAborted),UploadJson.Options);
+        })));
+        app.MapPut("/api/v1/admin/ai/config",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
+        {
+            var admin=await AdminUser(c);
+            Limit(c,16384);
+            using var body=await System.Text.Json.JsonDocument.ParseAsync(c.Request.Body,cancellationToken:c.RequestAborted);
+            var change=AiConfigService.ParseStrictChange(body.RootElement);
+            var view=await c.RequestServices.GetRequiredService<AiConfigService>().ActivateAsync(admin.AccountId,change,c.RequestAborted);
+            return Results.Json(view,UploadJson.Options);
+        })));
     }
 
     private static async Task<IResult> Handle(HttpContext c,Func<Task<IResult>> action)
@@ -208,7 +228,7 @@ public static class AnalysisEndpoints
             await writer.AppendAsync(audit with { Outcome=AuditOutcome.Failed },c.RequestAborted);
             throw;
         }
-        await AuditRead.RequireAsync(writer,audit,content.Stream,c.RequestAborted);
+        await AuditRead.RequireAsync(writer,audit with {TenantId=content.TenantId,ResourceVersion=content.ResourceVersion},content.Stream,c.RequestAborted);
         return content;
     }
     private static IResult Error(HttpContext c,UploadFailure e)=>Results.Json(new{error=new{
@@ -219,6 +239,11 @@ public static class AnalysisEndpoints
     {
         var user=await c.RequestServices.GetRequiredService<IAnalysisUserIdentityResolver>().ResolveAsync(c.Request,c.RequestAborted);
         AnalysisUserPolicy.RequireClinicalRole(user);return user;
+    }
+    private static async Task<AnalysisUserContext> AdminUser(HttpContext c)
+    {
+        var user=await c.RequestServices.GetRequiredService<IAnalysisUserIdentityResolver>().ResolveAsync(c.Request,c.RequestAborted);
+        AnalysisUserPolicy.RequireSystemAdmin(user);return user;
     }
     private static Guid ResourceId(string value)=>Guid.TryParse(value,out var id)&&id!=Guid.Empty?id
         :throw new UploadFailure(404,"ERR_NOT_FOUND","Không tìm thấy tài nguyên.");

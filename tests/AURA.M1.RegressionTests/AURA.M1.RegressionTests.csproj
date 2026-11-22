@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../src/gateway/AURA.ApiGateway/AURA.ApiGateway.csproj" />
     <ProjectReference Include="../../src/services/AURA.Identity.Api/AURA.Identity.Api.csproj" />
     <ProjectReference Include="../../src/services/AURA.Profile.Api/AURA.Profile.Api.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.12" />

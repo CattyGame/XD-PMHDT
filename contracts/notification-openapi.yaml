@@ -207,6 +207,122 @@ paths:
           description: Unauthenticated
         '404':
           description: Missing or another account
+  /api/v1/consultations:
+    get:
+      operationId: listConsultations
+      parameters:
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - name: cursor
+        in: query
+        schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Current authorized consultations.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationPage' }
+        '401': { description: Unauthenticated }
+        '503': { description: Authority or storage unavailable }
+    post:
+      operationId: createConsultation
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConsultationCreate' }
+      responses:
+        '201':
+          description: Conversation persisted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consultation' }
+        '200': { description: Idempotent replay }
+        '400': { description: Invalid request }
+        '401': { description: Unauthenticated }
+        '403': { description: Current authority denied }
+        '409': { description: Idempotency-Key replayed with different payload }
+        '503': { description: Authority or storage unavailable }
+  /api/v1/consultations/{conversationId}/messages:
+    parameters:
+    - name: conversationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    get:
+      operationId: getConsultationMessages
+      parameters:
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - name: beforeId
+        in: query
+        schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Stable cursor page ordered by sentAt and messageId.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationMessagesPage' }
+        '401': { description: Unauthenticated }
+        '403': { description: Current authority denied }
+        '404': { description: Missing conversation }
+        '503': { description: Authority or storage unavailable }
+    post:
+      operationId: sendConsultationMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConsultationMessageCreate' }
+      responses:
+        '201':
+          description: Message persisted before live broadcast.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationMessage' }
+        '200': { description: Idempotent replay }
+        '400': { description: Invalid message }
+        '401': { description: Unauthenticated }
+        '403': { description: Current authority denied }
+        '404': { description: Missing conversation }
+        '409': { description: clientMessageId replayed with different payload }
+        '429':
+          description: More than 30 messages in one minute; retry after the response header interval.
+          headers:
+            Retry-After:
+              schema: { type: integer, minimum: 1 }
+        '503': { description: Authority or storage unavailable }
+  /api/v1/consultations/{conversationId}/read:
+    post:
+      operationId: advanceConsultationReadCursor
+      parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConsultationReadCursor' }
+      responses:
+        '200':
+          description: Read cursor persisted monotonically.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationReceipt' }
+        '400': { description: Invalid or foreign message cursor }
+        '401': { description: Unauthenticated }
+        '403': { description: Current authority denied }
+        '404': { description: Missing conversation }
+        '503': { description: Authority or storage unavailable }
 components:
   schemas:
     PushTemplate:
@@ -219,6 +335,75 @@ components:
         body: *pushBody
         enabled: {type: boolean}
         version: {type: integer}
+    ConsultationCreate:
+      type: object
+      additionalProperties: false
+      required: [analysisId, clinicContextId, doctorAccountId]
+      properties:
+        analysisId: { type: string, format: uuid }
+        clinicContextId: { type: string, format: uuid }
+        doctorAccountId: { type: string, format: uuid }
+    Consultation:
+      type: object
+      additionalProperties: false
+      required: [conversationId, analysisId, clinicContextId, status, unreadCount]
+      properties:
+        conversationId: { type: string, format: uuid }
+        analysisId: { type: string, format: uuid }
+        clinicContextId: { type: string, format: uuid }
+        status: { type: string, enum: [OPEN, CLOSED] }
+        unreadCount: { type: integer, minimum: 0 }
+    ConsultationPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Consultation' }
+        nextCursor: { type: [string, 'null'], format: uuid }
+    ConsultationMessageCreate:
+      type: object
+      additionalProperties: false
+      required: [clientMessageId, text]
+      properties:
+        clientMessageId: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 4000, description: UTF-8 payload <= 16384 bytes }
+    ConsultationMessage:
+      type: object
+      additionalProperties: false
+      required: [messageId, conversationId, clientMessageId, senderAccountId, text, sentAt, deliveryState]
+      properties:
+        messageId: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        clientMessageId: { type: string, format: uuid }
+        senderAccountId: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 4000 }
+        sentAt: { type: string, format: date-time }
+        deliveryState: { type: string, enum: [PERSISTED, READ] }
+    ConsultationMessagesPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextBeforeId]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ConsultationMessage' }
+        nextBeforeId: { type: [string, 'null'], format: uuid }
+    ConsultationReadCursor:
+      type: object
+      additionalProperties: false
+      required: [lastReadMessageId]
+      properties:
+        lastReadMessageId: { type: string, format: uuid }
+    ConsultationReceipt:
+      type: object
+      additionalProperties: false
+      required: [id, status, version]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, minLength: 1 }
+        version: { type: integer, minimum: 1 }
   securitySchemes:
     userBearer:
       type: http

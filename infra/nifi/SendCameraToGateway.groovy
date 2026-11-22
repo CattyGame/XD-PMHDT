@@ -70,6 +70,7 @@ try {
             session.read(ff, { input -> input.transferTo(output) } as InputStreamCallback)
         }
         int status = req.responseCode
+        ff = session.putAttribute(ff, 'camera.delivery.http_status', Integer.toString(status))
         if (status == 202) {
             def receipt = readJson(req)
             if (receipt.requestId != eventId || receipt.deviceId != device || receipt.version != 1 ||
@@ -79,7 +80,14 @@ try {
             ff = session.write(ff, { it.write(JsonOutput.toJson(receipt).getBytes(StandardCharsets.UTF_8)) } as OutputStreamCallback)
             ff = session.putAllAttributes(ff, ['mime.type':'application/json', 'filename':eventId + '.receipt.json',
                 'camera.reporting.contract':'receipt-v1', 'camera.receipt.request_id': eventId,
-                'camera.receipt.batch_id': receipt.batchId])
+                'camera.receipt.batch_id': receipt.batchId, 'camera.reporting.retries':'0'])
+            def values = [eventId, device, hash, receipt.batchId, '1', receipt.sourceAcceptedAt, receipt.correlationId]
+            def arguments = [:]
+            values.eachWithIndex { value, index ->
+                arguments['sql.args.' + (index + 1) + '.type'] = '12'
+                arguments['sql.args.' + (index + 1) + '.value'] = value.toString()
+            }
+            ff = session.putAllAttributes(ff, arguments)
             session.transfer(ff, REL_SUCCESS)
         } else {
             String code = null
