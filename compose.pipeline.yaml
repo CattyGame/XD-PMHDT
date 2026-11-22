@@ -1,0 +1,30 @@
+# Explicit asynchronous pipeline; merge after dev/ADR005/workers, before capacity.
+# Provision the publisher DB role and broker topology before enabling this profile.
+services:
+  analysis-api:
+    environment:
+      Outbox__Enabled: "true"
+      Outbox__PollSeconds: "1"
+      Outbox__MinOccurredAtUtc: "${AURA_PIPELINE_START_UTC:?Set the authorized publisher start time}"
+      ConnectionStrings__OutboxPublisher: >-
+        Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=aura_analysis_publisher;
+        Password="${ANALYSIS_PUBLISHER_DB_PASSWORD:?Set ANALYSIS_PUBLISHER_DB_PASSWORD}";
+        Maximum Pool Size=8;Minimum Pool Size=0;Timeout=5;Command Timeout=10
+      RabbitMq__Host: rabbitmq
+      RabbitMq__VirtualHost: /aura-s3
+      RabbitMq__User: s3-publisher
+      RabbitMq__Password: "${ANALYSIS_PUBLISHER_RABBITMQ_PASSWORD:?Set ANALYSIS_PUBLISHER_RABBITMQ_PASSWORD}"
+  billing-api:
+    environment:
+      BillingSettlement__Enabled: "true"
+      BillingPaymentEvents__Enabled: "true"
+  notification-api:
+    environment:
+      RabbitMQ__AutoStart: "true"
+      RabbitMQ__UserName: s3-notification
+      RabbitMQ__VirtualHost: /aura-s3
+      Services__Profile__BaseUrl: http://profile-api:8080
+      ServiceAuth__Issuer: aura-identity-local
+  analysis-worker:
+    environment:
+      ServiceAuth__Issuer: aura-identity-local

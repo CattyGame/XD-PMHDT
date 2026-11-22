@@ -1,0 +1,28 @@
+name: M1 Sprint 7 security
+on:
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Security and capacity gate controls
+        run: |
+          python -m unittest discover -s scripts/release -p test_security_gate.py
+          python -m unittest discover -s scripts/dev -p test_capacity_budget.py
+      - name: Scan current source and lockfiles
+        run: python scripts/release/security_gate.py --source . --output "$RUNNER_TEMP/m1-security.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m1-security-${{ github.sha }}
+          path: ${{ runner.temp }}/m1-security.json
+          if-no-files-found: error

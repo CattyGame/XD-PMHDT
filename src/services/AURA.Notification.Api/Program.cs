@@ -27,6 +27,7 @@ var databaseSettings = new NpgsqlConnectionStringBuilder
     Password = RequiredConfiguration("NotificationDatabase:Password"),
     Timeout = 5,
     CommandTimeout = 10,
+    MaxPoolSize = builder.Configuration.GetValue("NotificationDatabase:MaximumPoolSize", 16),
     IncludeErrorDetail = false,
 
     // Local: loopback on host or private Docker network.
