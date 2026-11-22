@@ -52,7 +52,8 @@ $migrations = @(
     "infra/postgres/migrations/020_notification_consultations.sql",
     "infra/postgres/migrations/019_shared_audit.sql",
     "infra/postgres/migrations/020_camera_clinic_binding.sql",
-    "infra/postgres/migrations/021_versioned_catalog_and_push_templates.sql"
+    "infra/postgres/migrations/021_versioned_catalog_and_push_templates.sql",
+    "infra/postgres/migrations/022_outbox_publisher_role.sql"
 )
 
 foreach ($migration in $migrations) {
@@ -105,8 +106,7 @@ finally {
 }
 
 if ($ConfigureRuntimeLogins) {
-    foreach ($service in @("identity", "profile", "analysis", "billing", "notification")) {
-        $role = "aura_${service}_app"
+    foreach ($role in @("aura_identity_app", "aura_profile_app", "aura_analysis_app", "aura_billing_app", "aura_notification_app", "aura_analysis_publisher")) {
         Write-Host "Set the PostgreSQL password for $role (enter it twice)."
         # psql encrypts the password before sending it to the server.
         # Do not put plaintext passwords in SQL, command arguments or this script.
