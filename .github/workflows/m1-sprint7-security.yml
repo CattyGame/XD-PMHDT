@@ -6,6 +6,35 @@ on:
 permissions:
   contents: read
 jobs:
+  research-image-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Build the actual research image without embedding model weights or secrets
+        run: docker build --pull --build-arg INSTALL_RESEARCH_CNN=true -t aura-ai:sprint7-candidate src/ai-core
+      - name: Research image regression (independent expert dataset gates are separate)
+        run: |
+          docker run --rm --cpus 2 --memory 3g --workdir /repo/src/ai-core \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/repo,readonly" \
+            --entrypoint sh aura-ai:sprint7-candidate -c \
+            'pip install --quiet --target /tmp/testlibs -c requirements.lock -r requirements-dev.txt && PYTHONPATH=/repo/src/ai-core:/tmp/testlibs python -m pytest tests -q -rs -p no:cacheprovider' \
+            | tee "$RUNNER_TEMP/ai-image-tests.log"
+      - name: Scan the exact built image ID
+        run: |
+          image_id=$(docker image inspect aura-ai:sprint7-candidate --format '{{.Id}}')
+          python scripts/release/security_gate.py --source . --image "$image_id" --output "$RUNNER_TEMP/ai-image-security.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-image-security-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/ai-image-security.json
+            ${{ runner.temp }}/ai-image-tests.log
+          if-no-files-found: error
   source-security:
     runs-on: ubuntu-latest
     timeout-minutes: 25

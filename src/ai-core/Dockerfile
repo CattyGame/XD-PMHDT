@@ -1,5 +1,5 @@
-# Use official lightweight Python image
-FROM python:3.12-slim
+# Keep Python 3.12 while using Ubuntu LTS security backports for the native image dependencies.
+FROM ubuntu:24.04
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -9,13 +9,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OPENBLAS_NUM_THREADS=1 \
     MKL_NUM_THREADS=1
 
+ENV PATH="/opt/venv/bin:$PATH"
+
 WORKDIR /app
 
 # Install system dependencies (curl for container healthcheck)
 RUN apt-get update && apt-get upgrade -y -o Acquire::Retries=0 \
     && apt-get install -y --no-install-recommends \
-    curl libgomp1 \
+    python3.12 python3.12-venv curl libgomp1 \
     && rm -rf /var/lib/apt/lists/*
+RUN python3.12 -m venv /opt/venv
 
 # Copy and install python dependencies
 COPY requirements.txt requirements.lock ./
