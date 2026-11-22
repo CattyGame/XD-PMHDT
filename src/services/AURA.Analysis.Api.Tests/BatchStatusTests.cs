@@ -230,6 +230,38 @@ public sealed class BatchStatusTests
         Assert.Equal(0, access.Calls);
     }
 
+    [Theory]
+    [InlineData(false, 0, true)]
+    [InlineData(true, 0, false)]
+    [InlineData(false, 1, false)]
+    public async Task Grouped_batches_rebuild_missing_cache_after_authorization_and_tolerate_redis_outage(
+        bool redisDown, int pending, bool rebuilt)
+    {
+        var response = BatchStatusProjection.Create(Snapshot(Row("COMPLETED"), Row("LOW_QUALITY")))
+            with { UploadPending = pending };
+        var progress = new ProgressStub { ThrowOnRead = redisDown };
+        var groups = new Grouped(response);
+        var actual = await new BatchStatusService(new Repository(), new Access(), progress, groups)
+            .GetAsync(Actor, null, Identity.BatchId, default);
+        Assert.Same(response, actual);
+        Assert.Equal(rebuilt, progress.RebuildCalled);
+        if (rebuilt) Assert.Equal(2, progress.Outcomes.Count);
+        progress.RebuildCalled = false;
+        groups.Denied = true;
+        await Assert.ThrowsAsync<UploadFailure>(() => new BatchStatusService(new Repository(), new Access(), progress, groups)
+            .GetAsync(Actor, null, Identity.BatchId, default));
+        Assert.False(progress.RebuildCalled);
+    }
+
+    private sealed class Grouped(BatchStatusResponse response) : IGroupedBatchStatusReader
+    {
+        public bool Denied;
+        public Task<BatchStatusResponse?> TryReadAsync(Guid actor, Guid? clinic, Guid batch,
+            string? correlation, CancellationToken ct) => Denied
+            ? throw new UploadFailure(404, "ERR_NOT_FOUND", "Missing")
+            : Task.FromResult<BatchStatusResponse?>(response);
+    }
+
     private sealed class Repository : IBatchStatusRepository
     {
         public bool Found = true, ReadMissing;
