@@ -12,7 +12,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Install system dependencies (curl for container healthcheck)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y -o Acquire::Retries=0 \
+    && apt-get install -y --no-install-recommends \
     curl libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -28,6 +29,9 @@ RUN if [ "$INSTALL_RESEARCH_CNN" = "true" ]; then \
     pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu -r requirements-cnn.txt; \
     pip install --no-cache-dir -r requirements-avr.txt; \
     fi
+
+# PyTorch requires setuptools; update its vulnerable vendored dependencies too.
+RUN pip install --no-cache-dir -c requirements.lock setuptools && pip check
 
 # Create non-root user for container security
 RUN useradd -m -u 1001 appuser

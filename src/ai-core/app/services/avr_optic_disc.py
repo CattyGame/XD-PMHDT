@@ -1,6 +1,7 @@
 """Pinned PVBM optic-disc ONNX inference; predictions are not expert reference landmarks."""
 import numpy as np
 from PIL import Image
+from functools import lru_cache
 
 from .vision_runtime import cv2
 
@@ -8,10 +9,9 @@ OD_REVISION = 'cf1f116d6b9898aa7b2aa3b075e071d3460e3a6e'
 OD_SHA256 = 'f72f6c9ea2ade798b80539de77fa610bb6553bb0fd7fcb78d1e841982cae0b5f'
 
 
-def locate_optic_disc(rgb, model):
-    if model.get('model_type') != 'RRWNET_RITE':
-        from .avr_geometry import estimate_optic_disc
-        return estimate_optic_disc(rgb)
+@lru_cache(maxsize=1)
+def _optic_disc_session(path, digest):
+    # load_avr_model verifies the pinned digest on every request before reuse.
     import onnxruntime as ort
 
     options = ort.SessionOptions()
@@ -19,7 +19,14 @@ def locate_optic_disc(rgb, model):
     options.inter_op_num_threads = 1
     options.enable_cpu_mem_arena = False
     options.enable_mem_pattern = False
-    session = ort.InferenceSession(model['od_weights_path'], options, providers=['CPUExecutionProvider'])
+    return ort.InferenceSession(path, options, providers=['CPUExecutionProvider'])
+
+
+def locate_optic_disc(rgb, model):
+    if model.get('model_type') != 'RRWNET_RITE':
+        from .avr_geometry import estimate_optic_disc
+        return estimate_optic_disc(rgb)
+    session = _optic_disc_session(model['od_weights_path'], model['od_weights_sha256'])
     small = np.asarray(Image.fromarray(rgb).resize((512, 512), Image.Resampling.BICUBIC), dtype=np.float32) / 255
     normalized = (small - np.array([0.485, 0.456, 0.406], np.float32)) / np.array([0.229, 0.224, 0.225], np.float32)
     logits = session.run(None, {session.get_inputs()[0].name: normalized.transpose(2, 0, 1)[None]})[0]

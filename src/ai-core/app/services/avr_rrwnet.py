@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from functools import lru_cache
 
 import numpy as np
 from PIL import Image
@@ -112,19 +113,27 @@ def enhance_rrwnet(rgb):
     return enhanced.astype(np.float32), fov
 
 
-def rrwnet_probabilities(rgb, model):
+@lru_cache(maxsize=1)
+def _rrwnet_network(path, digest):
     import torch
     from safetensors.torch import load_model
     from .third_party.rrwnet.model import RRWNet
+    network = RRWNet().eval()
+    load_model(network, path, strict=True, device='cpu')
+    network.to(memory_format=torch.channels_last)
+    return network
+
+
+def rrwnet_probabilities(rgb, model):
+    import torch
 
     enhanced, fov = enhance_rrwnet(rgb)
     height, width = enhanced.shape[:2]
     dy, dx = 32 - height % 32, 32 - width % 32
     top, left = dy // 2, dx // 2
     padded = np.pad(enhanced, ((top, dy - top), (left, dx - left), (0, 0)))
-    network = RRWNet().eval()
-    load_model(network, model['weights_path'], strict=True, device='cpu')
-    network.to(memory_format=torch.channels_last)
+    # Artifact hashes remain verified by load_avr_model before every inference.
+    network = _rrwnet_network(model['weights_path'], model['weights_sha256'])
     tensor = torch.from_numpy(padded.transpose(2, 0, 1).copy())[None].to(memory_format=torch.channels_last)
     with torch.inference_mode():
         probabilities = torch.sigmoid(network(tensor)[-1])[0].permute(1, 2, 0).numpy()

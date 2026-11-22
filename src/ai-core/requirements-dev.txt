@@ -1,4 +1,5 @@
 httpx
+httpx2
 pytest
 PyYAML
 jsonschema
