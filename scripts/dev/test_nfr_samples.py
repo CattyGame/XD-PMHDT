@@ -4,10 +4,20 @@ import json
 import urllib.error
 from unittest.mock import patch
 import unittest
+import tempfile
+from pathlib import Path
 import test_real_batch as batch
 
 
 class NfrSamplesTests(unittest.TestCase):
+    def test_checkpoint_is_readable_and_keeps_incomplete_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)/'evidence.json'
+            batch.save_evidence(output,{'status':'RUNNING','declared':100})
+            self.assertEqual('RUNNING',json.loads(output.read_text())['status'])
+            batch.save_evidence(output,{'status':'FAIL','declared':100})
+            self.assertEqual('FAIL',json.loads(output.read_text())['status'])
+            self.assertFalse(output.with_suffix('.pending').exists())
     def test_only_explicit_busy_response_is_retried_with_same_operation(self):
         def busy(code):return urllib.error.HTTPError('http://localhost',409,'busy',{},io.BytesIO(json.dumps(
             {'error':{'code':code,'retryable':True}}).encode()))
@@ -42,6 +52,10 @@ class NfrSamplesTests(unittest.TestCase):
             with self.assertRaises(ValueError):batch.classify_real_result(detail)
         self.assertEqual('QUALITY_FAILURE',batch.classify_real_result({'processingStatus':'FAILED',
             'error':{'code':'LOW_QUALITY'}})['measurement'])
+
+    def test_canonical_low_quality_status_is_a_terminal_quality_failure(self):
+        self.assertEqual('QUALITY_FAILURE',batch.classify_real_result({'processingStatus':'LOW_QUALITY',
+            'error':{'code':'ERR_IMAGE_LOW_QUALITY'}})['measurement'])
 
 
 if __name__=='__main__':unittest.main()

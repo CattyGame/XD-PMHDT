@@ -16,7 +16,8 @@ $dc = @('--project-directory','.')
 foreach ($f in $files) { $dc += @('-f',$f) }
 # Render chứa secret: lưu vào thư mục riêng bên ngoài Git, không in toàn bộ ra log.
 docker compose @dc config --format json | Set-Content "$env:USERPROFILE/.aura/capacity-resolved.json" -Encoding utf8
-python scripts/dev/capacity_budget.py "$env:USERPROFILE/.aura/capacity-resolved.json" --output "$env:USERPROFILE/.aura/capacity-evidence.json"
+$dockerMemory = docker info --format '{{.MemTotal}}'
+python scripts/dev/capacity_budget.py "$env:USERPROFILE/.aura/capacity-resolved.json" --host-memory-bytes $dockerMemory --output "$env:USERPROFILE/.aura/capacity-evidence.json"
 ```
 
 Chỉ khởi động khi budget đạt và đủ RAM vật lý cho tổng các memory limit cùng headroom hệ điều hành. Không chạy `down -v` hoặc xóa volume môi trường nhóm để diễn tập.
@@ -25,6 +26,8 @@ Chỉ khởi động khi budget đạt và đủ RAM vật lý cho tổng các m
 
 - Năm API có pool tối đa 16/API: 80 kết nối. Analysis outbox là **data source khác**, thêm 8.
 - Bốn worker × 12: 48. Tổng 136, cộng 16 headroom vận hành = 152, nhỏ hơn `max_connections=160`.
+- Overlay capacity cuối cùng đặt `AURA_WORKER_REPLICAS=4` mặc định; dùng `1` cho phép đo đối chứng, rồi render/check lại budget. Overlay research riêng vẫn mặc định một worker để chạy độc lập an toàn.
+- Retry/dead-letter của worker dùng `aura.s3.retry.jobs` / `aura.s3.dead.jobs`, routing key `jobs`. Handoff dùng channel publish riêng, mandatory và confirm trước ACK. Mỗi worker có thêm tối đa một channel publish ngắn hạn khi chuyển retry/dead-letter.
 - Pool tối thiểu 0. Upload đồng thời 4, pool Analysis 16 đáp ứng `2 × capacity + 4`. Không cache quyền cho phép để đạt latency.
 - Mỗi worker một consumer/channel có ACK, prefetch được chặn; đo số consumer thật bằng `Test-RabbitMqScaling.ps1`. Một AI slot có thể làm bốn worker chờ/429; không hứa tăng tốc tuyến tính.
 - Reporting NiFi là DB riêng; không cộng vào PostgreSQL nghiệp vụ và không cho writer ghi chéo schema. Nếu triển khai Reporting hoặc NiFi, tính thêm RAM và pool riêng theo `camera_tls_runbook.md`.
@@ -37,6 +40,8 @@ python scripts/release/security_gate.py --source . --output "$env:USERPROFILE/.a
 # Xuất từng image đúng candidate; không quét tag cũ rồi coi là image mới.
 docker image save aura-analysis:candidate -o "$env:USERPROFILE/.aura/analysis-candidate.tar"
 python scripts/release/security_gate.py --source . --image-archive "$env:USERPROFILE/.aura/analysis-candidate.tar" --output "$env:USERPROFILE/.aura/candidate-security.json"
+$imageId = docker image inspect aura-analysis:candidate --format '{{.Id}}'
+python scripts/release/security_gate.py --source . --image $imageId --output "$env:USERPROFILE/.aura/local-image-security.json"
 ```
 
 Scanner được pin digest. Chỉ loại trừ hằng số công khai `devstoreaccount1` của [Azurite](https://github.com/Azure/Azurite#default-storage-account), không loại trừ toàn bộ Azure key. High/Critical còn lại phải sửa hoặc có exception cụ thể: ID, target, package/version, lý do, owner, expiry. `PASS_WITH_EXCEPTIONS` vẫn trả exit code khác 0 để người nghiệm thu xem riêng. Scan lỗi/mất kết quả không được coi PASS.
@@ -58,5 +63,9 @@ RPO phải nêu điểm snapshot được bảo vệ và ghi đã ACK sau snapsh
 ## Workload và phục hồi
 
 Chạy `Test-BatchInfrastructureStress.ps1` với manifest 100 ảnh khác bytes, dữ liệu được phép sử dụng, gồm measured/unavailable/quality failure; cùng patient/clinic context được cấp quyền. Firebase token qua môi trường riêng, không đưa vào manifest. Upload 4–6 ảnh đồng thời, không gửi 100 ảnh trong một multipart. UNKNOWN giữ nghĩa vụ đối soát, không tự release do timeout.
+
+Thêm `-RequireRealResults -AllowQualityFailures -RequireFinancialReconciliation`: chỉ cho phép lỗi chất lượng ảnh có mã rõ ràng; lỗi hạ tầng không được coi là quality failure. Harness lưu checkpoint `RUNNING`, hash script, thời gian quan sát; lần resume không đại diện thời gian từ admission. Đối chiếu timeline PostgreSQL riêng.
+
+Trong fixture dùng riêng có label `aura.acceptance`, chạy `python scripts/dev/test_dependency_recovery.py --url http://127.0.0.1:<gateway> --batch-id <batch> --fixture-label <giá-trị-label> --postgres <container> --redis <container> --rabbitmq <container> --output <ngoài-Git>`. Script từ chối container sai label, phục hồi dependency trong `finally`, kiểm 503 khi PostgreSQL dừng, đọc bền vững khi Redis/broker dừng và dựng lại cache sau `FLUSHDB`. Đây không thay thế gate settlement/replay hoặc kiểm FCM provider.
 
 Đo riêng cold/warm/queue/retry/429; ghi CPU/RAM, artifact hash, actual replicas, số mẫu và cửa sổ quan sát. Xóa Redis chỉ trong fixture, rồi đọc lại từ PostgreSQL. Ngắt broker/Redis/DB/FCM có khôi phục; kiểm ledger/inbox không tăng khi replay. Mất FCM không được làm mất inbox. Uptime trong cửa sổ thử không đại diện uptime năm; gate khoa học SCRUM-373 vẫn độc lập.

@@ -13,7 +13,8 @@ param(
     [string]$Output = 'artifacts/m1-live-batch.json',
     [int]$BatchCount = 100,
     [ValidateSet(1,4)][int]$ExpectedWorkers = 1,
-    [switch]$RequireRealResults
+    [switch]$RequireRealResults,
+    [switch]$AllowQualityFailures
 )
 $ErrorActionPreference = 'Stop'
 $batchArgs = @('--url',$GatewayUrl,'--images',$ImageDirectory,'--output',$Output,'--count',"$BatchCount",'--containers') + $Containers
@@ -28,5 +29,6 @@ if ($PostgresContainer) { $batchArgs += @('--postgres-container',$PostgresContai
 if ($RequireFinancialReconciliation) { $batchArgs += '--require-financial-reconciliation' }
 $batchArgs += @('--expected-workers',"$ExpectedWorkers")
 if ($RequireRealResults) { $batchArgs += '--require-real-results' }
+if ($AllowQualityFailures) { $batchArgs += '--allow-quality-failures' }
 & python (Join-Path $PSScriptRoot 'test_real_batch.py') @batchArgs
 if ($LASTEXITCODE -ne 0) { throw 'Real image pipeline acceptance failed; inspect the evidence file.' }

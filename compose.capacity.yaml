@@ -1,5 +1,8 @@
 # Merge last for the measured, single-host research profile (four worker replicas).
 services:
+  analysis-worker:
+    deploy:
+      replicas: ${AURA_WORKER_REPLICAS:-4}
   postgres:
     command: [postgres, -c, max_connections=160, -c, shared_buffers=128MB, -c, work_mem=2MB]
     mem_limit: 1g

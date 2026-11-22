@@ -9,6 +9,11 @@ spec.loader.exec_module(gate)
 
 
 class SecurityGateTests(unittest.TestCase):
+    def test_local_and_remote_images_require_full_immutable_digest(self):
+        for value in ['sha256:'+'a'*64,'registry.example/aura@sha256:'+'0'*64]:
+            self.assertTrue(gate.pinned_image(value))
+        for value in ['aura:latest','sha256:abc','repo@sha256:nope','bad name@sha256:'+'a'*64]:
+            self.assertFalse(gate.pinned_image(value))
     def test_secret_matches_are_redacted_but_remain_blocking(self):
         report = {'Results': [{'Target': 'source', 'Secrets': [{'RuleID': 'private-key', 'Match': 'REAL_KEY', 'Severity': 'HIGH'}]}]}
         safe = gate.redact(report)

@@ -35,5 +35,13 @@ class CapacityBudgetTests(unittest.TestCase):
         cfg=self.config();del cfg['services']['profile-api']['mem_limit']
         self.assertEqual('FAIL',budget.evaluate(cfg)['status'])
 
+    def test_memory_budget_counts_replica_limits_and_requires_host_headroom(self):
+        cfg=self.config()
+        result=budget.evaluate(cfg,host_memory_bytes=8*1024**3)
+        self.assertEqual(7680*1024**2,result['memoryBudget']['maximumContainerBytes'])
+        self.assertEqual('FAIL',result['status'])
+        self.assertEqual('PASS',budget.evaluate(cfg,host_memory_bytes=10*1024**3)['status'])
+        self.assertEqual('NOT_TESTED',budget.evaluate(cfg)['memoryBudget']['status'])
+
 
 if __name__=='__main__':unittest.main()

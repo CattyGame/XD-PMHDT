@@ -15,7 +15,13 @@ def pool(connection):
     return size, 'maximumpoolsize' in values or 'maxpoolsize' in values
 
 
-def evaluate(config,headroom=16):
+def memory_bytes(value):
+    match=re.fullmatch(r'(\d+)([kmgt]?)(?:i?b)?',str(value).strip().lower())
+    if not match or int(match[1])<1:raise ValueError('Invalid memory limit')
+    return int(match[1])*1024**('kmgt'.index(match[2])+1 if match[2] else 0)
+
+
+def evaluate(config,headroom=16,host_memory_bytes=None,memory_headroom_bytes=1024**3):
     services=config['services'];issues=[];rows=[]
     command=services['postgres'].get('command',[])
     if isinstance(command,list):command=' '.join(command)
@@ -45,8 +51,24 @@ def evaluate(config,headroom=16):
         rows.append(dict(service=name,replicas=replicas,poolsPerProcess=pools,maximumConnections=replicas*sum(pools)))
     total=sum(row['maximumConnections'] for row in rows)
     if total+headroom>maximum:issues.append('Application pools plus operational headroom exceed max_connections')
+    memory_rows=[]
+    for name in ['postgres','redis','rabbitmq','azurite','api-gateway','ai-core',*[r['service'] for r in rows]]:
+        if name not in services:continue
+        service=services[name];deploy=service.get('deploy',{})
+        limit=service.get('mem_limit') or deploy.get('resources',{}).get('limits',{}).get('memory')
+        if limit is None:
+            issues.append(name+': memory limit missing');continue
+        memory_rows.append(dict(service=name,maximumBytes=int(deploy.get('replicas',1))*memory_bytes(limit)))
+    memory_total=sum(row['maximumBytes'] for row in memory_rows)
+    if host_memory_bytes is not None:
+        if host_memory_bytes<=0 or memory_headroom_bytes<0:raise ValueError('Invalid host memory budget')
+        if memory_total+memory_headroom_bytes>host_memory_bytes:issues.append('Container memory limits plus headroom exceed Docker host RAM')
     return dict(status='FAIL' if issues else 'PASS',maximumApplicationConnections=total,
                 operationalHeadroom=headroom,postgresMaxConnections=maximum,services=rows,issues=issues,
+                memoryBudget=dict(status='NOT_TESTED' if host_memory_bytes is None else
+                    'PASS' if memory_total+memory_headroom_bytes<=host_memory_bytes else 'FAIL',
+                    hostBytes=host_memory_bytes,maximumContainerBytes=memory_total,
+                    headroomBytes=memory_headroom_bytes,services=memory_rows),
                 scope='Configuration upper bound; verify actual process/replica counts and memory under load separately')
 
 
@@ -54,7 +76,10 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('config',type=Path,help='docker compose config --format json output, kept outside Git')
     parser.add_argument('--output',type=Path,required=True)
-    args=parser.parse_args();raw=args.config.read_bytes();result=evaluate(json.loads(raw.decode('utf-8-sig')))
+    parser.add_argument('--host-memory-bytes',type=int,help='Docker engine MemTotal, not Windows physical RAM')
+    parser.add_argument('--memory-headroom-bytes',type=int,default=1024**3)
+    args=parser.parse_args();raw=args.config.read_bytes();result=evaluate(json.loads(raw.decode('utf-8-sig')),
+        host_memory_bytes=args.host_memory_bytes,memory_headroom_bytes=args.memory_headroom_bytes)
     result['configurationSha256']=hashlib.sha256(raw).hexdigest()
     args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(result,indent=2),encoding='utf-8')
     print(json.dumps(result));return 0 if result['status']=='PASS' else 1

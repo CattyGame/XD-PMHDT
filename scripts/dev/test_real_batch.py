@@ -14,6 +14,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timezone
+
+
+def save_evidence(path, evidence):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    pending=path.with_suffix('.pending')
+    pending.write_text(json.dumps(evidence,indent=2),encoding='utf-8')
+    pending.replace(path)
 
 
 def latency_summary(samples):
@@ -26,10 +34,10 @@ def latency_summary(samples):
 
 def classify_real_result(detail):
     status=detail.get('processingStatus')
-    if status=='FAILED':
+    if status in ('FAILED','LOW_QUALITY'):
         code=(detail.get('error') or {}).get('code')
         if not code:raise ValueError('Terminal failure needs an explicit reason')
-        return {'measurement':'QUALITY_FAILURE' if code=='LOW_QUALITY' else 'PIPELINE_FAILURE','errorCode':code}
+        return {'measurement':'QUALITY_FAILURE' if code in ('LOW_QUALITY','ERR_IMAGE_LOW_QUALITY') else 'PIPELINE_FAILURE','errorCode':code}
     result=detail.get('result')
     if status!='COMPLETED' or not isinstance(result,dict) or result.get('isMock') is not False:
         raise ValueError('Real acceptance requires completed non-mock results')
@@ -104,7 +112,9 @@ def main():
     p.add_argument("--containers", nargs="+", required=True)
     p.add_argument('--expected-workers',type=int,choices=[1,4])
     p.add_argument('--require-real-results',action='store_true',help='Read every terminal result and check AVR/null/provenance')
+    p.add_argument('--allow-quality-failures',action='store_true',help='Allow only explicit low-quality terminal failures, still reconcile their release')
     args = p.parse_args()
+    if args.allow_quality_failures and not args.require_real_results:raise ValueError('Quality acceptance requires real per-image result verification')
     token = os.environ.get("AURA_TEST_FIREBASE_TOKEN")
     if args.require_financial_reconciliation and not args.postgres_container:
         raise ValueError("--require-financial-reconciliation requires --postgres-container")
@@ -166,23 +176,34 @@ def main():
                           expectedStatus=item["expectedStatus"],expectedAvrAvailable=item.get('expectedAvrAvailable'),
                           expectedErrorCode=item.get('expectedErrorCode')))
     evidence = {"status": "RUNNING", "declared": len(items), "samples": [],
+                'observedFromUtc':datetime.now(timezone.utc).isoformat(),
+                'harnessSha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                'elapsedScope':'Resumed observation only' if args.resume_batch_id else 'Admission through reconciliation',
+                'resumedExistingBatch':bool(args.resume_batch_id),
                 "clinicContextId": str(args.clinic_context_id) if args.clinic_context_id else None,
                 "manifest": items,"apiSamples":[],"inputManifestSha256":hashlib.sha256(json.dumps(
                     [{k:i[k] for k in ('fileName','sha256','patientId','expectedStatus','expectedAvrAvailable','expectedErrorCode')} for i in items],sort_keys=True).encode()).hexdigest(),
                 'hardware':{'platform':platform.platform(),'logicalCpuCount':os.cpu_count()},
-                'uptimeScope':'This workload observation window only; no annual availability inference'}
+                'uptimeScope':'This workload observation window only; no annual availability inference',
+                'qualityAcceptancePolicy':'Known low-quality failures allowed' if args.allow_quality_failures else 'Exact predeclared terminal counts'}
     started = time.monotonic()
+    next_checkpoint=started
     base = args.url.rstrip("/")
     def api(path, method="GET", body=None, content_type="application/json", key=None):
         if args.clinic_context_id:
             path += "?" + urllib.parse.urlencode({"clinicContextId": str(args.clinic_context_id)})
-        called=time.monotonic();code=None
-        try:return request(base, token, path, method, body, content_type, key)
-        except urllib.error.HTTPError as error:code=error.code;raise
-        except Exception:code=0;raise
-        finally:evidence['apiSamples'].append({'method':method,'durationMs':(time.monotonic()-called)*1000,
-                                              'succeeded':code is None,'httpErrorStatus':code})
+        for attempt in range(4):
+            called=time.monotonic();code=None
+            try:return request(base, token, path, method, body, content_type, key)
+            except urllib.error.HTTPError as error:
+                code=error.code
+                if method!='GET' or code!=503 or attempt==3 or time.monotonic()+2>=started+args.timeout:raise
+            except Exception:code=0;raise
+            finally:evidence['apiSamples'].append({'method':method,'durationMs':(time.monotonic()-called)*1000,
+                                                  'succeeded':code is None,'httpErrorStatus':code})
+            time.sleep(2)
     def sample():
+        nonlocal next_checkpoint
         result = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{json .}}", *args.containers], capture_output=True, text=True, check=True)
         rows = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         if len(rows) != len(args.containers):
@@ -190,6 +211,10 @@ def main():
         evidence["samples"].append(rows)
         if any(float(row["MemPerc"].rstrip("%")) >= 80 for row in rows):
             raise RuntimeError("Observed memory >=80%")
+        if time.monotonic()>=next_checkpoint:
+            evidence['lastObservedUtc']=datetime.now(timezone.utc).isoformat()
+            save_evidence(args.output,evidence)
+            next_checkpoint=time.monotonic()+30
     try:
         sample()
         if args.resume_batch_id:
@@ -250,7 +275,8 @@ def main():
         accepted = api(f"/api/v1/analysis-upload-batches/{batch}/finalize", "POST", b"{}", key=str(uuid.uuid4()))
         expected_by_analysis = {}
         expected_by_name = {item["fileName"]: item["expectedStatus"] for item in items}
-        accepted_names = [item["fileName"] for item in accepted["items"] if item["uploadStatus"] == "ACCEPTED"]
+        accepted_names = [item["fileName"] for item in accepted["items"] if item.get("analysisId")
+                          and item.get("processingStatus") in ("QUEUED","DUPLICATE")]
         if len(accepted_names) != args.count or set(accepted_names) != set(expected_by_name):
             raise RuntimeError("Finalize receipts do not match every declared image exactly once")
         for receipt in accepted["items"]:
@@ -264,7 +290,8 @@ def main():
             evidence["outcome"] = result
             summary = result["summary"]
             if summary["total"] == len(items) and summary["active"] == 0:
-                if summary["succeeded"] != expected_succeeded or summary["failed"] != expected_failed or summary["duplicate"]:
+                if summary['duplicate'] or summary['succeeded']+summary['failed']!=args.count or (not args.allow_quality_failures and
+                        (summary["succeeded"] != expected_succeeded or summary["failed"] != expected_failed)):
                     raise RuntimeError("Terminal outcome counts do not match the acceptance manifest")
                 break
             time.sleep(2)
@@ -279,10 +306,15 @@ def main():
             evidence['workerReplicas']=actual
         if args.require_real_results:
             details=[]
+            evidence['acceptanceViolations']=[]
             expected_by_name={i['fileName']:i for i in items}
             for receipt in accepted['items']:
                 detail=api('/api/v1/analyses/'+receipt['analysisId'])
                 row=classify_real_result(detail);expected=expected_by_name[receipt['fileName']]
+                if args.allow_quality_failures:
+                    if row['measurement']=='PIPELINE_FAILURE':
+                        evidence['acceptanceViolations'].append({'analysisId':receipt['analysisId'],'code':row['errorCode']})
+                    expected_by_analysis[receipt['analysisId']]='FAILED' if row['measurement'] in ('QUALITY_FAILURE','PIPELINE_FAILURE') else 'SUCCEEDED'
                 if expected.get('expectedAvrAvailable') is not None and (row['measurement']=='MEASURED')!=expected['expectedAvrAvailable']:
                     raise RuntimeError('Measurement availability disagrees with workload manifest')
                 if expected.get('expectedErrorCode') and row.get('errorCode')!=expected['expectedErrorCode']:
@@ -354,6 +386,8 @@ def main():
                 sample()
                 time.sleep(2)
             evidence["status"] = "PASS"
+        if evidence.get('acceptanceViolations'):
+            raise RuntimeError('Infrastructure failures are not accepted quality failures; complete diagnostics retained')
     except Exception as error:
         evidence["status"] = "FAIL"
         evidence["errorType"] = type(error).__name__
@@ -363,8 +397,8 @@ def main():
         evidence['apiLatency']=latency_summary([r['durationMs'] for r in evidence['apiSamples']])
         evidence['apiLatency']['coldInterpretation']='First observed request only; process/model cold start not inferred'
         evidence['apiErrorRate']=sum(not r['succeeded'] for r in evidence['apiSamples'])/max(1,len(evidence['apiSamples']))
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+        evidence['observedToUtc']=datetime.now(timezone.utc).isoformat()
+        save_evidence(args.output,evidence)
 
 
 if __name__ == "__main__":

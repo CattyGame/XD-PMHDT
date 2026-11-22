@@ -37,7 +37,7 @@ class LiveGateTests(unittest.TestCase):
             module.grant(path, True)
             self.assertEqual(published, path.read_bytes())
 
-    def run_gate(self, directory, succeeded, clinic=None, interrupt=False, resume=False, financial=None):
+    def run_gate(self, directory, succeeded, clinic=None, interrupt=False, resume=False, financial=None, transient_read=False, diagnostic_failure=False):
         output = Path(directory) / "result.json"
         image_dir = Path(directory) / "images"
         image_dir.mkdir()
@@ -50,10 +50,14 @@ class LiveGateTests(unittest.TestCase):
         ledger_reads = []
 
         def response(base, token, path, method="GET", body=None, content_type=None, key=None):
+            nonlocal transient_read
             parsed = urllib.parse.urlsplit(path)
             self.assertEqual(urllib.parse.parse_qs(parsed.query), {"clinicContextId": [clinic]} if clinic else {})
             path = parsed.path
             paths.append((method, path))
+            if transient_read and path.startswith('/api/v1/batches/'):
+                transient_read=False
+                raise batch.urllib.error.HTTPError(base+path,503,'dependency unavailable',{},None)
             if path == "/api/v1/analysis-upload-batches":
                 declared.extend(json.loads(body)["items"])
                 return {"batchId": batch_id, "items": [{**x, "uploadStatus": "DECLARED"} for x in declared]}
@@ -64,7 +68,10 @@ class LiveGateTests(unittest.TestCase):
                 return {"itemId": key, "uploadStatus": "STAGED"}
             if method == "POST":
                 analyses.extend(str(uuid.uuid4()) for _ in declared)
-                return {"items": [{"analysisId": aid, "fileName": x["fileName"], "uploadStatus": "ACCEPTED"} for x, aid in zip(declared, analyses)]}
+                return {"items": [{"analysisId": aid, "fileName": x["fileName"], "processingStatus": "QUEUED"} for x, aid in zip(declared, analyses)]}
+            if diagnostic_failure and path.startswith('/api/v1/analyses/'):
+                if path.endswith(analyses[-1]):return {'processingStatus':'FAILED','error':{'code':'ERR_TIMEOUT'}}
+                return {'processingStatus':'COMPLETED','result':{'isMock':False,'processingTimeMs':12,'metrics':{'avRatio':0.8}}}
             if "analysis-upload-batches" in path:
                 if not declared:
                     declared.extend({"sha256": batch.hashlib.sha256(f.read_bytes()).hexdigest(), "patientId": patient,
@@ -81,6 +88,9 @@ class LiveGateTests(unittest.TestCase):
                 state = "RESERVED" if len(ledger_reads) == 1 else "CAPTURED"
                 ids = analyses if financial != "wrong_ids" else [str(uuid.uuid4()) for _ in analyses]
                 rows = ["\t".join([aid, str(uuid.uuid4()), state, "reserve", "capture" if state == "CAPTURED" else "", "", "-1", "0" if state == "CAPTURED" else "", "", "wallet", "8", "8"]) for aid in ids]
+                if diagnostic_failure and state=='CAPTURED':
+                    fields=rows[-1].split('\t');fields[2]='RELEASED';fields[4]='';fields[5]='release';fields[7]='';fields[8]='1'
+                    rows[-1]='\t'.join(fields)
                 return SimpleNamespace(stdout="\n".join(rows))
             return SimpleNamespace(stdout=json.dumps([{"State": {"OOMKilled": False, "ExitCode": 0, "Running": True}}]))
         patient = str(uuid.uuid4())
@@ -94,6 +104,7 @@ class LiveGateTests(unittest.TestCase):
             args += ["--resume-batch-id", batch_id]
         if financial:
             args += ["--postgres-container", "test-pg", "--require-financial-reconciliation", "--timeout", "1"]
+        if diagnostic_failure:args+=['--require-real-results','--allow-quality-failures']
         with patch.dict(os.environ, {"AURA_TEST_FIREBASE_TOKEN": "unit-only"}), patch("sys.argv", args), patch.object(batch, "request", side_effect=response), patch.object(batch.subprocess, "run", side_effect=docker), patch.object(batch.time, "sleep"):
             if succeeded == 2 and financial != "wrong_ids":
                 batch.main()
@@ -112,6 +123,23 @@ class LiveGateTests(unittest.TestCase):
             self.assertEqual(evidence["clinicContextId"], clinic)
             self.assertEqual([method for method, _ in evidence["testPaths"]].count("PUT"), 2)
             self.assertTrue(any(path.endswith("/finalize") for _, path in evidence["testPaths"]))
+
+    def test_transient_read_outage_is_recorded_then_recovered_without_repeating_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence=self.run_gate(directory,2,transient_read=True)
+            self.assertEqual('PASS_PIPELINE_ONLY',evidence['status'])
+            self.assertEqual(1,sum(s['httpErrorStatus']==503 for s in evidence['apiSamples']))
+            self.assertEqual(1,sum(method=='POST' and path.endswith('/finalize') for method,path in evidence['testPaths']))
+
+    def test_infrastructure_failure_remains_fail_but_retains_every_result_and_settlement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence=self.run_gate(directory,1,financial='verify',diagnostic_failure=True)
+            self.assertEqual('FAIL',evidence['status'])
+            self.assertEqual(2,evidence['measurementCoverage']['denominator'])
+            self.assertEqual(1,evidence['measurementCoverage']['PIPELINE_FAILURE'])
+            self.assertEqual(2,len(evidence['financialLedger']))
+            self.assertEqual([],evidence['financialDiscrepancies'])
+            self.assertEqual(1,len(evidence['acceptanceViolations']))
 
     def test_clinic_selector_reaches_interruption_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
