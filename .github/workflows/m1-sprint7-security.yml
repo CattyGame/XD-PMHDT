@@ -18,6 +18,7 @@ jobs:
         run: |
           python -m unittest discover -s scripts/release -p test_security_gate.py
           python -m unittest discover -s scripts/dev -p test_capacity_budget.py
+          python -m unittest discover -s scripts/dev -p test_nfr_samples.py
       - name: Scan current source and lockfiles
         run: python scripts/release/security_gate.py --source . --output "$RUNNER_TEMP/m1-security.json"
       - uses: actions/upload-artifact@v4

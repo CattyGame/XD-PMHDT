@@ -3,7 +3,9 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import math
 import os
+import platform
 from pathlib import Path
 import ssl
 import subprocess
@@ -12,6 +14,43 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+
+
+def latency_summary(samples):
+    if any(not isinstance(x,(int,float)) or not math.isfinite(x) or x<0 for x in samples):
+        raise ValueError('Latency samples must be finite and nonnegative')
+    warm=sorted(samples[1:])
+    return {'count':len(samples),'coldMs':samples[0] if samples else None,
+            'warm':{'count':len(warm),**{f'p{p}Ms':warm[math.ceil(len(warm)*p/100)-1] if warm else None for p in (50,95,99)}}}
+
+
+def classify_real_result(detail):
+    status=detail.get('processingStatus')
+    if status=='FAILED':
+        code=(detail.get('error') or {}).get('code')
+        if not code:raise ValueError('Terminal failure needs an explicit reason')
+        return {'measurement':'QUALITY_FAILURE' if code=='LOW_QUALITY' else 'PIPELINE_FAILURE','errorCode':code}
+    result=detail.get('result')
+    if status!='COMPLETED' or not isinstance(result,dict) or result.get('isMock') is not False:
+        raise ValueError('Real acceptance requires completed non-mock results')
+    avr=(result.get('metrics') or {}).get('avRatio')
+    research=(result.get('research') or {}).get('avr') or {}
+    if avr is None:
+        if research.get('measurement_available') is not False or not research.get('unavailable_reason'):
+            raise ValueError('Unavailable AVR requires explicit availability and reason')
+        if result.get('riskAvailable') is not False or result.get('riskLevel') is not None:
+            raise ValueError('Unavailable research AVR cannot silently become low risk')
+        measurement='UNAVAILABLE'
+    else:
+        if isinstance(avr,bool) or not isinstance(avr,(int,float)) or not math.isfinite(avr) or avr<=0:
+            raise ValueError('Measured AVR must be finite and positive')
+        if research and research.get('measurement_available') is not True:raise ValueError('Contradictory AVR availability')
+        measurement='MEASURED'
+    latency=result.get('processingTimeMs')
+    if not isinstance(latency,(int,float)) or not math.isfinite(latency) or latency<0:raise ValueError('Missing processing duration')
+    return {'measurement':measurement,'processingTimeMs':latency,'modelVersion':result.get('modelVersion'),
+            'configVersion':result.get('configVersion'),'thresholdVersion':result.get('thresholdVersion'),
+            'unavailableReason':research.get('unavailable_reason')}
 
 
 def request(base, token, path, method="GET", body=None, content_type="application/json", key=None):
@@ -46,6 +85,8 @@ def main():
     p.add_argument("--count", type=int, default=100)
     p.add_argument("--timeout", type=int, default=1800)
     p.add_argument("--containers", nargs="+", required=True)
+    p.add_argument('--expected-workers',type=int,choices=[1,4])
+    p.add_argument('--require-real-results',action='store_true',help='Read every terminal result and check AVR/null/provenance')
     args = p.parse_args()
     token = os.environ.get("AURA_TEST_FIREBASE_TOKEN")
     if args.require_financial_reconciliation and not args.postgres_container:
@@ -73,7 +114,10 @@ def main():
             expected = record.get("expectedStatus", "SUCCEEDED").upper()
             if expected not in ("SUCCEEDED", "FAILED") or name in manifest:
                 raise ValueError("Manifest filenames must be unique and expectedStatus must be SUCCEEDED or FAILED")
-            manifest[name] = {"patientId": patient_id, "expectedStatus": expected}
+            availability=record.get('expectedAvrAvailable')
+            if availability is not None and type(availability) is not bool:raise ValueError('Expected AVR availability must be boolean')
+            manifest[name] = {"patientId": patient_id, "expectedStatus": expected,
+                              'expectedAvrAvailable':availability,'expectedErrorCode':record.get('expectedErrorCode')}
         if set(manifest) != {f.name for f in files}:
             raise ValueError("Manifest filenames must match the image directory exactly")
     elif not args.patient:
@@ -102,16 +146,25 @@ def main():
         item = manifest.get(f.name, {"patientId": args.patient, "expectedStatus": "SUCCEEDED"})
         items.append(dict(itemId=str(uuid.uuid4()), patientId=item["patientId"], fileName=f.name,
                           sha256=digest, modality="FUNDUS", eyeSide="unknown",
-                          expectedStatus=item["expectedStatus"]))
+                          expectedStatus=item["expectedStatus"],expectedAvrAvailable=item.get('expectedAvrAvailable'),
+                          expectedErrorCode=item.get('expectedErrorCode')))
     evidence = {"status": "RUNNING", "declared": len(items), "samples": [],
                 "clinicContextId": str(args.clinic_context_id) if args.clinic_context_id else None,
-                "manifest": items}
+                "manifest": items,"apiSamples":[],"inputManifestSha256":hashlib.sha256(json.dumps(
+                    [{k:i[k] for k in ('fileName','sha256','patientId','expectedStatus','expectedAvrAvailable','expectedErrorCode')} for i in items],sort_keys=True).encode()).hexdigest(),
+                'hardware':{'platform':platform.platform(),'logicalCpuCount':os.cpu_count()},
+                'uptimeScope':'This workload observation window only; no annual availability inference'}
     started = time.monotonic()
     base = args.url.rstrip("/")
     def api(path, method="GET", body=None, content_type="application/json", key=None):
         if args.clinic_context_id:
             path += "?" + urllib.parse.urlencode({"clinicContextId": str(args.clinic_context_id)})
-        return request(base, token, path, method, body, content_type, key)
+        called=time.monotonic();code=None
+        try:return request(base, token, path, method, body, content_type, key)
+        except urllib.error.HTTPError as error:code=error.code;raise
+        except Exception:code=0;raise
+        finally:evidence['apiSamples'].append({'method':method,'durationMs':(time.monotonic()-called)*1000,
+                                              'succeeded':code is None,'httpErrorStatus':code})
     def sample():
         result = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{json .}}", *args.containers], capture_output=True, text=True, check=True)
         rows = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
@@ -135,7 +188,7 @@ def main():
                 item["itemId"] = server["itemId"]
                 item["uploadStatus"] = server["uploadStatus"]
         else:
-            inventory = api("/api/v1/analysis-upload-batches", "POST", json.dumps({"items": [{k:v for k,v in item.items() if k != "expectedStatus"} for item in items]}).encode(), key=str(uuid.uuid4()))
+            inventory = api("/api/v1/analysis-upload-batches", "POST", json.dumps({"items": [{k:v for k,v in item.items() if not k.startswith('expected')} for item in items]}).encode(), key=str(uuid.uuid4()))
             batch = str(uuid.UUID(inventory["batchId"]))
             for item, admitted in zip(items, inventory["items"]):
                 if item["itemId"] != admitted["itemId"] or item["sha256"] != admitted["sha256"]:
@@ -202,6 +255,29 @@ def main():
         states = json.loads(subprocess.run(["docker", "inspect", *args.containers], capture_output=True, text=True, check=True).stdout)
         if any(s["State"]["OOMKilled"] or s["State"]["ExitCode"] == 137 or not s["State"]["Running"] for s in states):
             raise RuntimeError("Container stopped or was OOMKilled")
+        if args.expected_workers is not None:
+            actual=sum(s.get('Config',{}).get('Labels',{}).get('com.docker.compose.service')=='analysis-worker' for s in states)
+            if actual!=args.expected_workers:raise RuntimeError('Actual worker replica count disagrees with workload declaration')
+            evidence['workerReplicas']=actual
+        if args.require_real_results:
+            details=[]
+            expected_by_name={i['fileName']:i for i in items}
+            for receipt in accepted['items']:
+                detail=api('/api/v1/analyses/'+receipt['analysisId'])
+                row=classify_real_result(detail);expected=expected_by_name[receipt['fileName']]
+                if expected.get('expectedAvrAvailable') is not None and (row['measurement']=='MEASURED')!=expected['expectedAvrAvailable']:
+                    raise RuntimeError('Measurement availability disagrees with workload manifest')
+                if expected.get('expectedErrorCode') and row.get('errorCode')!=expected['expectedErrorCode']:
+                    raise RuntimeError('Failure reason disagrees with workload manifest')
+                details.append({'analysisId':receipt['analysisId'],**row})
+            evidence['resultDetails']=details
+            evidence['measurementCoverage']={k:sum(r['measurement']==k for r in details) for k in
+                ('MEASURED','UNAVAILABLE','QUALITY_FAILURE','PIPELINE_FAILURE')}
+            evidence['measurementCoverage']['denominator']=len(items)
+            durations=[r['processingTimeMs'] for r in details if 'processingTimeMs' in r]
+            evidence['aiProcessingDuration']={'allResults':latency_summary([0]+durations)['warm'],
+                'coldWarmClassification':'NOT_MEASURED: manifest order is not inference execution order',
+                'scope':'Stored processing duration; queue/network time excluded'}
         evidence["status"] = "PASS_PIPELINE_ONLY"
         if args.postgres_container:
             sql = f"""
@@ -266,6 +342,9 @@ def main():
         raise
     finally:
         evidence["elapsedSeconds"] = time.monotonic() - started
+        evidence['apiLatency']=latency_summary([r['durationMs'] for r in evidence['apiSamples']])
+        evidence['apiLatency']['coldInterpretation']='First observed request only; process/model cold start not inferred'
+        evidence['apiErrorRate']=sum(not r['succeeded'] for r in evidence['apiSamples'])/max(1,len(evidence['apiSamples']))
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
 
