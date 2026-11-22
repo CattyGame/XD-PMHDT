@@ -37,6 +37,8 @@ Chỉ khởi động khi budget đạt và đủ RAM vật lý cho tổng các m
 ```powershell
 python -m unittest discover -s scripts/release -p test_security_gate.py
 python scripts/release/security_gate.py --source . --output "$env:USERPROFILE/.aura/source-security.json"
+dotnet list AURA.sln package --vulnerable --include-transitive --format json | Set-Content "$env:USERPROFILE/.aura/nuget-vulnerabilities.json" -Encoding utf8
+python scripts/release/security_gate.py --source . --nuget-report "$env:USERPROFILE/.aura/nuget-vulnerabilities.json" --output "$env:USERPROFILE/.aura/source-and-nuget-security.json"
 # Xuất từng image đúng candidate; không quét tag cũ rồi coi là image mới.
 docker image save aura-analysis:candidate -o "$env:USERPROFILE/.aura/analysis-candidate.tar"
 python scripts/release/security_gate.py --source . --image-archive "$env:USERPROFILE/.aura/analysis-candidate.tar" --output "$env:USERPROFILE/.aura/candidate-security.json"

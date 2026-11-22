@@ -9,6 +9,13 @@ spec.loader.exec_module(gate)
 
 
 class SecurityGateTests(unittest.TestCase):
+    def test_nuget_high_advisory_blocks_and_partial_audit_is_not_accepted(self):
+        audit={'projects':[{'path':'worker.csproj','frameworks':[{'framework':'net8.0','transitivePackages':[
+            {'id':'System.Text.Json','resolvedVersion':'6.0.9','vulnerabilities':[
+                {'severity':'High','advisoryurl':'https://github.com/advisories/example'}]}]}]}]}
+        self.assertEqual('FAIL',gate.evaluate([gate.nuget_report(audit)],[],dt.date.today())['status'])
+        audit['problems']=[{'error':'feed unavailable'}]
+        with self.assertRaises(ValueError):gate.nuget_report(audit)
     def test_local_and_remote_images_require_full_immutable_digest(self):
         for value in ['sha256:'+'a'*64,'registry.example/aura@sha256:'+'0'*64]:
             self.assertTrue(gate.pinned_image(value))

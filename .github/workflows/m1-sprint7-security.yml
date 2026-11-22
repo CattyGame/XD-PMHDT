@@ -14,6 +14,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
       - name: Security and capacity gate controls
         run: |
           python -m unittest discover -s scripts/release -p test_security_gate.py
@@ -21,11 +24,17 @@ jobs:
           python -m unittest discover -s scripts/dev -p test_nfr_samples.py
           python -m unittest discover -s scripts/dev -p test_m1_harnesses.py
           python -m unittest discover -s scripts/dev -p test_dependency_recovery_controls.py
+      - name: Audit NuGet including transitive dependencies
+        run: |
+          dotnet restore AURA.sln
+          dotnet list AURA.sln package --vulnerable --include-transitive --format json > "$RUNNER_TEMP/nuget-vulnerabilities.json"
       - name: Scan current source and lockfiles
-        run: python scripts/release/security_gate.py --source . --output "$RUNNER_TEMP/m1-security.json"
+        run: python scripts/release/security_gate.py --source . --nuget-report "$RUNNER_TEMP/nuget-vulnerabilities.json" --output "$RUNNER_TEMP/m1-security.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: m1-security-${{ github.sha }}
-          path: ${{ runner.temp }}/m1-security.json
+          path: |
+            ${{ runner.temp }}/m1-security.json
+            ${{ runner.temp }}/nuget-vulnerabilities.json
           if-no-files-found: error

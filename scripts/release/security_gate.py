@@ -14,6 +14,24 @@ def pinned_image(value):
     return re.fullmatch(r'(?:[^\s@]+@)?sha256:[a-f0-9]{64}',value) is not None
 
 
+def nuget_report(audit):
+    if audit.get('problems') or not isinstance(audit.get('projects'),list) or not audit['projects']:
+        raise ValueError('Incomplete NuGet vulnerability audit')
+    results=[]
+    for project in audit['projects']:
+        for framework in project.get('frameworks',[]):
+            findings=[]
+            for key in ['topLevelPackages','transitivePackages']:
+                for package in framework.get(key,[]):
+                    for advisory in package.get('vulnerabilities',[]):
+                        severity=advisory['severity'].upper()
+                        if severity not in ['LOW','MODERATE','HIGH','CRITICAL']:raise ValueError('Unknown NuGet severity')
+                        findings.append(dict(VulnerabilityID=advisory['advisoryurl'],PkgName=package['id'],
+                            InstalledVersion=package['resolvedVersion'],Severity=severity))
+            results.append(dict(Target=project['path']+' ('+framework['framework']+')',Vulnerabilities=findings))
+    return {'Results':results}
+
+
 def redact(value):
     if isinstance(value, list): return [redact(v) for v in value]
     if isinstance(value, dict):
@@ -53,6 +71,7 @@ def main():
     parser.add_argument('--image', action='append', default=[], help='Remote repo@sha256:digest or local sha256:image-ID')
     parser.add_argument('--image-archive', action='append', default=[], type=Path, help='docker image save archive of a local candidate')
     parser.add_argument('--exceptions', type=Path)
+    parser.add_argument('--nuget-report',type=Path,help='dotnet list AURA.sln package --vulnerable --include-transitive --format json')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     source = args.source.resolve()
@@ -68,6 +87,12 @@ def main():
         evidence['inputsSha256'] = {str(p.relative_to(source)).replace('\\', '/'): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in [source/'infra/security/trivy-secret.yaml', source/'src/web/aura-web/package-lock.json',
                       source/'src/ai-core/requirements.lock']}
+        evidence['nugetAudit']='NOT_TESTED'
+        if args.nuget_report:
+            raw=args.nuget_report.read_bytes()
+            reports.append(nuget_report(json.loads(raw.decode('utf-8-sig'))))
+            evidence['nugetAudit']='INCLUDED'
+            evidence['nugetReportSha256']=hashlib.sha256(raw).hexdigest()
         base = ['docker', 'run', '--rm', '--memory','1g','--cpus','1','-e','GOMEMLIMIT=768MiB',
                 '-v', 'aura-trivy-cache:/root/.cache/trivy',
                 '--mount', f'type=bind,source={source},target=/source,readonly', TRIVY]
