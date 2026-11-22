@@ -24,8 +24,8 @@ public class RabbitMqOptions
     public string UserName { get; set; } = "aura_worker";
     public string Password { get; set; } = string.Empty;
     public string QueueName { get; set; } = "aura.s3.analysis.jobs";
-    public string RetryExchange { get; set; } = "aura.s3.retry";
-    public string DeadExchange { get; set; } = "aura.s3.dead";
+    public string RetryExchange { get; set; } = "aura.s3.retry.jobs";
+    public string DeadExchange { get; set; } = "aura.s3.dead.jobs";
     public string EventsExchange { get; set; } = "aura.s3.events";
 }
 

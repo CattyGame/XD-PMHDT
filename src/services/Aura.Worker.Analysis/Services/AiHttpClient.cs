@@ -46,78 +46,87 @@ public class AiHttpClient : IAiHttpClient
     {
         try
         {
-            var token = await _tokenProvider.GetTokenAsync(_options.Audience, _options.Scope, cancellationToken);
-            using var request = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl.TrimEnd('/')}/api/v1/analyze");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            var jsonContent = JsonSerializer.Serialize(analyzeRequest);
-            request.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds));
-
-            using var response = await _httpClient.SendAsync(request, cts.Token);
-            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (response.IsSuccessStatusCode)
+            while (true)
             {
-                var aiResponse = JsonSerializer.Deserialize<AiAnalyzeResponse>(responseBody);
-                if (aiResponse == null)
+                var token = await _tokenProvider.GetTokenAsync(_options.Audience, _options.Scope, cts.Token);
+                using var request = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl.TrimEnd('/')}/api/v1/analyze");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+                var jsonContent = JsonSerializer.Serialize(analyzeRequest);
+                request.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+                using var response = await _httpClient.SendAsync(request, cts.Token);
+                var responseBody = await response.Content.ReadAsStringAsync(cts.Token);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var aiResponse = JsonSerializer.Deserialize<AiAnalyzeResponse>(responseBody);
+                    if (aiResponse == null)
+                    {
+                        return new AiCallResult
+                        {
+                            IsSuccess = false,
+                            IsTransientError = false,
+                            ErrorCode = "ERR_AI_OUTPUT_INVALID",
+                            ErrorMessage = "Failed to deserialize AI response."
+                        };
+                    }
+
+                    return new AiCallResult
+                    {
+                        IsSuccess = true,
+                        Response = aiResponse
+                    };
+                }
+
+                if (response.StatusCode == HttpStatusCode.UnprocessableEntity) // 422 Low Quality Image
+                {
+                    _logger.LogWarning("AI returned 422 UnprocessableEntity for request {RequestId}", analyzeRequest.RequestId);
+                    return new AiCallResult
+                    {
+                        IsSuccess = false,
+                        IsLowQuality = true,
+                        IsTransientError = false,
+                        ErrorCode = "ERR_IMAGE_LOW_QUALITY",
+                        ErrorMessage = "Image quality is too low for reliable retina vessel segmentation."
+                    };
+                }
+
+                if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    // Admission backpressure is not a failed inference attempt; the overall call stays bounded.
+                    var delay = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(1);
+                    if (delay <= TimeSpan.Zero || delay > TimeSpan.FromSeconds(60)) delay = TimeSpan.FromSeconds(1);
+                    await Task.Delay(delay, cts.Token);
+                    continue;
+                }
+                if (response.StatusCode == HttpStatusCode.ServiceUnavailable ||
+                    response.StatusCode == HttpStatusCode.GatewayTimeout ||
+                    response.StatusCode == HttpStatusCode.RequestTimeout ||
+                    (int)response.StatusCode >= 500)
                 {
                     return new AiCallResult
                     {
                         IsSuccess = false,
-                        IsTransientError = false,
-                        ErrorCode = "ERR_AI_OUTPUT_INVALID",
-                        ErrorMessage = "Failed to deserialize AI response."
+                        IsTransientError = true,
+                        ErrorCode = "ERR_AI_FAILED",
+                        ErrorMessage = $"AI service error HTTP {(int)response.StatusCode}: {responseBody}"
                     };
                 }
 
-                return new AiCallResult
-                {
-                    IsSuccess = true,
-                    Response = aiResponse
-                };
-            }
-
-            if (response.StatusCode == HttpStatusCode.UnprocessableEntity) // 422 Low Quality Image
-            {
-                _logger.LogWarning("AI returned 422 UnprocessableEntity for request {RequestId}", analyzeRequest.RequestId);
+                // Client errors (400, 401, 403) are terminal non-transient
                 return new AiCallResult
                 {
                     IsSuccess = false,
-                    IsLowQuality = true,
                     IsTransientError = false,
-                    ErrorCode = "ERR_IMAGE_LOW_QUALITY",
-                    ErrorMessage = "Image quality is too low for reliable retina vessel segmentation."
+                    ErrorCode = response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden
+                        ? "ERR_UNAUTHORIZED"
+                        : "ERR_VALIDATION",
+                    ErrorMessage = $"AI rejected request with HTTP {(int)response.StatusCode}: {responseBody}"
                 };
             }
-
-            if (response.StatusCode == HttpStatusCode.TooManyRequests ||
-                response.StatusCode == HttpStatusCode.ServiceUnavailable ||
-                response.StatusCode == HttpStatusCode.GatewayTimeout ||
-                response.StatusCode == HttpStatusCode.RequestTimeout ||
-                (int)response.StatusCode >= 500)
-            {
-                return new AiCallResult
-                {
-                    IsSuccess = false,
-                    IsTransientError = true,
-                    ErrorCode = "ERR_AI_FAILED",
-                    ErrorMessage = $"AI service error HTTP {(int)response.StatusCode}: {responseBody}"
-                };
-            }
-
-            // Client errors (400, 401, 403) are terminal non-transient
-            return new AiCallResult
-            {
-                IsSuccess = false,
-                IsTransientError = false,
-                ErrorCode = response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden
-                    ? "ERR_UNAUTHORIZED"
-                    : "ERR_VALIDATION",
-                ErrorMessage = $"AI rejected request with HTTP {(int)response.StatusCode}: {responseBody}"
-            };
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

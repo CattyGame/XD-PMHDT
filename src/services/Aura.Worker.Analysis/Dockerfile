@@ -10,8 +10,9 @@ COPY src/services/Aura.Worker.Analysis/ src/services/Aura.Worker.Analysis/
 RUN dotnet publish src/services/Aura.Worker.Analysis/Aura.Worker.Analysis.csproj \
     -c Release -o /app/publish --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:8.0 AS final
+FROM mcr.microsoft.com/dotnet/runtime:10.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
+USER $APP_UID
 ENTRYPOINT ["dotnet", "Aura.Worker.Analysis.dll"]
 
