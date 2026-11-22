@@ -24,7 +24,7 @@ jobs:
           docker run --rm --cpus 2 --memory 3g --workdir /repo/src/ai-core \
             --mount "type=bind,source=$GITHUB_WORKSPACE,target=/repo,readonly" \
             --entrypoint sh aura-ai:sprint7-candidate -c \
-            'pip install --quiet --target /tmp/testlibs -c requirements.lock -r requirements-dev.txt && PYTHONPATH=/repo/src/ai-core:/tmp/testlibs python -m pytest tests -q -rs -p no:cacheprovider' \
+            'python -c "import torch, torchvision, safetensors, onnxruntime" && pip install --quiet --target /tmp/testlibs -c requirements.lock -r requirements-dev.txt && PYTHONPATH=/repo/src/ai-core:/tmp/testlibs python -m pytest tests -q -rs -p no:cacheprovider' \
             | tee "$RUNNER_TEMP/ai-image-tests.log"
       - name: Scan the exact built image ID
         run: |

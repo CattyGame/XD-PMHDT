@@ -3,6 +3,7 @@ import sys
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 
 def test_optic_disc_reuses_one_session_but_runs_each_image(monkeypatch):
@@ -26,6 +27,8 @@ def test_optic_disc_reuses_one_session_but_runs_each_image(monkeypatch):
 
 
 def test_rrwnet_retains_only_one_verified_model(monkeypatch):
+    pytest.importorskip('torch')
+    pytest.importorskip('safetensors.torch')
     from app.services import avr_rrwnet as rrw
     from app.services.third_party.rrwnet import model as networks
     import safetensors.torch
