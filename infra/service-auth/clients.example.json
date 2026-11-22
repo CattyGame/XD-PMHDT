@@ -88,16 +88,14 @@
           "identity:directory"
         ],
         "aura-profile": [
-          "profile:resolve"
+          "profile:resolve",
+          "profile:audit"
         ],
         "aura-analysis": [
           "analysis:notify"
         ],
         "aura-billing": [
           "billing:notify"
-        ],
-        "aura-profile": [
-          "profile:audit"
         ]
       }
     }

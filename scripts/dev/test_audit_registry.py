@@ -6,6 +6,18 @@ import unittest
 
 
 class AuditRegistryTests(unittest.TestCase):
+    def test_example_has_unique_keys_and_keeps_notification_resolution_and_audit_scopes(self):
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                self.assertNotIn(key, result, 'Duplicate registry key: ' + key)
+                result[key] = value
+            return result
+        path = Path(__file__).resolve().parents[2] / 'infra/service-auth/clients.example.json'
+        registry = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=unique)
+        client = next(c for c in registry['clients'] if c['clientId'] == 'notification-api')
+        self.assertEqual(['profile:resolve', 'profile:audit'], client['allowedTargets']['aura-profile'])
+
     def test_scope_grant_is_explicit_idempotent_and_preserves_existing_credentials(self):
         path = Path(__file__).with_name('Grant-AuditScopes.py')
         spec = importlib.util.spec_from_file_location('audit_grant', path)
