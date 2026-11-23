@@ -55,7 +55,10 @@ def evaluate(config,headroom=16,host_memory_bytes=None,memory_headroom_bytes=102
     for name in ['postgres','redis','rabbitmq','azurite','api-gateway','ai-core',*[r['service'] for r in rows]]:
         if name not in services:continue
         service=services[name];deploy=service.get('deploy',{})
-        limit=service.get('mem_limit') or deploy.get('resources',{}).get('limits',{}).get('memory')
+        deploy_limit=deploy.get('resources',{}).get('limits',{}).get('memory')
+        limit=service.get('mem_limit') or deploy_limit
+        if service.get('mem_limit') and deploy_limit and memory_bytes(service['mem_limit'])!=memory_bytes(deploy_limit):
+            issues.append(name+': conflicting Compose memory limits')
         if limit is None:
             issues.append(name+': memory limit missing');continue
         memory_rows.append(dict(service=name,maximumBytes=int(deploy.get('replicas',1))*memory_bytes(limit)))

@@ -43,5 +43,11 @@ class CapacityBudgetTests(unittest.TestCase):
         self.assertEqual('PASS',budget.evaluate(cfg,host_memory_bytes=10*1024**3)['status'])
         self.assertEqual('NOT_TESTED',budget.evaluate(cfg)['memoryBudget']['status'])
 
+    def test_conflicting_compose_memory_limits_are_rejected_before_deployment(self):
+        cfg=self.config();cfg['services']['analysis-worker']['mem_limit']='256m'
+        self.assertEqual('FAIL',budget.evaluate(cfg)['status'])
+        cfg['services']['analysis-worker']['mem_limit']='1024m'
+        self.assertEqual('PASS',budget.evaluate(cfg)['status'])
+
 
 if __name__=='__main__':unittest.main()
