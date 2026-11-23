@@ -32,6 +32,8 @@ Máy local có thể thử thêm `-f compose.capacity.local.yaml` cuối cùng v
 
 Profile local dành cho máy đã đo **12 logical CPU**, cấp AI 8 CPU / 8 OMP-MKL threads và một inference slot. Một ảnh warm thử nghiệm đạt khoảng 18 giây; đó chưa phải p95 workload. Lưu artifact đã đối chiếu SHA-256 vào local Linux volume và mount read-only để tránh đọc lại hàng trăm MB qua Windows bind mount; vẫn xác minh hash ở mỗi inference, không cache kết quả ảnh. So sánh một/bốn worker phải giữ nguyên data/model/hardware/thread cấu hình này và chạy tuần tự.
 
+Ứng viên tiếp theo giới hạn managed heap của Analysis API và worker ở 55% cap (`DOTNET_GCHeapHardLimitPercent=0x37`), dành phần còn lại cho bộ đệm HTTP/storage và native memory. Biến môi trường GC dùng số hexadecimal theo [tài liệu .NET](https://learn.microsoft.com/en-us/dotnet/core/runtime-config/garbage-collector#heap-hard-limit-percent). Phải xác nhận giá trị hiệu lực và chạy lại tải thật; tổng memory limit không thay đổi. Worker tái sử dụng tối đa hai JWT dịch vụ theo audience/scope, làm mới trước hết hạn 30 giây và khi secret thay đổi; mỗi lần kiểm quyền vẫn gọi Profile hiện hành. Không coi các lượt dùng image cũ là nghiệm thu cho thay đổi này.
+
 ## Budget thực tế theo cấu hình
 
 - Năm API có pool tối đa 16/API: 80 kết nối. Analysis outbox là **data source khác**, thêm 8.

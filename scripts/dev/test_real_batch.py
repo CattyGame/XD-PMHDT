@@ -313,6 +313,8 @@ def main():
             'service':s.get('Config',{}).get('Labels',{}).get('com.docker.compose.service'),
             'memoryLimitBytes':s.get('HostConfig',{}).get('Memory'),
             'nanoCpus':s.get('HostConfig',{}).get('NanoCpus'),
+            'gcHeapHardLimitPercentEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
+                                            if entry.startswith('DOTNET_GCHeapHardLimitPercent=')),None),
             'threads':{k:v for entry in s.get('Config',{}).get('Env',[]) for k,_,v in [entry.partition('=')]
                        if k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS')}} for s in states]
         if any(s["State"]["OOMKilled"] or s["State"]["ExitCode"] == 137 or not s["State"]["Running"] for s in states):

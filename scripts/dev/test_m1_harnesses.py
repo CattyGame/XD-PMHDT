@@ -37,7 +37,7 @@ class LiveGateTests(unittest.TestCase):
             module.grant(path, True)
             self.assertEqual(published, path.read_bytes())
 
-    def run_gate(self, directory, succeeded, clinic=None, interrupt=False, resume=False, financial=None, transient_read=False, diagnostic_failure=False, memory_percent=10):
+    def run_gate(self, directory, succeeded, clinic=None, interrupt=False, resume=False, financial=None, transient_read=False, diagnostic_failure=False, memory_percent=10, runtime_env=None):
         output = Path(directory) / "result.json"
         image_dir = Path(directory) / "images"
         image_dir.mkdir()
@@ -92,7 +92,7 @@ class LiveGateTests(unittest.TestCase):
                     fields=rows[-1].split('\t');fields[2]='RELEASED';fields[4]='';fields[5]='release';fields[7]='';fields[8]='1'
                     rows[-1]='\t'.join(fields)
                 return SimpleNamespace(stdout="\n".join(rows))
-            return SimpleNamespace(stdout=json.dumps([{"State": {"OOMKilled": False, "ExitCode": 0, "Running": True}}]))
+            return SimpleNamespace(stdout=json.dumps([{"State": {"OOMKilled": False, "ExitCode": 0, "Running": True}, "Config":{"Env":runtime_env or []}}]))
         patient = str(uuid.uuid4())
         args = ["test_real_batch", "--url", "http://127.0.0.1:1234", "--patient", patient,
                 "--images", str(image_dir), "--output", str(output), "--count", "2", "--containers", "test-worker"]
@@ -123,6 +123,12 @@ class LiveGateTests(unittest.TestCase):
             self.assertEqual(evidence["clinicContextId"], clinic)
             self.assertEqual([method for method, _ in evidence["testPaths"]].count("PUT"), 2)
             self.assertTrue(any(path.endswith("/finalize") for _, path in evidence["testPaths"]))
+
+    def test_runtime_records_heap_setting_without_exporting_other_environment_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence=self.run_gate(directory,2,runtime_env=['DOTNET_GCHeapHardLimitPercent=0x37','PRIVATE_KEY=should-not-appear'])
+            self.assertEqual('0x37',evidence['runtime'][0].get('gcHeapHardLimitPercentEnv'))
+            self.assertNotIn('should-not-appear',json.dumps(evidence))
 
     def test_transient_read_outage_is_recorded_then_recovered_without_repeating_writes(self):
         with tempfile.TemporaryDirectory() as directory:

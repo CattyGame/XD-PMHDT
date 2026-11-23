@@ -24,11 +24,16 @@ services:
     mem_limit: 128m
   analysis-api:
     mem_limit: 256m
+    environment:
+      # Leave native HTTP/storage buffers outside the managed heap budget.
+      DOTNET_GCHeapHardLimitPercent: '0x37'
   billing-api:
     mem_limit: 128m
   notification-api:
     mem_limit: 192m
   analysis-worker:
+    environment:
+      DOTNET_GCHeapHardLimitPercent: '0x37'
     deploy:
       resources:
         limits:

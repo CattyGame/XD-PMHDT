@@ -12,6 +12,10 @@ namespace Aura.Worker.Analysis.Tests;
 
 public class WorkerServiceIdentityTests
 {
+    private sealed class Clients(HttpMessageHandler handler) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(handler,false) { BaseAddress=new Uri("http://identity.test") };
+    }
     private sealed class Handler(Func<HttpRequestMessage,Task<HttpResponseMessage>> respond) : HttpMessageHandler
     {
         public int Calls {get;private set;}
@@ -23,7 +27,7 @@ public class WorkerServiceIdentityTests
     public async Task Missing_worker_credentials_fail_closed_without_ephemeral_signing_or_network()
     {
         var handler=new Handler(_=>throw new Exception("Should not call Identity without credentials."));
-        var provider=new ServiceTokenProvider(new HttpClient(handler){BaseAddress=new Uri("http://identity.test")},Options.Create(new ServiceAuthOptions()));
+        var provider=new ServiceTokenProvider(new Clients(handler),Options.Create(new ServiceAuthOptions()));
         await Assert.ThrowsAsync<InvalidOperationException>(()=>provider.GetTokenAsync("aura-ai","ai:analyze",default));
         Assert.Equal(0,handler.Calls);
     }
@@ -38,7 +42,7 @@ public class WorkerServiceIdentityTests
             Assert.Equal("aura-ai",body.RootElement.GetProperty("audience").GetString());
             return new(HttpStatusCode.OK){Content=new StringContent("{\"accessToken\":\"identity.signed.token\",\"tokenType\":\"Bearer\",\"expiresIn\":300}",Encoding.UTF8,"application/json")};
         });
-        var provider=new ServiceTokenProvider(new HttpClient(handler){BaseAddress=new Uri("http://identity.test")},
+        var provider=new ServiceTokenProvider(new Clients(handler),
             Options.Create(new ServiceAuthOptions{ClientSecret="unit-fixture-only"}));
         Assert.Equal("identity.signed.token",await provider.GetTokenAsync("aura-ai","ai:analyze",default));
         await Assert.ThrowsAsync<InvalidOperationException>(()=>provider.GetTokenAsync("aura-billing","billing:capture",default));
@@ -61,5 +65,24 @@ public class WorkerServiceIdentityTests
         var client=new ProfileResolveClient(new HttpClient(handler),Options.Create(new ProfileClientOptions()),tokens.Object,NullLogger<ProfileResolveClient>.Instance);
         var result=await client.RecheckAccessAsync(context,"ANALYSIS_READ",default);
         Assert.False(result.Allowed);
+    }
+
+    [Fact]
+    public async Task Reused_machine_token_does_not_reuse_a_positive_resource_permission()
+    {
+        var context=new WorkerAccessContext(Guid.NewGuid(),Guid.NewGuid(),Guid.NewGuid(),null,Guid.NewGuid());
+        var issuer=new Handler(_=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) {
+            Content=new StringContent("{\"accessToken\":\"identity.signed.token\",\"tokenType\":\"Bearer\",\"expiresIn\":300}",Encoding.UTF8,"application/json") }));
+        var tokens=new ServiceTokenProvider(new Clients(issuer),Options.Create(new ServiceAuthOptions {ClientSecret="fixture-only"}));
+        var allowed=true;
+        var authority=new Handler(_=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) {
+            Content=new StringContent(JsonSerializer.Serialize(new {allowed,tenantId=context.TenantId}),Encoding.UTF8,"application/json") }));
+        using var http=new HttpClient(authority);
+        var client=new ProfileResolveClient(http,Options.Create(new ProfileClientOptions()),tokens,NullLogger<ProfileResolveClient>.Instance);
+        Assert.True((await client.RecheckAccessAsync(context,"ANALYSIS_READ",default)).Allowed);
+        allowed=false;
+        Assert.False((await client.RecheckAccessAsync(context,"ANALYSIS_READ",default)).Allowed);
+        Assert.Equal(1,issuer.Calls);
+        Assert.Equal(2,authority.Calls);
     }
 }
