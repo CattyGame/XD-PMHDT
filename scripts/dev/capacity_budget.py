@@ -61,6 +61,12 @@ def evaluate(config,headroom=16,host_memory_bytes=None,memory_headroom_bytes=102
             issues.append(name+': conflicting Compose memory limits')
         if limit is None:
             issues.append(name+': memory limit missing');continue
+        if name=='redis':
+            command=service.get('command',[])
+            if isinstance(command,list):command=' '.join(command)
+            cache_limit=re.search(r'(?:^|\s)--maxmemory(?:=|\s+)(\d+[kmgt]?(?:i?b)?)(?:\s|$)',command,re.I)
+            if not cache_limit or memory_bytes(cache_limit[1])*2>memory_bytes(limit):
+                issues.append('redis: explicit cache limit must leave at least half the container for overhead and persistence')
         memory_rows.append(dict(service=name,maximumBytes=int(deploy.get('replicas',1))*memory_bytes(limit)))
     memory_total=sum(row['maximumBytes'] for row in memory_rows)
     if host_memory_bytes is not None:

@@ -92,7 +92,7 @@ class LiveGateTests(unittest.TestCase):
                     fields=rows[-1].split('\t');fields[2]='RELEASED';fields[4]='';fields[5]='release';fields[7]='';fields[8]='1'
                     rows[-1]='\t'.join(fields)
                 return SimpleNamespace(stdout="\n".join(rows))
-            return SimpleNamespace(stdout=json.dumps([{"State": {"OOMKilled": False, "ExitCode": 0, "Running": True}, "Config":{"Env":runtime_env or []}}]))
+            return SimpleNamespace(stdout=json.dumps([{"State": {"OOMKilled": False, "ExitCode": 0, "Running": True}, "HostConfig":{"CpusetCpus":"8-11"}, "Config":{"Env":runtime_env or []}}]))
         patient = str(uuid.uuid4())
         args = ["test_real_batch", "--url", "http://127.0.0.1:1234", "--patient", patient,
                 "--images", str(image_dir), "--output", str(output), "--count", "2", "--containers", "test-worker"]
@@ -128,6 +128,7 @@ class LiveGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             evidence=self.run_gate(directory,2,runtime_env=['DOTNET_GCHeapHardLimit=0xC000000','PRIVATE_KEY=should-not-appear'])
             self.assertEqual('0xC000000',evidence['runtime'][0].get('gcHeapHardLimitEnv'))
+            self.assertEqual('8-11',evidence['runtime'][0].get('cpusetCpus'))
             self.assertNotIn('should-not-appear',json.dumps(evidence))
 
     def test_transient_read_outage_is_recorded_then_recovered_without_repeating_writes(self):

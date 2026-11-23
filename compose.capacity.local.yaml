@@ -1,44 +1,57 @@
-# Merge after compose.capacity.yaml for the explicit 6 GiB local acceptance profile.
+# Merge after compose.capacity.yaml for the explicit 12-CPU / 6 GiB local acceptance profile.
 # These are candidate caps: accept only after the real workload stays below the memory gate.
 services:
   ai-core:
-    mem_limit: 2112m
+    mem_limit: 2272m
     cpus: '8.0'
+    cpuset: '0-7'
     environment:
       OMP_NUM_THREADS: '8'
       MKL_NUM_THREADS: '8'
       OPENBLAS_NUM_THREADS: '1'
   postgres:
     mem_limit: 256m
+    cpuset: '8-11'
   redis:
     mem_limit: 64m
+    cpuset: '8-11'
+    command: [redis-server, /usr/local/etc/redis/redis.conf, --requirepass, '${REDIS_PASSWORD:?Set REDIS_PASSWORD}', --maxmemory, 16mb]
   rabbitmq:
-    mem_limit: 256m
+    mem_limit: 320m
+    cpuset: '8-11'
   azurite:
-    mem_limit: 192m
-  api-gateway:
-    mem_limit: 128m
-  identity-api:
     mem_limit: 160m
+    cpuset: '8-11'
+  api-gateway:
+    mem_limit: 96m
+    cpuset: '8-11'
+  identity-api:
+    mem_limit: 128m
+    cpuset: '8-11'
     environment:
       DOTNET_GCHeapHardLimit: '0x6000000'
   profile-api:
-    mem_limit: 160m
+    mem_limit: 128m
+    cpuset: '8-11'
     environment:
       DOTNET_GCHeapHardLimit: '0x6000000'
   analysis-api:
     mem_limit: 320m
+    cpuset: '8-11'
     environment:
       # Leave native HTTP/storage buffers outside the managed heap budget.
       DOTNET_GCHeapHardLimit: '0xC000000'
   billing-api:
-    mem_limit: 128m
+    mem_limit: 160m
+    cpuset: '8-11'
   notification-api:
-    mem_limit: 192m
+    mem_limit: 160m
+    cpuset: '8-11'
   analysis-worker:
+    cpuset: '8-11'
     environment:
       DOTNET_GCHeapHardLimit: '0xC000000'
     deploy:
       resources:
         limits:
-          memory: 320m
+          memory: 296m

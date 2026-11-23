@@ -49,5 +49,13 @@ class CapacityBudgetTests(unittest.TestCase):
         cfg['services']['analysis-worker']['mem_limit']='1024m'
         self.assertEqual('PASS',budget.evaluate(cfg)['status'])
 
+    def test_redis_cache_limit_leaves_container_headroom(self):
+        cfg=self.config();cfg['services']['redis']={'mem_limit':'64m','command':['redis-server','--maxmemory','512mb']}
+        self.assertEqual('FAIL',budget.evaluate(cfg)['status'])
+        cfg['services']['redis']['command']=['redis-server','--maxmemory','16mb']
+        self.assertEqual('PASS',budget.evaluate(cfg)['status'])
+        cfg['services']['redis']['command']=['redis-server','/etc/redis.conf']
+        self.assertEqual('FAIL',budget.evaluate(cfg)['status'])
+
 
 if __name__=='__main__':unittest.main()

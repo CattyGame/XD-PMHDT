@@ -10,6 +10,7 @@ services:
   redis:
     mem_limit: 256m
     cpus: 0.5
+    command: [redis-server, /usr/local/etc/redis/redis.conf, --requirepass, '${REDIS_PASSWORD:?Set REDIS_PASSWORD}', --maxmemory, 64mb]
   rabbitmq:
     mem_limit: 1g
     cpus: 1.0
