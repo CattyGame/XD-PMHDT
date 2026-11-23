@@ -318,6 +318,8 @@ def main():
                                          if entry.startswith('AURA_AI_MAX_WAITERS=')),None),
             'gcHeapHardLimitEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
                                      if entry.startswith('DOTNET_GCHeapHardLimit=')),None),
+            'gcConserveMemoryEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
+                                       if entry.startswith('DOTNET_GCConserveMemory=')),None),
             'gcHeapHardLimitPercentEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
                                             if entry.startswith('DOTNET_GCHeapHardLimitPercent=')),None),
             'threads':{k:v for entry in s.get('Config',{}).get('Env',[]) for k,_,v in [entry.partition('=')]

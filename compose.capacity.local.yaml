@@ -51,6 +51,10 @@ services:
     cpuset: '8-11'
     environment:
       DOTNET_GCHeapHardLimit: '0xC000000'
+      # Native annotation strings leave large-object holes in a long-lived worker.
+      DOTNET_GCConserveMemory: '6'
+      # Large native annotations leave fragmented LOH space in a long-lived worker.
+      DOTNET_GCConserveMemory: '6'
     deploy:
       resources:
         limits:

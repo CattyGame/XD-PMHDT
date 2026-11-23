@@ -126,8 +126,9 @@ class LiveGateTests(unittest.TestCase):
 
     def test_runtime_records_heap_setting_without_exporting_other_environment_values(self):
         with tempfile.TemporaryDirectory() as directory:
-            evidence=self.run_gate(directory,2,runtime_env=['DOTNET_GCHeapHardLimit=0xC000000','AURA_AI_MAX_WAITERS=3','PRIVATE_KEY=should-not-appear'])
+            evidence=self.run_gate(directory,2,runtime_env=['DOTNET_GCHeapHardLimit=0xC000000','DOTNET_GCConserveMemory=6','AURA_AI_MAX_WAITERS=3','PRIVATE_KEY=should-not-appear'])
             self.assertEqual('0xC000000',evidence['runtime'][0].get('gcHeapHardLimitEnv'))
+            self.assertEqual('6',evidence['runtime'][0].get('gcConserveMemoryEnv'))
             self.assertEqual('8-11',evidence['runtime'][0].get('cpusetCpus'))
             self.assertEqual('3',evidence['runtime'][0].get('inferenceMaxWaitersEnv'))
             self.assertNotIn('should-not-appear',json.dumps(evidence))
