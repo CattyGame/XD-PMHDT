@@ -22,6 +22,10 @@ python scripts/dev/capacity_budget.py "$env:USERPROFILE/.aura/capacity-resolved.
 
 Chỉ khởi động khi budget đạt và đủ RAM vật lý cho tổng các memory limit cùng headroom hệ điều hành. Không chạy `down -v` hoặc xóa volume môi trường nhóm để diễn tập.
 
+Máy local Docker khoảng 6 GiB có thể thử thêm `-f compose.capacity.local.yaml` cuối cùng và `--memory-headroom-bytes 536870912`. Bốn worker có tổng cap 5120 MiB, cộng 512 MiB headroom. Đây là cấu hình ứng viên cần chạy tải thật, không phải kết luận đã đạt; không dùng cho production hoặc giảm cap AI 2 GiB. Dừng nghiệm thu nếu một container vượt 80% cap/OOM, rồi điều chỉnh cấu hình có ghi nhận và chạy lại.
+
+Profile local dành cho máy đã đo **12 logical CPU**, cấp AI 8 CPU / 8 OMP-MKL threads và một inference slot. Một ảnh warm thử nghiệm đạt khoảng 18 giây; đó chưa phải p95 workload. Lưu artifact đã đối chiếu SHA-256 vào local Linux volume và mount read-only để tránh đọc lại hàng trăm MB qua Windows bind mount; vẫn xác minh hash ở mỗi inference, không cache kết quả ảnh. So sánh một/bốn worker phải giữ nguyên data/model/hardware/thread cấu hình này và chạy tuần tự.
+
 ## Budget thực tế theo cấu hình
 
 - Năm API có pool tối đa 16/API: 80 kết nối. Analysis outbox là **data source khác**, thêm 8.
@@ -67,6 +71,8 @@ RPO phải nêu điểm snapshot được bảo vệ và ghi đã ACK sau snapsh
 Chạy `Test-BatchInfrastructureStress.ps1` với manifest 100 ảnh khác bytes, dữ liệu được phép sử dụng, gồm measured/unavailable/quality failure; cùng patient/clinic context được cấp quyền. Firebase token qua môi trường riêng, không đưa vào manifest. Upload 4–6 ảnh đồng thời, không gửi 100 ảnh trong một multipart. UNKNOWN giữ nghĩa vụ đối soát, không tự release do timeout.
 
 Thêm `-RequireRealResults -AllowQualityFailures -RequireFinancialReconciliation`: chỉ cho phép lỗi chất lượng ảnh có mã rõ ràng; lỗi hạ tầng không được coi là quality failure. Harness lưu checkpoint `RUNNING`, hash script, thời gian quan sát; lần resume không đại diện thời gian từ admission. Đối chiếu timeline PostgreSQL riêng.
+
+Lượt chạy dài có thể dùng `AURA_TEST_FIREBASE_TOKEN_FILE` trỏ tới JSON token riêng ngoài Git (`idToken`). Harness đọc lại ở mỗi request; tiến trình cấp token test phải thay file nguyên tử trước khi token hết hạn. Không ghi token/refresh token vào báo cáo hoặc CLI. Evidence cuối lưu image ID, cap CPU/RAM và ba biến thread được cho phép, không dump environment chứa secrets.
 
 Trong fixture dùng riêng có label `aura.acceptance`, chạy `python scripts/dev/test_dependency_recovery.py --url http://127.0.0.1:<gateway> --batch-id <batch> --fixture-label <giá-trị-label> --postgres <container> --redis <container> --rabbitmq <container> --output <ngoài-Git>`. Script từ chối container sai label, phục hồi dependency trong `finally`, kiểm 503 khi PostgreSQL dừng, đọc bền vững khi Redis/broker dừng và dựng lại cache sau `FLUSHDB`. Đây không thay thế gate settlement/replay hoặc kiểm FCM provider.
 

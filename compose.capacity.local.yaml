@@ -1,0 +1,34 @@
+# Merge after compose.capacity.yaml for the explicit 6 GiB local acceptance profile.
+# These are candidate caps: accept only after the real workload stays below the memory gate.
+services:
+  ai-core:
+    cpus: '8.0'
+    environment:
+      OMP_NUM_THREADS: '8'
+      MKL_NUM_THREADS: '8'
+      OPENBLAS_NUM_THREADS: '1'
+  postgres:
+    mem_limit: 384m
+  redis:
+    mem_limit: 64m
+  rabbitmq:
+    mem_limit: 320m
+  azurite:
+    mem_limit: 128m
+  api-gateway:
+    mem_limit: 128m
+  identity-api:
+    mem_limit: 128m
+  profile-api:
+    mem_limit: 128m
+  analysis-api:
+    mem_limit: 256m
+  billing-api:
+    mem_limit: 128m
+  notification-api:
+    mem_limit: 128m
+  analysis-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 320m

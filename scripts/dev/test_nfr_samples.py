@@ -10,6 +10,13 @@ import test_real_batch as batch
 
 
 class NfrSamplesTests(unittest.TestCase):
+    def test_long_live_run_reads_rotated_token_without_caching_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'private-token.json'
+            with patch.dict(batch.os.environ,{'AURA_TEST_FIREBASE_TOKEN_FILE':str(path)}):
+                for token in ['first.token.value','rotated.token.value']:
+                    path.write_text(json.dumps({'idToken':token}))
+                    self.assertEqual(token,batch.firebase_token())
     def test_checkpoint_is_readable_and_keeps_incomplete_status(self):
         with tempfile.TemporaryDirectory() as directory:
             output=Path(directory)/'evidence.json'

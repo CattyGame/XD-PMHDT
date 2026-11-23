@@ -24,6 +24,14 @@ def save_evidence(path, evidence):
     pending.replace(path)
 
 
+def firebase_token():
+    file=os.environ.get('AURA_TEST_FIREBASE_TOKEN_FILE')
+    value=json.loads(Path(file).read_text(encoding='utf-8'))['idToken'] if file else os.environ.get('AURA_TEST_FIREBASE_TOKEN')
+    if not isinstance(value,str) or not value or len(value)>16384 or any(c.isspace() for c in value):
+        raise ValueError('Private Firebase test token is missing or invalid')
+    return value
+
+
 def latency_summary(samples):
     if any(not isinstance(x,(int,float)) or not math.isfinite(x) or x<0 for x in samples):
         raise ValueError('Latency samples must be finite and nonnegative')
@@ -115,7 +123,7 @@ def main():
     p.add_argument('--allow-quality-failures',action='store_true',help='Allow only explicit low-quality terminal failures, still reconcile their release')
     args = p.parse_args()
     if args.allow_quality_failures and not args.require_real_results:raise ValueError('Quality acceptance requires real per-image result verification')
-    token = os.environ.get("AURA_TEST_FIREBASE_TOKEN")
+    token = firebase_token()
     if args.require_financial_reconciliation and not args.postgres_container:
         raise ValueError("--require-financial-reconciliation requires --postgres-container")
     url = urllib.parse.urlparse(args.url)
@@ -194,7 +202,7 @@ def main():
             path += "?" + urllib.parse.urlencode({"clinicContextId": str(args.clinic_context_id)})
         for attempt in range(4):
             called=time.monotonic();code=None
-            try:return request(base, token, path, method, body, content_type, key)
+            try:return request(base, firebase_token(), path, method, body, content_type, key)
             except urllib.error.HTTPError as error:
                 code=error.code
                 if method!='GET' or code!=503 or attempt==3 or time.monotonic()+2>=started+args.timeout:raise
@@ -298,6 +306,12 @@ def main():
         else:
             raise TimeoutError("Pipeline did not reach terminal outcomes")
         states = json.loads(subprocess.run(["docker", "inspect", *args.containers], capture_output=True, text=True, check=True).stdout)
+        evidence['runtime']=[{'containerId':s.get('Id'),'imageId':s.get('Image'),
+            'service':s.get('Config',{}).get('Labels',{}).get('com.docker.compose.service'),
+            'memoryLimitBytes':s.get('HostConfig',{}).get('Memory'),
+            'nanoCpus':s.get('HostConfig',{}).get('NanoCpus'),
+            'threads':{k:v for entry in s.get('Config',{}).get('Env',[]) for k,_,v in [entry.partition('=')]
+                       if k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS')}} for s in states]
         if any(s["State"]["OOMKilled"] or s["State"]["ExitCode"] == 137 or not s["State"]["Running"] for s in states):
             raise RuntimeError("Container stopped or was OOMKilled")
         if args.expected_workers is not None:

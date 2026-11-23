@@ -1,6 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
-using System.Text;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -54,15 +54,15 @@ public class AiHttpClient : IAiHttpClient
                 using var request = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl.TrimEnd('/')}/api/v1/analyze");
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-                var jsonContent = JsonSerializer.Serialize(analyzeRequest);
-                request.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+                request.Content = JsonContent.Create(analyzeRequest);
 
-                using var response = await _httpClient.SendAsync(request, cts.Token);
-                var responseBody = await response.Content.ReadAsStringAsync(cts.Token);
+                using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
 
                 if (response.IsSuccessStatusCode)
                 {
-                    var aiResponse = JsonSerializer.Deserialize<AiAnalyzeResponse>(responseBody);
+                    // Native image annotations can be large; avoid full UTF-8 and UTF-16 response copies.
+                    await using var body = await response.Content.ReadAsStreamAsync(cts.Token);
+                    var aiResponse = await JsonSerializer.DeserializeAsync<AiAnalyzeResponse>(body, cancellationToken: cts.Token);
                     if (aiResponse == null)
                     {
                         return new AiCallResult
@@ -112,7 +112,7 @@ public class AiHttpClient : IAiHttpClient
                         IsSuccess = false,
                         IsTransientError = true,
                         ErrorCode = "ERR_AI_FAILED",
-                        ErrorMessage = $"AI service error HTTP {(int)response.StatusCode}: {responseBody}"
+                        ErrorMessage = $"AI service error HTTP {(int)response.StatusCode}"
                     };
                 }
 
@@ -124,7 +124,7 @@ public class AiHttpClient : IAiHttpClient
                     ErrorCode = response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden
                         ? "ERR_UNAUTHORIZED"
                         : "ERR_VALIDATION",
-                    ErrorMessage = $"AI rejected request with HTTP {(int)response.StatusCode}: {responseBody}"
+                    ErrorMessage = $"AI rejected request with HTTP {(int)response.StatusCode}"
                 };
             }
         }
