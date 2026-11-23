@@ -314,6 +314,8 @@ def main():
             'memoryLimitBytes':s.get('HostConfig',{}).get('Memory'),
             'nanoCpus':s.get('HostConfig',{}).get('NanoCpus'),
             'cpusetCpus':s.get('HostConfig',{}).get('CpusetCpus'),
+            'inferenceMaxWaitersEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
+                                         if entry.startswith('AURA_AI_MAX_WAITERS=')),None),
             'gcHeapHardLimitEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
                                      if entry.startswith('DOTNET_GCHeapHardLimit=')),None),
             'gcHeapHardLimitPercentEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])

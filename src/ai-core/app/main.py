@@ -14,7 +14,6 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from threading import BoundedSemaphore
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Security, status
@@ -55,6 +54,7 @@ from .services.mock_service import (
 )
 from .services.integrated_inference import IntegratedModelUnavailable, configured_artifacts, process_integrated_analysis
 from .services.runtime_registry import RUNTIME_REGISTRY
+from .inference_admission import FairInferenceSlot
 
 _ORIGINAL_LOAD_FRANGI_CONFIG = load_frangi_config
 
@@ -64,7 +64,17 @@ VERSION = "0.2.0"
 API_VERSION = "1.3.0"
 HTTP_COUNTS = Counter()
 HTTP_SECONDS = Counter()
-CNN_SLOT = BoundedSemaphore(1)
+CNN_SLOT = FairInferenceSlot()
+
+
+def acquire_inference_slot():
+    try:
+        waiters=int(os.getenv('AURA_AI_MAX_WAITERS','0'))
+        if not 0<=waiters<=3:raise ValueError('Unsupported waiter limit')
+    except ValueError as error:
+        raise HTTPException(503,detail={'error_code':'RESEARCH_MODEL_UNAVAILABLE',
+                                      'message':'Invalid inference admission configuration.'}) from error
+    return CNN_SLOT.acquire(blocking=waiters>0,timeout=120 if waiters else None,max_waiters=waiters)
 
 logger = logging.getLogger(__name__)
 
@@ -592,7 +602,7 @@ def analyze_retina(
     integrated = os.getenv('AURA_INTEGRATED_RESEARCH_ENABLED', 'false').strip().lower() == 'true'
     bounded_profile = integrated or bool((os.getenv('AURA_AVR_MODEL_PATH') and os.getenv('AURA_AVR_MODEL_SHA256'))
                            or (os.getenv('AURA_DR_CNN_CHECKPOINT') and os.getenv('AURA_DR_CNN_SHA256')))
-    if bounded_profile and not CNN_SLOT.acquire(blocking=False):
+    if bounded_profile and not acquire_inference_slot():
         raise HTTPException(429, detail={"error_code": "RESEARCH_MODEL_BUSY", "message": "Inference slot is busy; retry later."},
                             headers={"Retry-After": "1"})
     try:
@@ -695,7 +705,7 @@ def run_research_inference(request, config, path, digest, inference):
         raise HTTPException(503, detail={"error_code": "RESEARCH_MODEL_UNAVAILABLE", "message": "Configure a verified research artifact and real service authentication."})
     if request.patient_id is not None or request.modality.strip().upper() != "FUNDUS":
         raise HTTPException(422, detail={"error_code": "INVALID_RESEARCH_REQUEST", "message": "FUNDUS only; patient_id must be null."})
-    if not CNN_SLOT.acquire(blocking=False):
+    if not acquire_inference_slot():
         raise HTTPException(429, detail={"error_code": "RESEARCH_MODEL_BUSY", "message": "Retry after the current research inference completes."},
                             headers={"Retry-After": "1"})
     try:

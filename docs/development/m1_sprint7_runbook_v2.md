@@ -46,6 +46,7 @@ Thử nghiệm managed heap 55% trên cap 256 MiB đã gây `OutOfMemoryExceptio
 - Retry/dead-letter của worker dùng `aura.s3.retry.jobs` / `aura.s3.dead.jobs`, routing key `jobs`. Handoff dùng channel publish riêng, mandatory và confirm trước ACK. Mỗi worker có thêm tối đa một channel publish ngắn hạn khi chuyển retry/dead-letter.
 - Pool tối thiểu 0. Upload đồng thời 4, pool Analysis 16 đáp ứng `2 × capacity + 4`. Không cache quyền cho phép để đạt latency.
 - Mỗi worker một consumer/channel có ACK, prefetch được chặn; đo số consumer thật bằng `Test-RabbitMqScaling.ps1`. Một AI slot có thể làm bốn worker chờ/429; không hứa tăng tốc tuyến tính.
+- Profile capacity bật `AURA_AI_MAX_WAITERS=3`: một inference hoạt động và tối đa ba HTTP waiter FIFO, mỗi waiter chờ tối đa 120 giây; ngoài giới hạn vẫn trả 429/Retry-After. Mặc định ngoài profile này là 0 waiter. Handoff giữ slot cho waiter đầu hàng để worker vừa xong không giành lại trước; không tăng số inference chạy đồng thời hoặc sửa thuật toán. RabbitMQ/job lease vẫn giữ nghĩa vụ bền vững; hàng đợi HTTP không thay thế chúng. Invalid waiter config trả 503. Phải chạy lại workload trên image mới trước khi dùng số đo cũ làm nghiệm thu.
 - Reporting NiFi là DB riêng; không cộng vào PostgreSQL nghiệp vụ và không cho writer ghi chéo schema. Nếu triển khai Reporting hoặc NiFi, tính thêm RAM và pool riêng theo `camera_tls_runbook.md`.
 
 ## Security

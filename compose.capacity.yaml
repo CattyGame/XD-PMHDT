@@ -1,5 +1,9 @@
 # Merge last for the measured, single-host research profile (four worker replicas).
 services:
+  ai-core:
+    environment:
+      # One inference plus three FIFO waiters for the four-worker comparison.
+      AURA_AI_MAX_WAITERS: '3'
   analysis-worker:
     deploy:
       replicas: ${AURA_WORKER_REPLICAS:-4}
