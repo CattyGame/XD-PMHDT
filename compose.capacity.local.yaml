@@ -2,7 +2,7 @@
 # These are candidate caps: accept only after the real workload stays below the memory gate.
 services:
   ai-core:
-    mem_limit: 2304m
+    mem_limit: 2112m
     cpus: '8.0'
     environment:
       OMP_NUM_THREADS: '8'
@@ -19,22 +19,26 @@ services:
   api-gateway:
     mem_limit: 128m
   identity-api:
-    mem_limit: 128m
+    mem_limit: 160m
+    environment:
+      DOTNET_GCHeapHardLimit: '0x6000000'
   profile-api:
-    mem_limit: 128m
+    mem_limit: 160m
+    environment:
+      DOTNET_GCHeapHardLimit: '0x6000000'
   analysis-api:
-    mem_limit: 256m
+    mem_limit: 320m
     environment:
       # Leave native HTTP/storage buffers outside the managed heap budget.
-      DOTNET_GCHeapHardLimitPercent: '0x37'
+      DOTNET_GCHeapHardLimit: '0xC000000'
   billing-api:
     mem_limit: 128m
   notification-api:
     mem_limit: 192m
   analysis-worker:
     environment:
-      DOTNET_GCHeapHardLimitPercent: '0x37'
+      DOTNET_GCHeapHardLimit: '0xC000000'
     deploy:
       resources:
         limits:
-          memory: 256m
+          memory: 320m

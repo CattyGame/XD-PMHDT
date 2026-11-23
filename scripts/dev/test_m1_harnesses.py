@@ -126,8 +126,8 @@ class LiveGateTests(unittest.TestCase):
 
     def test_runtime_records_heap_setting_without_exporting_other_environment_values(self):
         with tempfile.TemporaryDirectory() as directory:
-            evidence=self.run_gate(directory,2,runtime_env=['DOTNET_GCHeapHardLimitPercent=0x37','PRIVATE_KEY=should-not-appear'])
-            self.assertEqual('0x37',evidence['runtime'][0].get('gcHeapHardLimitPercentEnv'))
+            evidence=self.run_gate(directory,2,runtime_env=['DOTNET_GCHeapHardLimit=0xC000000','PRIVATE_KEY=should-not-appear'])
+            self.assertEqual('0xC000000',evidence['runtime'][0].get('gcHeapHardLimitEnv'))
             self.assertNotIn('should-not-appear',json.dumps(evidence))
 
     def test_transient_read_outage_is_recorded_then_recovered_without_repeating_writes(self):
