@@ -217,8 +217,11 @@ def main():
         if len(rows) != len(args.containers):
             raise RuntimeError("Missing container resource samples")
         evidence["samples"].append(rows)
-        if any(float(row["MemPerc"].rstrip("%")) >= 80 for row in rows):
-            raise RuntimeError("Observed memory >=80%")
+        for row in rows:
+            percent=float(row["MemPerc"].rstrip("%"))
+            if percent>=80:
+                peaks=evidence.setdefault('resourceViolations',{})
+                peaks[row['Name']]=max(peaks.get(row['Name'],0),percent)
         if time.monotonic()>=next_checkpoint:
             evidence['lastObservedUtc']=datetime.now(timezone.utc).isoformat()
             save_evidence(args.output,evidence)
@@ -400,6 +403,8 @@ def main():
                 sample()
                 time.sleep(2)
             evidence["status"] = "PASS"
+        if evidence.get('resourceViolations'):
+            raise RuntimeError('Observed memory >=80%; terminal outcomes and settlement retained')
         if evidence.get('acceptanceViolations'):
             raise RuntimeError('Infrastructure failures are not accepted quality failures; complete diagnostics retained')
     except Exception as error:

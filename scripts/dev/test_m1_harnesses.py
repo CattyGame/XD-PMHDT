@@ -37,7 +37,7 @@ class LiveGateTests(unittest.TestCase):
             module.grant(path, True)
             self.assertEqual(published, path.read_bytes())
 
-    def run_gate(self, directory, succeeded, clinic=None, interrupt=False, resume=False, financial=None, transient_read=False, diagnostic_failure=False):
+    def run_gate(self, directory, succeeded, clinic=None, interrupt=False, resume=False, financial=None, transient_read=False, diagnostic_failure=False, memory_percent=10):
         output = Path(directory) / "result.json"
         image_dir = Path(directory) / "images"
         image_dir.mkdir()
@@ -81,7 +81,7 @@ class LiveGateTests(unittest.TestCase):
 
         def docker(command, **kwargs):
             if command[1] == "stats":
-                return SimpleNamespace(stdout=json.dumps({"MemPerc": "10%"}) + "\n")
+                return SimpleNamespace(stdout=json.dumps({"Name": "test-worker", "MemPerc": f"{memory_percent}%"}) + "\n")
             if command[1] == "exec":
                 self.assertEqual(command[command.index("-F") + 1], "\t")
                 ledger_reads.append(True)
@@ -106,7 +106,7 @@ class LiveGateTests(unittest.TestCase):
             args += ["--postgres-container", "test-pg", "--require-financial-reconciliation", "--timeout", "1"]
         if diagnostic_failure:args+=['--require-real-results','--allow-quality-failures']
         with patch.dict(os.environ, {"AURA_TEST_FIREBASE_TOKEN": "unit-only"}), patch("sys.argv", args), patch.object(batch, "request", side_effect=response), patch.object(batch.subprocess, "run", side_effect=docker), patch.object(batch.time, "sleep"):
-            if succeeded == 2 and financial != "wrong_ids":
+            if succeeded == 2 and financial != "wrong_ids" and memory_percent < 80:
                 batch.main()
             else:
                 with self.assertRaises(RuntimeError):
@@ -140,6 +140,15 @@ class LiveGateTests(unittest.TestCase):
             self.assertEqual(2,len(evidence['financialLedger']))
             self.assertEqual([],evidence['financialDiscrepancies'])
             self.assertEqual(1,len(evidence['acceptanceViolations']))
+
+    def test_memory_threshold_remains_fail_after_collecting_terminal_outcomes_and_settlement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence=self.run_gate(directory,2,financial='settles',memory_percent=80)
+            self.assertEqual('FAIL',evidence['status'])
+            self.assertEqual(2,len(evidence.get('financialLedger',[])))
+            self.assertEqual([],evidence['financialDiscrepancies'])
+            self.assertEqual(2,evidence['outcome']['summary']['succeeded'])
+            self.assertEqual({'test-worker':80},evidence['resourceViolations'])
 
     def test_clinic_selector_reaches_interruption_inventory(self):
         with tempfile.TemporaryDirectory() as directory:

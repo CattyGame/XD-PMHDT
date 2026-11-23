@@ -2,6 +2,12 @@
 
 Jira thật: SCRUM-398 (security), 399 (DR), 400 (capacity), 401 (resilience). Không dùng mã từ kế hoạch cũ để thay quyết định trên Jira. Profile này dùng nghiên cứu/Sandbox TEST, không phải triển khai lâm sàng hay thanh toán production.
 
+## Trạng thái kiểm chứng ngày 23/11/2026
+
+Đây vẫn là candidate, chưa nghiệm thu toàn bộ Sprint 7. Người vận hành chưa xác nhận BitLocker/Device Encryption của ổ dữ liệu; không thay bằng bằng chứng mã hóa backup. Phép đo resolver trên máy local, 3 lượt × 3.000 mẫu sau warm-up, có p95 gộp 6,4936 ms, chưa đạt mục tiêu dưới 5 ms. Giữ nguyên quyền hiện hành, không cache kết quả cho phép để hạ số đo.
+
+Lượt 100 ảnh sau sửa worker đã có 55 MEASURED, 25 UNAVAILABLE và 20 QUALITY_FAILURE, không có PIPELINE_FAILURE; đủ 100 reservation đã đối soát. Tuy nhiên, lượt admission đã ghi nhận worker 206,8 MiB/256 MiB (80,79%), vượt gate RAM 80%. Kết quả PASS của cửa sổ resume chỉ chứng minh hội tụ và đối soát trong cửa sổ đó; không xóa lỗi RAM hoặc thay thế benchmark liên tục từ đầu. Lượt bốn worker phải có hồ sơ riêng, cùng bytes/model/threads, và ghi rõ mọi thay đổi cấu hình hoặc tải nền.
+
 ## Chuẩn bị cấu hình
 
 Giữ khóa Firebase, notification encryption key, service registry/private key và mật khẩu runtime bên ngoài Git. Dùng `scripts/dev/Set-AuraDevEnvironment.ps1` trong cùng cửa sổ PowerShell; cấp LOGIN/password cho các role bằng quy trình provision hiện có. Broker dùng `infra/rabbitmq/m1.topology.json` và tài khoản riêng cho publisher/worker/Billing/Notification. Không dùng superuser DB trong ứng dụng.
@@ -22,7 +28,7 @@ python scripts/dev/capacity_budget.py "$env:USERPROFILE/.aura/capacity-resolved.
 
 Chỉ khởi động khi budget đạt và đủ RAM vật lý cho tổng các memory limit cùng headroom hệ điều hành. Không chạy `down -v` hoặc xóa volume môi trường nhóm để diễn tập.
 
-Máy local Docker khoảng 6 GiB có thể thử thêm `-f compose.capacity.local.yaml` cuối cùng và `--memory-headroom-bytes 536870912`. Bốn worker có tổng cap 5120 MiB, cộng 512 MiB headroom. Đây là cấu hình ứng viên cần chạy tải thật, không phải kết luận đã đạt; không dùng cho production hoặc giảm cap AI 2 GiB. Dừng nghiệm thu nếu một container vượt 80% cap/OOM, rồi điều chỉnh cấu hình có ghi nhận và chạy lại.
+Máy local có thể thử thêm `-f compose.capacity.local.yaml` cuối cùng và `--memory-headroom-bytes 536870912`. Docker engine đã đo có khoảng 5,65 GiB RAM khả dụng. Tổng cap toàn stack với bốn worker là 5.056 MiB, cộng 512 MiB headroom; AI có 2.304 MiB, mỗi worker 256 MiB. Đây là cấu hình ứng viên cần chạy tải thật, không phải kết luận đã đạt; không dùng cho production. Nếu một container vượt 80% cap/OOM, ghi FAIL và giữ đầy đủ kết quả/ledger để chẩn đoán; việc thu thập tiếp không được biến lượt chạy thành PASS.
 
 Profile local dành cho máy đã đo **12 logical CPU**, cấp AI 8 CPU / 8 OMP-MKL threads và một inference slot. Một ảnh warm thử nghiệm đạt khoảng 18 giây; đó chưa phải p95 workload. Lưu artifact đã đối chiếu SHA-256 vào local Linux volume và mount read-only để tránh đọc lại hàng trăm MB qua Windows bind mount; vẫn xác minh hash ở mỗi inference, không cache kết quả ảnh. So sánh một/bốn worker phải giữ nguyên data/model/hardware/thread cấu hình này và chạy tuần tự.
 

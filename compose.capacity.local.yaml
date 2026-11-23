@@ -2,19 +2,20 @@
 # These are candidate caps: accept only after the real workload stays below the memory gate.
 services:
   ai-core:
+    mem_limit: 2304m
     cpus: '8.0'
     environment:
       OMP_NUM_THREADS: '8'
       MKL_NUM_THREADS: '8'
       OPENBLAS_NUM_THREADS: '1'
   postgres:
-    mem_limit: 384m
+    mem_limit: 256m
   redis:
     mem_limit: 64m
   rabbitmq:
-    mem_limit: 320m
+    mem_limit: 256m
   azurite:
-    mem_limit: 128m
+    mem_limit: 192m
   api-gateway:
     mem_limit: 128m
   identity-api:
@@ -26,9 +27,9 @@ services:
   billing-api:
     mem_limit: 128m
   notification-api:
-    mem_limit: 128m
+    mem_limit: 192m
   analysis-worker:
     deploy:
       resources:
         limits:
-          memory: 320m
+          memory: 256m

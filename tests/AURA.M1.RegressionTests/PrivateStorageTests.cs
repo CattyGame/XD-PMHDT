@@ -21,7 +21,7 @@ public class PrivateStorageTests
     public async Task Actual_private_blob_bytes_roundtrip_and_tampering_or_public_access_is_rejected()
     {
         var connection=Environment.GetEnvironmentVariable("AURA_TEST_AZURITE_CONNECTION")!;
-        var service=new BlobServiceClient(connection);
+        var service=new BlobServiceClient(connection,new BlobClientOptions(BlobClientOptions.ServiceVersion.V2023_11_03));
         if(!service.Uri.IsLoopback)throw new InvalidOperationException("Storage tests require isolated loopback Azurite.");
         var id=Guid.NewGuid().ToString("N");
         var containers=new[]{"originals","masks","reports"}.Select(n=>service.GetBlobContainerClient($"m1-test-{id}-{n}")).ToArray();
@@ -45,6 +45,9 @@ public class PrivateStorageTests
                 Assert.Equal(PublicAccessType.None,(await c.GetAccessPolicyAsync()).Value.BlobPublicAccess);
                 Assert.Equal(expected[c.Name],(await c.GetBlobClient("tenant/private/object.bin").DownloadContentAsync()).Value.Content.ToArray());
             }
+            await containers[0].GetBlobClient("tenant/private/object.bin").UploadAsync(BinaryData.FromString("stale"),overwrite:true);
+            Assert.Equal(0,await RunAsync("restore",assets,service.Uri.AbsoluteUri));
+            Assert.Equal(expected[containers[0].Name],(await containers[0].GetBlobClient("tenant/private/object.bin").DownloadContentAsync()).Value.Content.ToArray());
             Assert.NotEqual(0,await RunAsync("verify",assets,"http://127.0.0.1:1/wrong-account"));
             var file=Directory.GetFiles(assets,"*.blob")[0];var original=await File.ReadAllBytesAsync(file);
             var tampered=(byte[])original.Clone();tampered[10]^=1;await File.WriteAllBytesAsync(file,tampered);

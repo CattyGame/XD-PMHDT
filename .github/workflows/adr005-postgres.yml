@@ -74,7 +74,7 @@ jobs:
           ./scripts/dev/Initialize-M1RabbitTopology.ps1 -Container $env:RABBIT_CONTAINER
           docker exec $env:RABBIT_CONTAINER rabbitmqctl set_permissions -p /aura-s3 guest '.*' '.*' '.*'
           if ($LASTEXITCODE -ne 0) { throw 'Test operator provisioning failed.' }
-          docker run -d --name aura-m1-test-azurite -p 127.0.0.1:10039:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+          docker run -d --name aura-m1-test-azurite -p 127.0.0.1:10039:10000 mcr.microsoft.com/azure-storage/azurite:3.33.0 azurite-blob --blobHost 0.0.0.0
           if ($LASTEXITCODE -ne 0) { throw 'Private storage fixture failed.' }
 
       - uses: actions/setup-dotnet@v6
