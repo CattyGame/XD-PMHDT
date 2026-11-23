@@ -122,6 +122,32 @@ public sealed class ReportSnapshotPostgresTests
             Assert.Equal("LOW",root.GetProperty("review").GetProperty("correctedRiskLevel").GetString());
             Assert.Equal(64,root.GetProperty("originalSha256").GetString()!.Length);Assert.Equal(64,reader.GetString(1).Length);
         }
+        var secondVersionDetail=detail with
+        {
+            Result=resultDetail with
+            {
+                ResultId=result2,Version=2,ModelVersion="fixture-model-v2",
+                ConfigVersion="fixture-config-v2",ThresholdVersion="fixture-threshold-v2"
+            },
+            // Simulates a stale pre-v2 review version. The v1 review belongs to result1 and
+            // the v2 review is newer, so neither may be attached to this AI v2 snapshot.
+            ReviewVersion=1
+        };
+        var secondVersionReports=new AnalysisReportService(
+            new AnalysisQueryService(new Query(secondVersionDetail,new(image,batch,tenant,patient,actor)),access),
+            new(new PostgresBatchStatusRepository(db),access),files,storage,new(),new(),db,clock);
+        var v2Export=await secondVersionReports.CreateAnalysisPdfAsync(actor,null,image,"report-v2-regression",default);
+        await using(var readV2=db.CreateCommand("SELECT snapshot::text,snapshot_sha256 FROM analysis.report_snapshots WHERE id=$1"))
+        {
+            readV2.Parameters.AddWithValue(v2Export.ReportId);await using var reader=await readV2.ExecuteReaderAsync();Assert.True(await reader.ReadAsync());
+            var json=reader.GetString(0);using var snapshot=JsonDocument.Parse(json);var root=snapshot.RootElement;
+            Assert.Equal(reader.GetString(1),ReportSnapshotDigest.Compute(json));
+            Assert.Equal(result2,root.GetProperty("result").GetProperty("resultId").GetGuid());
+            Assert.Equal(2,root.GetProperty("result").GetProperty("version").GetInt32());
+            Assert.Equal("fixture-model-v2",root.GetProperty("result").GetProperty("modelVersion").GetString());
+            Assert.Equal("fixture-config-v2",root.GetProperty("result").GetProperty("configVersion").GetString());
+            Assert.True(!root.TryGetProperty("review",out var review) || review.ValueKind==JsonValueKind.Null);
+        }
         var httpBuilder=WebApplication.CreateBuilder();httpBuilder.WebHost.UseTestServer();httpBuilder.Logging.ClearProviders();
         var auditWriter=new ReportAuditWriter();
         httpBuilder.Services.AddSingleton(reports);httpBuilder.Services.AddSingleton<IAuditWriter>(auditWriter);
