@@ -1,6 +1,6 @@
 # Bàn giao Giới hạn Nghiên cứu & Regression Ảnh khó — Module M4 (Sprint 7 / W7-M4-03 / SCRUM-407)
 
-**Phạm vi tài liệu:** Bàn giao kỹ thuật chính thức cho nhánh AI Core (`src/ai-core`), hợp đồng API `1.3.0`, giao diện hiển thị kết quả (`AnalysisResultPage.tsx`), và bộ kiểm thử ảnh khó / fail-closed của Module M4.  
+**Phạm vi tài liệu:** Bàn giao kỹ thuật chính thức cho nhánh AI Core (`src/ai-core`), hợp đồng API `1.3.0`, giao diện hiển thị kết quả (`AnalysisResultPage.tsx`), và bộ kiểm thử ảnh khó / fail-closed của Module M4.
 **Trạng thái lâm sàng:** `clinicalValidation = false`, `icdrGradingSupported = false` — **chỉ phục vụ nghiên cứu / hỗ trợ tham khảo kỹ thuật, không phải thiết bị y tế hay công cụ chẩn đoán lâm sàng.**
 
 ---
