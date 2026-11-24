@@ -190,10 +190,16 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
     <p><strong>Trạng thái review:</strong> {reviewLabels[analysis.reviewStatus] ?? analysis.reviewStatus}</p>
     <p><strong>Cập nhật:</strong> {new Date(analysis.updatedAt).toLocaleString('vi-VN')}</p>
 
-    {analysis.processingStatus !== 'COMPLETED' &&
-      <p role="status">Chưa có kết quả AI hoàn tất. Hệ thống chỉ hiển thị dữ liệu thật do API cung cấp.
-        {!terminalStatuses.has(analysis.processingStatus) ? ' Trạng thái sẽ được đọc lại tự động.' : ''}
-      </p>}
+    {analysis.processingStatus !== 'COMPLETED' && (
+      terminalStatuses.has(analysis.processingStatus)
+        ? <section className="analysis-result-warning" aria-label="Lý do dừng phân tích">
+          <p role="status">Phân tích đã dừng và không trả kết quả AI hoàn tất. Hệ thống không tự đoán chỉ số AVR hoặc mức nguy cơ mặc định.</p>
+          {analysis.error && <p><strong>{analysis.error.code}:</strong> {analysis.error.message}</p>}
+          {analysis.processingStatus === 'LOW_QUALITY' &&
+            <p>Vui lòng chụp lại ảnh đáy mắt rõ nét, đủ sáng, không bị lóa rồi tải lên phân tích mới.</p>}
+        </section>
+        : <p role="status">Chưa có kết quả AI hoàn tất. Hệ thống chỉ hiển thị dữ liệu thật do API cung cấp. Trạng thái sẽ được đọc lại tự động.</p>
+    )}
 
     {result && <>
       {result.isMock
