@@ -1,6 +1,6 @@
 # M1 Sprint 7 — phương án phục hồi Docker ngày 24/11/2026
 
-Người vận hành đã chấp thuận sao lưu và chuyển dữ liệu Docker sang D ngày 24/11/2026. Bản sao lạnh ban đầu đã khớp SHA-256 cả hai VHDX; Docker đang thực hiện chuyển vị trí qua giao diện chính thức. Chưa chạy sửa filesystem. Phê duyệt WSL 7 GiB trước đó đã được áp dụng riêng.
+Người vận hành đã chấp thuận sao lưu và chuyển dữ liệu Docker sang D ngày 24/11/2026. Docker đã chuyển sang D qua giao diện chính thức. Backup độc lập đã đọc giải nén và khớp SHA-256 trước khi người vận hành yêu cầu dọn bản cũ trên C; đã thu hồi khoảng 96,45 GiB, C còn khoảng 102,07 GiB tại thời điểm dọn. Không chạy sửa filesystem. Phê duyệt WSL 7 GiB trước đó đã được áp dụng riêng.
 
 ## Bằng chứng hiện tại
 
@@ -26,10 +26,11 @@ Phương án thay thế: người vận hành giải phóng ít nhất khoảng 
 - Đã giữ hard link `docker_data.pre-move-20261124.vhdx` tới VHDX nguồn khi engine dừng, trước khi lệnh di chuyển hoàn tất. Liên kết này giữ dữ liệu gốc nếu Docker xóa tên tệp nguồn cũ; không phải bản sao vật lý độc lập trên ổ khác và chưa giải phóng dung lượng C.
 - Cần đối chiếu dữ liệu sau cutover và giữ một bản backup đã xác minh trước khi dọn bản giữ trên C. Không dùng mã băm của snapshot ban đầu để tuyên bố disk sau cutover khớp khi chưa kiểm tra lại.
 - Sau cutover, registry WSL ghi `docker-desktop` tại `D:\DockerDesktopData\DockerDesktopWSL\main`; engine giữ giới hạn khoảng 7 GiB. `docker-cutover-data-20261124.json` đạt `PASS_OWNED_DATA_CHECKS`: đủ năm volume của fixture, SHA-256 hai model không đổi, 100 dòng ledger/reservation của batch đã phục hồi khớp toàn bộ bản trước chuyển. Phạm vi này không chứng nhận nội dung mọi project Docker hoặc toàn bộ filesystem.
-- Đang tạo backup độc lập bằng `bsdtar --zstd` có sẵn trên Windows; chỉ công nhận khi đọc giải nén đầy đủ và đối chiếu SHA-256 với nguồn. Lượt gzip quá chậm đã dừng, tệp partial được giữ riêng, không coi là backup hợp lệ. VHDX gốc giữ trên C chưa được dọn.
+- Backup độc lập dùng `bsdtar --zstd` có sẵn trên Windows. Lần đọc xác minh đầu gặp `MemoryError` với buffer 4 MiB; giữ báo cáo FAIL và nguồn, không xóa để che lỗi. Lần kiểm lại bằng buffer 64 KiB đạt `BACKUP_VERIFIED`: đọc nguồn và toàn bộ 103.560.511.488 bytes giải nén đều có SHA-256 `7470784207ece39fadf5d52d851f64652fd406d2688d8227a0764dd776cfe323`. Archive hợp lệ tại `D:\DockerDesktopData\docker_data.pre-move-20261124.tar.zst`, dung lượng 44.794.813.257 bytes.
+- Sau phê duyệt dọn dữ liệu của người vận hành và kiểm tra đường dẫn Docker đang dùng D, chỉ xóa `docker_data.pre-move-20261124.vhdx` không còn dùng trên C. Báo cáo `docker-c-cleanup-20261124.json` ghi nhận thu hồi 103.560.515.584 bytes; giữ nguyên chương trình Docker, cấu hình và active VHDX trên D. Không xóa toàn bộ `%LOCALAPPDATA%\Docker` hoặc thư mục cài đặt Docker.
 
 [Docker hướng dẫn thay vị trí dữ liệu WSL](https://docs.docker.com/desktop/features/wsl/). [Disk image location và sử dụng image đã có](https://docs.docker.com/desktop/settings-and-maintenance/settings/).
 
 ## Phạm vi nghiệm thu
 
-Không chuyển SCRUM-398/400/401 sang Done từ các kết quả chưa đủ. Lượt một worker WSL7 cũ bị gián đoạn ở 99/100; bản phục hồi sau sửa lease đạt 100 terminal và 100 reservation đối soát, nhưng không thay benchmark liên tục. Profile TLS còn cần build lại Analysis adapter hỗ trợ HTTPS Azurite và chạy đủ kiểm tra runtime. AES-256 at rest vẫn chưa có bằng chứng: hai ổ hiện ghi XTS-AES 128.
+Không chuyển SCRUM-398/400/401 sang Done từ các kết quả chưa đủ. Lượt một worker WSL7 cũ bị gián đoạn ở 99/100; bản phục hồi sau sửa lease đạt 100 terminal và 100 reservation đối soát, nhưng không thay benchmark liên tục. Profile TLS đã build lại từ commit `70f1f79`; hai lượt mới một/bốn worker đều đủ 100 terminal và 100 reservation đối soát. Sau dọn C, năm volume fixture, hai model và 100 dòng tài chính canonical vẫn khớp. TLS và replay có bằng chứng riêng; resolver warm p95 còn FAIL và AES-256 at rest vẫn chưa có bằng chứng: hai ổ được người vận hành báo XTS-AES 128. Xem cập nhật 24/11 trong [biên bản nghiệm thu](m1_sprint7_acceptance_20261123.md).

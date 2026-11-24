@@ -2,7 +2,15 @@
 
 Jira thật: SCRUM-398 (security), 399 (DR), 400 (capacity), 401 (resilience). Không dùng mã từ kế hoạch cũ để thay quyết định trên Jira. Profile này dùng nghiên cứu/Sandbox TEST, không phải triển khai lâm sàng hay thanh toán production.
 
-## Trạng thái kiểm chứng ngày 23/11/2026
+## Cập nhật ngày 24/11/2026
+
+Commit `70f1f79` đã có hai lượt TLS mới với cùng 100 ảnh, AI/model/threads và worker chính được giữ xuyên hai lượt. Mỗi lượt đạt 55 MEASURED / 25 UNAVAILABLE / 20 QUALITY_FAILURE / 0 PIPELINE_FAILURE; 100 reservation đối soát không lệch. Peak RAM quan sát đều dưới 80%, không OOM/restart. Resolver warm p95 gộp vẫn FAIL: 12,7225 ms (một worker), 5,2854 ms (bốn worker), mỗi chế độ ba lượt định trước, 500 warm-up + 3.000 mẫu/lượt, cold ghi riêng.
+
+Các phép chẩn đoán HopBench và CPU placement diễn ra trong cửa sổ AI; không dùng hai thời gian tổng để công bố hệ số tăng tốc hoặc nghiệm thu so sánh hiệu năng AI cùng điều kiện. CPU affinity đã trả về cấu hình gốc, fixture giữ một worker. TLS handshake/native connection, replay ba bản trùng có ACK từ cả hai consumer, scan source/tám application image và năm workflow CI đều PASS trong phạm vi được ghi tại phần 24/11 của [biên bản cập nhật](../testing/m1_sprint7_acceptance_20261123.md).
+
+Docker data đang ở `D:\DockerDesktopData\DockerDesktopWSL`; backup độc lập đã đọc giải nén và khớp SHA-256 trước khi dọn bản C cũ, thu hồi 96,45 GiB. Giữ chương trình Docker/cấu hình trên C. Không tự rekey ổ đĩa: output người vận hành vẫn là XTS-AES 128, Protection On, chưa đạt AES-256. PR #112 giữ draft, chưa merge hoặc chuyển Done.
+
+## Lịch sử kiểm chứng ngày 23/11/2026
 
 Kết quả cuối của candidate FIFO ở [biên bản đối soát](../testing/m1_sprint7_acceptance_20261123.md): một worker 100 ảnh PASS; bốn worker đủ 100 terminal/100 reservation đối soát và 0 retry, nhưng FAIL RAM do worker dài hạn đạt 81,06% cap. AI processing p95 là 14,01 / 13,30 giây; resolver p95 gộp 9.000 mẫu mỗi chế độ là 6,2863 / 5,5221 ms, chưa đạt <5 ms. Giữ fixture local một worker và chưa promote toàn Sprint 7. Các lượt chẩn đoán trước dưới đây được giữ để truy vết, không thay kết quả mới.
 
