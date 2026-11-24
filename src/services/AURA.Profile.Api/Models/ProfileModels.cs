@@ -185,7 +185,8 @@ public sealed record CameraDelegationResolveRequest(
     [property: JsonPropertyName("clientId")] string ClientId,
     [property: JsonPropertyName("deviceId")] string DeviceId,
     [property: JsonPropertyName("expectedTenantId")] Guid ExpectedTenantId,
-    [property: JsonPropertyName("action")] string Action
+    [property: JsonPropertyName("action")] string Action,
+    [property: JsonPropertyName("clinicContextId")] Guid? ClinicContextId = null
 );
 
 public sealed record CameraDelegationResolveResponse(
@@ -197,7 +198,11 @@ public sealed record CameraDelegationResolveResponse(
     [property: JsonPropertyName("billingOwner")] BillingOwnerDto? BillingOwner,
     [property: JsonPropertyName("grantId")] Guid? GrantId,
     [property: JsonPropertyName("reason")] string? Reason
-);
+)
+{
+    public Guid? ActorAccountId { get; init; }
+    public Guid? ClinicContextId { get; init; }
+}
 
 public sealed record CreateDoctorAssignmentRequest(
     [property: JsonPropertyName("doctorId")] Guid DoctorId,

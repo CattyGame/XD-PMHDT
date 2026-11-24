@@ -8,7 +8,8 @@ public sealed record AdminAuthorizationResult(
     int StatusCode,
     string Code,
     string Message,
-    bool Retryable = false);
+    bool Retryable = false,
+    Guid AccountId = default);
 
 /// <summary>
 /// Delegates Firebase ID-token validation and current account-role lookup to Identity.
@@ -71,7 +72,9 @@ public sealed class SystemAdminAuthorizer(
                 return Denied(403, "ERR_FORBIDDEN", "Yêu cầu quyền SYSTEM_ADMIN.");
             }
 
-            return new AdminAuthorizationResult(true, 200, string.Empty, string.Empty);
+            if (identity.AccountId == Guid.Empty)
+                return Denied(503, "ERR_AUTH_DEPENDENCY_UNAVAILABLE", "Không thể xác minh tài khoản quản trị.", true);
+            return new AdminAuthorizationResult(true, 200, string.Empty, string.Empty, AccountId: identity.AccountId);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -92,5 +95,5 @@ public sealed class SystemAdminAuthorizer(
         int statusCode, string code, string message, bool retryable = false) =>
         new(false, statusCode, code, message, retryable);
 
-    private sealed record IdentityMeResponse(string? AccountStatus, IReadOnlyList<string>? Roles);
+    private sealed record IdentityMeResponse(string? AccountStatus, IReadOnlyList<string>? Roles, Guid AccountId);
 }

@@ -25,4 +25,5 @@
     <Compile Include="../../src/services/AURA.Profile.Api/ProfilePublicMembershipEndpoints.cs" Link="ProfilePublicMembershipEndpoints.cs" />
     <Compile Include="../../src/services/AURA.Profile.Api/ProfilePatientEndpoints.cs" Link="ProfilePatientEndpoints.cs" />
   </ItemGroup>
+  <ItemGroup><ProjectReference Include="../../src/common/AURA.Common.Audit/AURA.Common.Audit.csproj" /></ItemGroup>
 </Project>

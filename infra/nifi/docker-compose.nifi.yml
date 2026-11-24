@@ -10,6 +10,12 @@ services:
       AUTH: single-user
       SINGLE_USER_CREDENTIALS_USERNAME: "${NIFI_ADMIN_USER:?Set NIFI_ADMIN_USER in .env}"
       SINGLE_USER_CREDENTIALS_PASSWORD: "${NIFI_ADMIN_PASSWORD:?Set NIFI_ADMIN_PASSWORD in .env}"
+      NIFI_CAMERA_CLIENT_ID: "${NIFI_CAMERA_CLIENT_ID:-nifi-camera}"
+      NIFI_CAMERA_CLIENT_SECRET: "${NIFI_CAMERA_CLIENT_SECRET:-}"
+      NIFI_CAMERA_DEVICE_KEYS_JSON: "${NIFI_CAMERA_DEVICE_KEYS_JSON:-}"
+      NIFI_CAMERA_ALLOW_HTTP: "${NIFI_CAMERA_ALLOW_HTTP:-false}"
+      NIFI_CAMERA_IDENTITY_ORIGIN: "${NIFI_CAMERA_IDENTITY_ORIGIN:-}"
+      NIFI_CAMERA_GATEWAY_ORIGIN: "${NIFI_CAMERA_GATEWAY_ORIGIN:-}"
     volumes:
       - nifi_conf:/opt/nifi/nifi-current/conf
       - nifi_flowfile_repository:/opt/nifi/nifi-current/flowfile_repository

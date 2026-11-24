@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import type { BackendContext } from '../../api/backendContext'
 import { getUploadClinics, type UploadClinic } from '../../api/clinicUpload'
 import {
-  billingErrorMessage, createBillingOrder, getBillingPackages,
+  BillingError, billingErrorMessage, createBillingOrder, getBillingPackages,
   type BillingOwner, type BillingPackage,
 } from '../../api/billing'
 import { useBackendSession } from '../../auth/backendSession'
@@ -73,7 +73,7 @@ function BillingWorkspace({ context }: { context: BackendContext }) {
       ? { type: 'ACCOUNT', id: context.accountId }
       : { type: 'CLINIC', id: clinicId }
     if (!owner.id) { setError('Chưa chọn phòng khám được cấp quyền.'); return }
-    const identity = `${owner.type}:${owner.id}:${item.id}`
+    const identity = `${owner.type}:${owner.id}:${item.id}:${item.priceVersionId}`
     if (pendingIntent.current?.identity !== identity) {
       pendingIntent.current = { identity, key: newOrderKey() }
     }
@@ -81,12 +81,19 @@ function BillingWorkspace({ context }: { context: BackendContext }) {
     setBusy(true)
     setError('')
     try {
-      const order = await createBillingOrder(context, owner, item.id, pendingIntent.current.key)
+      const order = await createBillingOrder(context, owner, item.id, pendingIntent.current.key, item.priceVersionId)
       if (!active.current) return
       pendingIntent.current = null
       navigate(`/billing/pay/${order.orderId}`)
     } catch (cause) {
       if (!active.current) return
+      if (cause instanceof BillingError && cause.code === 'ERR_PRICE_VERSION_CHANGED') {
+        pendingIntent.current = null
+        setError(billingErrorMessage(cause))
+        setCatalog({ kind: 'loading' })
+        setRetry(n => n + 1)
+        return
+      }
       // Không sinh key mới sau timeout: người dùng có thể bấm lại với CÙNG key.
       setError(`${billingErrorMessage(cause)} Nếu muốn thử lại, hãy bấm lại cùng gói cước; hệ thống dùng cùng Idempotency-Key.`)
     } finally {
@@ -103,8 +110,7 @@ function BillingWorkspace({ context }: { context: BackendContext }) {
         ? { type: 'ACCOUNT', id: context.accountId } : { type: 'CLINIC', id: clinicId }} />
     </div>
     <p className={styles.warning} role="note">
-      Bảng giá do Billing API trả về thuộc catalog demo/legacy, chưa phải giá kinh doanh được phê duyệt.
-      Đơn vị tiền tệ và số credit cuối cùng được xác nhận khi tạo đơn hàng.
+      Đơn hàng dùng đúng phiên bản giá và số credit hiển thị lúc chọn gói.
     </p>
     <section className={styles.panel} aria-label="Chọn ví thanh toán">
       <h2>Đối tượng thanh toán</h2>
@@ -132,7 +138,9 @@ function BillingWorkspace({ context }: { context: BackendContext }) {
         <span className={styles.eyebrow}>GÓI KHÁM • ID {item.id}</span>
         <h2>{item.name}</h2>
         <p className={styles.credits}><strong>{item.credits.toLocaleString('vi-VN')}</strong> Credit</p>
-        <p className={styles.price}>{item.price.toLocaleString('vi-VN')} <small>(đơn vị theo báo giá backend)</small></p>
+        <p className={styles.price}>{item.price.toLocaleString('vi-VN', {
+          style: 'currency', currency: item.currency, maximumFractionDigits: 2,
+        })}</p>
         <button disabled={busy || (ownerType === 'CLINIC' && !clinicId)}
           onClick={() => void buy(item)}>{busy ? 'Đang xử lý...' : 'Mua gói'}</button>
       </article>)}

@@ -79,7 +79,8 @@ public sealed class ExportService(
     public async Task<PrivateContent> OpenContentAsync(Guid actor,Guid clinic,Guid id,string? correlation,CancellationToken ct)
     {
         var item=await RequireCurrentAsync(actor,clinic,id,correlation,ct);
-        return new(await storage.OpenReadAsync(storageOptions.ReportContainer,item.ObjectKey,ct),item.ContentType);
+        return new(await storage.OpenReadAsync(storageOptions.ReportContainer,item.ObjectKey,ct),item.ContentType)
+            {TenantId=item.TenantId,ResourceVersion=1};
     }
 
     public async Task<bool> HasSnapshotAsync(Guid id,CancellationToken ct)=>await snapshots.FindByIdAsync(id,ct) is not null;

@@ -21,4 +21,5 @@
     <ProjectReference Include="..\..\common\AURA.Common.Cache\AURA.Common.Cache.csproj" />
   </ItemGroup>
 
+  <ItemGroup><ProjectReference Include="../../common/AURA.Common.Audit/AURA.Common.Audit.csproj" /></ItemGroup>
 </Project>

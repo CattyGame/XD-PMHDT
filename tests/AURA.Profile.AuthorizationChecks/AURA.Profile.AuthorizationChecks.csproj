@@ -19,4 +19,5 @@
     <Compile Include="../../src/services/AURA.Profile.Api/ProfileRepository.Security.cs" Link="ProfileRepository.Security.cs" />
     <Compile Include="../../src/services/AURA.Profile.Api/AnalysisBindingAuthority.cs" Link="AnalysisBindingAuthority.cs" />
   </ItemGroup>
+  <ItemGroup><ProjectReference Include="../../src/common/AURA.Common.Audit/AURA.Common.Audit.csproj" /></ItemGroup>
 </Project>

@@ -4,6 +4,7 @@ using System.Text.Json;
 using AURA.Billing.Api.Data;
 using AURA.Billing.Api.Models;
 using StackExchange.Redis;
+using Npgsql;
 
 namespace AURA.Billing.Api.Services;
 
@@ -48,15 +49,7 @@ public sealed class OrderService
         // 1. Check idempotency
         var existingOrder = await _repository.FindByIdempotencyKeyAsync(tenantId, idempotencyKey, cancellationToken);
         if (existingOrder is not null)
-        {
-            if (string.Equals(existingOrder.RequestFingerprint, fingerprint, StringComparison.Ordinal))
-            {
-                var existingResponse = BuildOrderResponse(existingOrder);
-                return new OrderOperationResult(OrderOperationStatus.Replayed, existingResponse);
-            }
-
-            return new OrderOperationResult(OrderOperationStatus.IdempotencyConflict);
-        }
+            return Replay(existingOrder);
 
         // 2. Fetch active price version
         var priceVersion = await _repository.GetActivePriceVersionAsync(
@@ -64,24 +57,33 @@ public sealed class OrderService
 
         if (priceVersion is null)
         {
-            return new OrderOperationResult(OrderOperationStatus.PackageNotFound);
+            var concurrent = await _repository.FindByIdempotencyKeyAsync(tenantId, idempotencyKey, cancellationToken);
+            if (concurrent is not null) return Replay(concurrent);
+            return new(request.PackagePriceVersionId.HasValue ? OrderOperationStatus.PriceChanged : OrderOperationStatus.PackageNotFound);
         }
 
         // 3. Create order
         var orderId = Guid.NewGuid();
-        var orderRecord = await _repository.CreateOrderAsync(
-            orderId,
-            tenantId,
-            request.BillingOwner.Type.Trim().ToUpperInvariant(),
-            request.BillingOwner.Id,
-            priceVersion,
-            runtimeOptions.Environment,
-            idempotencyKey,
-            fingerprint,
-            cancellationToken, verifiedPurchaserAccountId);
+        try
+        {
+            var order = await _repository.CreateOrderAsync(orderId, tenantId,
+                request.BillingOwner.Type.Trim().ToUpperInvariant(), request.BillingOwner.Id, priceVersion,
+                runtimeOptions.Environment, idempotencyKey, fingerprint, cancellationToken, verifiedPurchaserAccountId);
+            return new(OrderOperationStatus.Created, BuildOrderResponse(order));
+        }
+        catch (Exception ex) when (ex is PriceVersionUnavailableException or
+            PostgresException { SqlState: PostgresErrorCodes.UniqueViolation, ConstraintName: "uq_billing_order_idempotency" })
+        {
+            var concurrent = await _repository.FindByIdempotencyKeyAsync(tenantId, idempotencyKey, cancellationToken);
+            if (concurrent is not null) return Replay(concurrent);
+            if (ex is PriceVersionUnavailableException) return new(OrderOperationStatus.PriceChanged);
+            throw;
+        }
 
-        var response = BuildOrderResponse(orderRecord);
-        return new OrderOperationResult(OrderOperationStatus.Created, response);
+        OrderOperationResult Replay(OrderRecord order) =>
+            order.RequestFingerprint == fingerprint && order.Environment == runtimeOptions.Environment
+                ? new(OrderOperationStatus.Replayed, BuildOrderResponse(order))
+                : new(OrderOperationStatus.IdempotencyConflict);
     }
 
     public async Task<PaymentCallbackResult> ProcessCallbackAsync(
@@ -211,7 +213,8 @@ public sealed class OrderService
             order.CreditsSnapshot,
             order.PackageNameSnapshot,
             paymentUrl,
-            order.CreatedAt);
+            order.CreatedAt,
+            order.PackagePriceVersionId);
     }
 
     private static string ComputeOrderFingerprint(CreateOrderRequest request, Guid idempotencyKey)
@@ -238,7 +241,8 @@ public enum OrderOperationStatus
     Created,
     Replayed,
     IdempotencyConflict,
-    PackageNotFound
+    PackageNotFound,
+    PriceChanged
 }
 
 public sealed record OrderOperationResult(

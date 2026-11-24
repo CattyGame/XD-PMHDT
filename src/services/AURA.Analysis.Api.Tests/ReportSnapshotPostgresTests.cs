@@ -4,11 +4,29 @@ using AURA.Analysis.Api.Upload;
 using Npgsql;
 using QuestPDF.Infrastructure;
 using Xunit;
+using AURA.Common.Audit;
+using AURA.Analysis.Api.Auth;
+using AURA.Analysis.Api.Http;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System.Net;
 
 namespace AURA.Analysis.Api.Tests;
 
 public sealed class ReportSnapshotPostgresTests
 {
+    private sealed class ReportIdentity(Guid actor):IAnalysisUserIdentityResolver
+    {public Task<AnalysisUserContext> ResolveAsync(HttpRequest request,CancellationToken ct)=>Task.FromResult(new AnalysisUserContext(actor,["PATIENT"]));}
+    private sealed class ReportAuditWriter:IAuditWriter
+    {
+        public readonly List<AuditEvent> Events=[];public bool Down;
+        public Task AppendAsync(AuditEvent e,CancellationToken ct)
+        {if(Down)throw new IOException("Test-only audit outage");Events.Add(e);return Task.CompletedTask;}
+    }
     [PostgresFact]
     public async Task Batch_notification_does_not_require_a_legacy_analysis_request()
     {
@@ -103,6 +121,53 @@ public sealed class ReportSnapshotPostgresTests
             Assert.Equal(review1,root.GetProperty("review").GetProperty("reviewId").GetGuid());
             Assert.Equal("LOW",root.GetProperty("review").GetProperty("correctedRiskLevel").GetString());
             Assert.Equal(64,root.GetProperty("originalSha256").GetString()!.Length);Assert.Equal(64,reader.GetString(1).Length);
+        }
+        var secondVersionDetail=detail with
+        {
+            Result=resultDetail with
+            {
+                ResultId=result2,Version=2,ModelVersion="fixture-model-v2",
+                ConfigVersion="fixture-config-v2",ThresholdVersion="fixture-threshold-v2"
+            },
+            // Simulates a stale pre-v2 review version. The v1 review belongs to result1 and
+            // the v2 review is newer, so neither may be attached to this AI v2 snapshot.
+            ReviewVersion=1
+        };
+        var secondVersionReports=new AnalysisReportService(
+            new AnalysisQueryService(new Query(secondVersionDetail,new(image,batch,tenant,patient,actor)),access),
+            new(new PostgresBatchStatusRepository(db),access),files,storage,new(),new(),db,clock);
+        var v2Export=await secondVersionReports.CreateAnalysisPdfAsync(actor,null,image,"report-v2-regression",default);
+        await using(var readV2=db.CreateCommand("SELECT snapshot::text,snapshot_sha256 FROM analysis.report_snapshots WHERE id=$1"))
+        {
+            readV2.Parameters.AddWithValue(v2Export.ReportId);await using var reader=await readV2.ExecuteReaderAsync();Assert.True(await reader.ReadAsync());
+            var json=reader.GetString(0);using var snapshot=JsonDocument.Parse(json);var root=snapshot.RootElement;
+            Assert.Equal(reader.GetString(1),ReportSnapshotDigest.Compute(json));
+            Assert.Equal(result2,root.GetProperty("result").GetProperty("resultId").GetGuid());
+            Assert.Equal(2,root.GetProperty("result").GetProperty("version").GetInt32());
+            Assert.Equal("fixture-model-v2",root.GetProperty("result").GetProperty("modelVersion").GetString());
+            Assert.Equal("fixture-config-v2",root.GetProperty("result").GetProperty("configVersion").GetString());
+            Assert.True(!root.TryGetProperty("review",out var review) || review.ValueKind==JsonValueKind.Null);
+        }
+        var httpBuilder=WebApplication.CreateBuilder();httpBuilder.WebHost.UseTestServer();httpBuilder.Logging.ClearProviders();
+        var auditWriter=new ReportAuditWriter();
+        httpBuilder.Services.AddSingleton(reports);httpBuilder.Services.AddSingleton<IAuditWriter>(auditWriter);
+        httpBuilder.Services.AddSingleton<IAnalysisUserIdentityResolver>(new ReportIdentity(actor));
+        await using(var httpApp=httpBuilder.Build())
+        {
+            httpApp.MapAnalysisEndpoints();await httpApp.StartAsync();using var client=httpApp.GetTestClient();
+            using(var response=await client.GetAsync($"/api/v1/reports/{exported.ReportId:D}/content"))
+            {
+                Assert.Equal(HttpStatusCode.OK,response.StatusCode);
+                Assert.Equal("application/pdf",response.Content.Headers.ContentType!.MediaType);
+                var audit=Assert.Single(auditWriter.Events);Assert.Equal(AuditAction.ReportDownload,audit.Action);
+                Assert.Equal(exported.ReportId.ToString("D"),audit.ResourceId);Assert.Equal(actor,audit.ActorAccountId);
+                Assert.Equal(tenant,audit.TenantId);Assert.Equal(1,audit.ResourceVersion);
+            }
+            auditWriter.Down=true;
+            using var blocked=await client.GetAsync($"/api/v1/reports/{exported.ReportId:D}/content");
+            Assert.Equal(HttpStatusCode.ServiceUnavailable,blocked.StatusCode);
+            Assert.DoesNotContain("%PDF-",await blocked.Content.ReadAsStringAsync());
+            Assert.Single(auditWriter.Events);
         }
         var download=await reports.ReadDownloadContentAsync(actor,null,exported.ReportId,null,default);
         Assert.Equal("application/pdf",download.ContentType);

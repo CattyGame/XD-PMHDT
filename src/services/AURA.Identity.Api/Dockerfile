@@ -1,5 +1,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
+COPY src/common/AURA.Common.Audit/ src/common/AURA.Common.Audit/
 
 COPY src/services/AURA.Identity.Api/AURA.Identity.Api.csproj \
      src/services/AURA.Identity.Api/

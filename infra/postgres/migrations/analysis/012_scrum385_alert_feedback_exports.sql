@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS analysis.feedback (
 );
 CREATE INDEX IF NOT EXISTS ix_feedback_analysis ON analysis.feedback (tenant_id, analysis_id, created_at DESC);
 ALTER TABLE analysis.feedback DROP CONSTRAINT IF EXISTS feedback_review_version_check;
+ALTER TABLE analysis.feedback DROP CONSTRAINT IF EXISTS ck_feedback_review_version;
 ALTER TABLE analysis.feedback ADD CONSTRAINT ck_feedback_review_version CHECK (review_version >= 0);
 
 CREATE TABLE IF NOT EXISTS analysis.export_snapshots (

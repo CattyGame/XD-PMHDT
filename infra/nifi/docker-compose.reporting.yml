@@ -1,0 +1,33 @@
+# Run from the repository root with --project-directory .
+services:
+  reporting-postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: aura_reporting
+      POSTGRES_USER: aura_reporting_admin
+      POSTGRES_PASSWORD: "${REPORTING_DB_ADMIN_PASSWORD:?Set REPORTING_DB_ADMIN_PASSWORD outside Git}"
+      REPORTING_WRITER_PASSWORD: "${REPORTING_WRITER_PASSWORD:?Set REPORTING_WRITER_PASSWORD outside Git}"
+    volumes:
+      - camera_reporting_data:/var/lib/postgresql/data
+      - type: bind
+        source: ./infra/postgres/reporting
+        target: /docker-entrypoint-initdb.d
+        read_only: true
+        bind: {create_host_path: false}
+    networks:
+      - aura_network
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U aura_reporting_admin -d aura_reporting]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  nifi:
+    volumes:
+      - type: bind
+        source: "${AURA_NIFI_DRIVER_HOME:?Set AURA_NIFI_DRIVER_HOME to the verified JDBC directory}"
+        target: /opt/nifi/nifi-current/drivers
+        read_only: true
+        bind: {create_host_path: false}
+volumes:
+  camera_reporting_data:

@@ -37,6 +37,9 @@ public sealed class PostgresBillingInvariantsTests
             var item=new SettlementInboxEvent("adr005-version",Guid.NewGuid(),"analysis.completed",version,DateTimeOffset.UtcNow,Guid.NewGuid(),Guid.NewGuid(),"version-regression",new string('a',64));
             Assert.Equal(SettlementInboxIngestStatus.Inserted,(await f.Inbox.IngestAsync(item,default)).Status);
             Assert.Equal(SettlementInboxIngestStatus.Duplicate,(await f.Inbox.IngestAsync(item,default)).Status);
+            var changedPayload=await f.Inbox.IngestAsync(item with {PayloadSha256=new string('b',64)},default);
+            Assert.Equal(SettlementInboxIngestStatus.PayloadConflict,changedPayload.Status);
+            Assert.Equal("HOLD",changedPayload.CurrentStatus);
             await Assert.ThrowsAsync<ArgumentException>(()=>f.Inbox.IngestAsync(item with{EventId=Guid.NewGuid(),SchemaVersion="0.9"},default));
         }
     }
@@ -65,6 +68,43 @@ public sealed class PostgresBillingInvariantsTests
         Assert.Equal("ERR_INVALID_PAYMENT_STATUS",unknown.Status);
         Assert.Equal("PENDING",(await f.Orders.GetOrderByIdAsync(unknownOrder.Id,default))!.Status);
         Assert.Equal(100,await f.BalanceAsync());
+    }
+
+    [BillingPostgresFact]
+    public async Task Reservation_replay_is_idempotent_and_same_key_changed_payload_conflicts_without_double_charge()
+    {
+        await using var f=await Fixture.CreateAsync();
+        var options=new BillingRuntimeOptions("TEST",false);
+        var request=new ReserveCreditRequest(Guid.NewGuid(),f.Tenant,f.Owner,Guid.NewGuid(),new("ACCOUNT",f.Owner),1,1);
+        var key=Guid.NewGuid();
+        var fingerprint=ReservationFingerprint.ForReserve(request,options);
+
+        var created=await f.Credits.ReserveAsync(request,key,fingerprint,options,default);
+        Assert.Equal(ReservationOperationStatus.Created,created.Status);
+        var reservation=Assert.IsType<ReservationResponse>(created.Reservation);
+        Assert.Equal(99,await f.BalanceAsync());
+
+        var replay=await f.Credits.ReserveAsync(request,key,fingerprint,options,default);
+        Assert.Equal(ReservationOperationStatus.Replayed,replay.Status);
+        Assert.Equal(reservation.ReservationId,replay.Reservation!.ReservationId);
+        Assert.Equal(99,await f.BalanceAsync());
+
+        var changedRequest=request with {Units=2};
+        var conflict=await f.Credits.ReserveAsync(changedRequest,key,
+            ReservationFingerprint.ForReserve(changedRequest,options),options,default);
+        Assert.Equal(ReservationOperationStatus.IdempotencyConflict,conflict.Status);
+        Assert.Equal(99,await f.BalanceAsync());
+
+        var captureKey=Guid.NewGuid();
+        var captureFingerprint=ReservationFingerprint.ForCapture(reservation.ReservationId);
+        var captured=await f.Credits.CaptureAsync(reservation.ReservationId,captureKey,captureFingerprint,default);
+        Assert.Equal(ReservationOperationStatus.Changed,captured.Status);
+        var captureReplay=await f.Credits.CaptureAsync(reservation.ReservationId,captureKey,captureFingerprint,default);
+        Assert.Equal(ReservationOperationStatus.Replayed,captureReplay.Status);
+        Assert.Equal("CAPTURED",(await f.Credits.GetAsync(reservation.ReservationId,default))!.State);
+        Assert.Equal(99,await f.BalanceAsync());
+
+        Assert.Equal(2L,await f.ReservationLedgerCountAsync(reservation.ReservationId));
     }
 
     [BillingPostgresFact]
@@ -138,6 +178,8 @@ public sealed class PostgresBillingInvariantsTests
         {await using var cmd=_admin.CreateCommand(sql);foreach(var value in values)cmd.Parameters.AddWithValue(value);await cmd.ExecuteNonQueryAsync();}
         public async Task<int> BalanceAsync()
         {await using var cmd=_admin.CreateCommand("SELECT balance FROM billing.credit_wallets WHERE id=$1");cmd.Parameters.AddWithValue(Wallet);return (int)(await cmd.ExecuteScalarAsync())!;}
+        public async Task<long> ReservationLedgerCountAsync(Guid reservationId)
+        {await using var cmd=_admin.CreateCommand("SELECT count(*) FROM billing.credit_ledger_entries WHERE reservation_id=$1 AND entry_type IN ('RESERVE','CAPTURE')");cmd.Parameters.AddWithValue(reservationId);return (long)(await cmd.ExecuteScalarAsync())!;}
         public Task<OrderRecord> NewOrderAsync()=>Orders.CreateOrderAsync(Guid.NewGuid(),Tenant,"ACCOUNT",Owner,_price,"TEST",Guid.NewGuid(),Guid.NewGuid().ToString(),default);
         public PaymentCallbackPayload Payload(OrderRecord order,string status)=>new(order.Id,Guid.NewGuid().ToString(),order.PriceAmountSnapshot,order.CurrencyCodeSnapshot,status,DateTimeOffset.UtcNow.ToUnixTimeSeconds(),"repository-boundary-fixture-signature");
         public async Task<ReservationResponse> ReserveAsync()
