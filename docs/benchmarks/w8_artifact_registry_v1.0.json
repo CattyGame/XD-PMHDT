@@ -1,0 +1,294 @@
+{
+  "registrySchemaVersion": "1.0.0",
+  "taskId": "W8-M4-01",
+  "jiraKey": "SCRUM-423",
+  "owner": "M4 - Dao Duy Quan",
+  "traceability": [
+    "NFR-16",
+    "NFR-21",
+    "NFR-23"
+  ],
+  "scope": "RESEARCH_ONLY_NOT_CLINICAL_CERTIFICATION",
+  "clinicalValidation": false,
+  "icdrGradingSupported": false,
+  "iowaRedistributedInGit": false,
+  "iowaRedistributedInZip": false,
+  "gitContainsModelWeightsOrCredentials": false,
+  "scientificGateScrum373": {
+    "jiraKey": "SCRUM-373",
+    "status": "OPEN_NOT_PASSED",
+    "autoCloseAllowed": false,
+    "iowaGatePassed": false,
+    "thresholdAbsBias": 0.02,
+    "requiredCohort": "Iowa40 (40-case verified two-observer table)",
+    "lastObservedBaselineBias": -0.2136,
+    "lastObservedBaselineMae": 0.2335
+  },
+  "runtimeManifestCatalog": {
+    "catalogPath": "src/ai-core/config/artifact-manifests.json",
+    "catalogSha256Lf": "ce448cf729de04d20adfc4353ad4f3698901bb76237399f9117b1427dcda8acd",
+    "rolloutMechanism": "Atomic server-side manifest switch with candidate smoke verification, in-flight request snapshot pinning, and immediate previous-version rollback via RuntimeManifestRegistry (/api/v1/admin/ai/config; no public reload endpoint).",
+    "manifests": [
+      {
+        "artifactManifestId": "11111111-1111-4111-8111-111111110301",
+        "configFile": "ai-frangi.yaml",
+        "thresholdConfigSha256": "0b0451cad981b69471920b374c19042f169b991a26c49e2c3e29395db7c6a0ee",
+        "modelVersion": "frangi-v0.2",
+        "configVersion": "s3-frangi-1.0.0",
+        "thresholdVersion": "frangi-threshold-0.02-v1",
+        "riskAvailable": false
+      },
+      {
+        "artifactManifestId": "11111111-1111-4111-8111-111111110405",
+        "configFile": "ai-frangi-v1.3.yaml",
+        "thresholdConfigSha256": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+        "modelVersion": "frangi-v0.2",
+        "configVersion": "s45-frangi-1.3.0",
+        "thresholdVersion": "frangi-threshold-0.02-v1",
+        "riskAvailable": true
+      },
+      {
+        "artifactManifestId": "11111111-1111-4111-8111-111111110501",
+        "configFile": "ai-frangi-hrf.yaml",
+        "thresholdConfigSha256": "8af374dc5dc1e70df09e333730e46a27c40e51a9f76e554498d3fa8e27119aca",
+        "modelVersion": "frangi-hrf-proxy-v1",
+        "configVersion": "s5-hrf-opencv-clahe-1280-v1",
+        "thresholdVersion": "hrf-normalized-frangi-0.04-v1",
+        "riskAvailable": false
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "frangi-baseline-config-v1.0",
+      "category": "config",
+      "format": "YAML_CONFIG",
+      "onnxAvailable": false,
+      "path": "src/ai-core/config/ai-frangi.yaml",
+      "sha256Lf": "0b0451cad981b69471920b374c19042f169b991a26c49e2c3e29395db7c6a0ee",
+      "trackedInGit": true,
+      "license": "Internal coursework configuration (AURA SP26SE025; parameters matching CHASE_DB1 CC BY 4.0 validation)",
+      "source": "Repository server config (selected on CHASE_DB1 validation split, threshold=0.02)",
+      "datasetSplit": "CHASE_DB1 validation (6 images)",
+      "modelVersion": "frangi-v0.2",
+      "configVersion": "s3-frangi-1.0.0",
+      "reproduceCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/evaluate_v2_protocol.py --output docs/benchmarks/v2_evaluation_report_s7.json",
+      "failClosedVerification": "RuntimeManifestRegistry hashes LF-normalized config bytes against thresholdConfigSha256; mismatch raises 409 ERR_HASH_MISMATCH."
+    },
+    {
+      "id": "frangi-vectorized-config-v1.3",
+      "category": "config",
+      "format": "YAML_CONFIG",
+      "onnxAvailable": false,
+      "path": "src/ai-core/config/ai-frangi-v1.3.yaml",
+      "sha256Lf": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+      "trackedInGit": true,
+      "license": "Internal coursework configuration (AURA SP26SE025)",
+      "source": "Repository server config (vectorized 6-pass Hessian + heuristic tortuosity screening)",
+      "datasetSplit": "CHASE_DB1 validation/test (6 val / 6 test parity Dice=1.0)",
+      "modelVersion": "frangi-v0.2",
+      "configVersion": "s45-frangi-1.3.0",
+      "reproduceCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/benchmark_w7_latency_ram.py --verify docs/benchmarks/w7_latency_ram_profile_v1.0.json",
+      "failClosedVerification": "Verified via RuntimeManifestRegistry atomic switch + Golden Parity Gate (0 mismatched pixels)."
+    },
+    {
+      "id": "frangi-hrf-clahe-config-v1.0",
+      "category": "config",
+      "format": "YAML_CONFIG",
+      "onnxAvailable": false,
+      "path": "src/ai-core/config/ai-frangi-hrf.yaml",
+      "sha256Lf": "8af374dc5dc1e70df09e333730e46a27c40e51a9f76e554498d3fa8e27119aca",
+      "trackedInGit": true,
+      "license": "Internal coursework configuration (AURA SP26SE025)",
+      "source": "Repository server config (HRF OpenCV CLAHE normalized Frangi proxy)",
+      "datasetSplit": "HRF45 (research proxy profile; risk_available=false)",
+      "modelVersion": "frangi-hrf-proxy-v1",
+      "configVersion": "s5-hrf-opencv-clahe-1280-v1",
+      "reproduceCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/benchmark_hrf_frangi.py",
+      "failClosedVerification": "Verified via RuntimeManifestRegistry hash pin."
+    },
+    {
+      "id": "dr-l2-spectral-13f-weights",
+      "category": "model_weights",
+      "format": "JSON_LINEAR_COEFFICIENTS_NO_PICKLE",
+      "onnxAvailable": false,
+      "path": "src/ai-core/config/dr_screening_weights.json",
+      "sha256Lf": "3916060233716b0d0435527464d8ad10d5bb3e63e5c7ff1011a43041c7a53446",
+      "trackedInGit": true,
+      "license": "Internal coursework research weights derived from FAU HRF (Academic Research Use, non-commercial); deterministic JSON arrays used instead of binary pickle/joblib to eliminate deserialization risk.",
+      "source": "src/ai-core/scripts/train_dr_screening.py",
+      "datasetSplit": "HRF45 binary DR vs Healthy (18 train x 6x augmentation / 6 val / 6 test; 15 glaucoma excluded)",
+      "modelVersion": "LogisticRegression_L2_Standardized_Augmented",
+      "configVersion": "hrf-13f-l2-v1",
+      "reproduceCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/train_dr_screening.py",
+      "failClosedVerification": "Plain JSON numeric arrays verified by SHA-256 and finite bounds; no joblib/pickle arbitrary code execution."
+    },
+    {
+      "id": "dr-resnet34-hrf-v1-pytorch",
+      "category": "model_weights",
+      "format": "PYTORCH_STATE_DICT_PT",
+      "onnxAvailable": false,
+      "path": "model-artifacts/dr-resnet34-hrf-v1/model.pt",
+      "sha256Raw": "8c9114c54f1b06300081bb82b80a0ea3a10e3d035232e1c5f3570b2db42df8f7",
+      "trackedInGit": false,
+      "acquisitionMethod": "LOCAL_REPRODUCIBLE_TRAINING",
+      "license": "BSD-3-Clause backbone (torchvision IMAGENET1K_V1) + FAU HRF Academic Research derivative weights (research/non-commercial only; not clinical certification)",
+      "source": "Local reproducible training from src/ai-core/scripts/train_dr_cnn.py (not committed to Git because model-artifacts/ and *.pt are excluded by .gitignore)",
+      "datasetSplit": "HRF45 patient-level split (18 train / 6 val / 6 test; 15 glaucoma_ood isolated)",
+      "modelVersion": "resnet34-8c9114c54f1b0630",
+      "configVersion": "torch-2.14.1+cpu-epoch2-val-auc-0.888889",
+      "runtimeEnvVars": [
+        "AURA_DR_CNN_CHECKPOINT",
+        "AURA_DR_CNN_SHA256"
+      ],
+      "reproduceCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/train_dr_cnn.py --output model-artifacts/dr-resnet34-hrf-v1/model.pt --epochs 100",
+      "failClosedVerification": "Exact raw-byte SHA-256 verified before load in screen_dr_cnn() and configured_artifacts(); mismatch fails closed with HTTP 503 RESEARCH_MODEL_UNAVAILABLE."
+    },
+    {
+      "id": "avr-rrwnet-rite-safetensors",
+      "category": "model_weights",
+      "format": "SAFETENSORS",
+      "onnxAvailable": false,
+      "path": "model-artifacts/avr-rrwnet-rite/model.safetensors",
+      "sha256Raw": "32d93fa770f2f1c52359cc30ae524346043443b972b108974dbf524db8104485",
+      "revision": "9b61e9042e7693f2538e01be9b15c68a3656718f",
+      "trackedInGit": false,
+      "acquisitionMethod": "PINNED_HTTPS_DOWNLOAD_WITH_SHA256",
+      "license": "CC-BY-NC-4.0 (research/noncommercial weights only; upstream code MIT in third_party/rrwnet/LICENSE)",
+      "licenseFileInRepo": "src/ai-core/app/services/third_party/rrwnet/LICENSE",
+      "licenseFileSha256Lf": "0e04ee50d07a7ae20b5ade11e0607964610768faf3ddad5b1872919947bed5e5",
+      "source": "https://huggingface.co/j-morano/rrwnet-rite/resolve/9b61e9042e7693f2538e01be9b15c68a3656718f/model.safetensors",
+      "datasetSplit": "Trained upstream on RITE; Zone-B AVR thresholds calibrated strictly on AVRDB validation split (15 cases; test & Iowa40 untouched)",
+      "modelVersion": "avr-rrwnet_rite-native-edge-v8",
+      "configVersion": "vessel_threshold=0.5, zone_b=2R..3R, revised_knudtson=0.88/0.95",
+      "runtimeEnvVars": [
+        "AURA_AVR_MODEL_PATH",
+        "AURA_AVR_MODEL_SHA256"
+      ],
+      "fetchCommand": "python src/ai-core/scripts/fetch_avr_rrwnet.py --destination model-artifacts/avr-rrwnet-rite",
+      "failClosedVerification": "Verified on download in fetch_avr_rrwnet.py and at runtime via load_avr_model() / verify_rrwnet_artifact(); mismatch rejects startup and request."
+    },
+    {
+      "id": "avr-lunetv2-odc-onnx",
+      "category": "model_weights",
+      "format": "ONNX",
+      "onnxAvailable": true,
+      "path": "model-artifacts/avr-rrwnet-rite/lunetv2_odc.onnx",
+      "sha256Raw": "f72f6c9ea2ade798b80539de77fa610bb6553bb0fd7fcb78d1e841982cae0b5f",
+      "revision": "cf1f116d6b9898aa7b2aa3b075e071d3460e3a6e",
+      "trackedInGit": false,
+      "acquisitionMethod": "PINNED_HTTPS_DOWNLOAD_WITH_SHA256",
+      "license": "PVBM / RLAD Research License (AIMLab MIT wrapper code in third_party/pvbm/LICENSE; model weights non-clinical research only)",
+      "licenseFileInRepo": "src/ai-core/app/services/third_party/pvbm/LICENSE",
+      "licenseFileSha256Lf": "f909507bf67321bdda1090ea804cf7cca4a543e881969ef23ff8f05155b390bf",
+      "source": "https://huggingface.co/JonathanFhima/RLAD-SwinV2-Large/resolve/cf1f116d6b9898aa7b2aa3b075e071d3460e3a6e/pvbm/lunetv2_odc.onnx",
+      "datasetSplit": "Optic disc localization sub-component used prior to Zone B annulus measurement",
+      "modelVersion": "lunetv2_odc.onnx",
+      "configVersion": "MODEL_PREDICTION_NOT_EXPERT_ANNOTATION",
+      "fetchCommand": "python src/ai-core/scripts/fetch_avr_rrwnet.py --destination model-artifacts/avr-rrwnet-rite",
+      "failClosedVerification": "Only ONNX artifact in AURA V2; verified via OD_SHA256 pin before inference. When OD localization fails or Zone B clips image edges, returns OPTIC_DISC_NOT_LOCALIZED / INCOMPLETE_ZONE_B."
+    }
+  ],
+  "datasets": {
+    "CHASE_DB1": {
+      "cohortSize": 28,
+      "subjectCount": 14,
+      "splits": {
+        "train": 16,
+        "validation": 6,
+        "test": 6
+      },
+      "license": "CC BY 4.0",
+      "sourceUrl": "https://researchinnovation.kingston.ac.uk/en/datasets/chasedb1-retinal-vessel-reference-dataset-4/",
+      "manifestPath": "docs/datasets/chase_db1/manifest.csv",
+      "manifestSha256Lf": "b22bb7f635aad4c1ef670abd15a68e038d9c5d9a1383a01976f8ae7664a6455a",
+      "validationReportPath": "docs/datasets/chase_db1/validation_report.json",
+      "validationReportSha256Lf": "9e0ad0c0d57d193286bb6de4840d78cdbfa2a1d5d76e509da5d6b08ee313a804",
+      "prepareCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/prepare_chase_db1.py",
+      "redistributedInGit": false,
+      "redistributedInReproZip": false
+    },
+    "HRF45": {
+      "cohortSize": 45,
+      "categories": {
+        "dr": 15,
+        "h": 15,
+        "g_ood": 15
+      },
+      "splits": {
+        "train": 18,
+        "validation": 6,
+        "test": 6,
+        "glaucoma_ood": 15
+      },
+      "license": "Academic Research Use (Friedrich-Alexander-Universitat Erlangen-Nurnberg)",
+      "sourceUrl": "https://www5.cs.fau.de/research/data/fundus-images/",
+      "manifestPath": "docs/datasets/hrf/manifest.csv",
+      "manifestSha256Lf": "a6d0d719066d01e113ca2e1ade0e89324e99ce36ef5772afd1742a55973a11ce",
+      "validationReportPath": "docs/datasets/hrf/validation_report.json",
+      "validationReportSha256Lf": "e33eee3319eef93cc4f1d071698d891438d0ae9da55f24a5fcb5b2c8c9323d80",
+      "prepareCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/prepare_hrf.py",
+      "redistributedInGit": false,
+      "redistributedInReproZip": false
+    },
+    "AVRDB100": {
+      "rawArchiveFolders": 100,
+      "verifiedCases": 99,
+      "emptyArchiveFolders": [
+        "IM000189"
+      ],
+      "splits": {
+        "train": 70,
+        "validation": 15,
+        "test": 14
+      },
+      "license": "CC BY 4.0 (Mendeley Data DOI: 10.17632/3csr652p9y.2)",
+      "sourceUrl": "https://data.mendeley.com/datasets/3csr652p9y/2",
+      "manifestPath": "docs/datasets/inspire_avr/manifest.csv",
+      "manifestSha256Lf": "2ae7cba1d278178fc337dd622a7fba12609e2afbba0d9af1eefc980c89ac9211",
+      "validationReportPath": "docs/datasets/inspire_avr/validation_report.json",
+      "validationReportSha256Lf": "e052360729f7bd8f49cd27e53427cb6d74277c6beb81872e1212e00f130e6f33",
+      "prepareCommand": "PYTHONPATH=src/ai-core python src/ai-core/scripts/prepare_avrdb.py",
+      "redistributedInGit": false,
+      "redistributedInReproZip": false
+    },
+    "Iowa40": {
+      "cohortSize": 40,
+      "license": "External non-redistributed research evaluation dataset (University of Iowa INSPIRE-AVR Normative Set)",
+      "sourceUrl": "https://medicine.uiowa.edu/eye/inspire-datasets",
+      "manifestPath": null,
+      "manifestSha256Lf": null,
+      "validationReportPath": null,
+      "validationReportSha256Lf": null,
+      "calibrationAllowed": false,
+      "redistributedInGit": false,
+      "redistributedInZip": false,
+      "acquisitionInstructions": "Authorized evaluators must obtain the 40-case University of Iowa INSPIRE-AVR table (GT/GT.txt) directly from the original academic publisher, store it locally outside Git and outside any distribution ZIP, and execute: PYTHONPATH=src/ai-core python src/ai-core/scripts/benchmark_expert_references.py --dataset iowa --root <iowa40_dir> --output <report.json>."
+    }
+  },
+  "thirdPartyNotices": [
+    {
+      "path": "src/ai-core/app/services/third_party/NOTICE",
+      "sha256Lf": "c31399a02d0c9ee1781078bf8e9148e0fda2e487fa2768d9680f497d0b031e9e"
+    },
+    {
+      "path": "src/ai-core/app/services/third_party/pvbm/LICENSE",
+      "sha256Lf": "f909507bf67321bdda1090ea804cf7cca4a543e881969ef23ff8f05155b390bf"
+    },
+    {
+      "path": "src/ai-core/app/services/third_party/rrwnet/LICENSE",
+      "sha256Lf": "0e04ee50d07a7ae20b5ade11e0607964610768faf3ddad5b1872919947bed5e5"
+    }
+  ],
+  "protocolAndLimitations": {
+    "contractVersion": "1.3.0",
+    "rgbOnlyInference": true,
+    "notIcdrGrading": true,
+    "gradcamMethod": "GRAD_CAM",
+    "gradcamGeometry": "IMAGENET_CENTER_CROP_224",
+    "avrAbstentionPolicy": "returns_null_with_unavailable_reason_never_0_or_LOW",
+    "unavailableInCoverageDenominator": true,
+    "noClinicianLabelsGeneratedFromAuto": true,
+    "scrum373Independent": true
+  }
+}
