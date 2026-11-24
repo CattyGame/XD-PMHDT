@@ -77,6 +77,9 @@ public class JobRunConsumer : BackgroundService
         {
             HostName = _rabbitOptions.HostName,
             Port = _rabbitOptions.Port,
+            Ssl = new() { Enabled = _rabbitOptions.UseTls, ServerName = _rabbitOptions.HostName,
+                AcceptablePolicyErrors = System.Net.Security.SslPolicyErrors.None,
+                Version = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13 },
             VirtualHost = _rabbitOptions.VirtualHost,
             UserName = _rabbitOptions.UserName,
             Password = _rabbitOptions.Password,
@@ -119,6 +122,12 @@ public class JobRunConsumer : BackgroundService
                     // ACK ONLY after transaction committed or recognized duplicate
                     _channel?.BasicAck(deliveryTag, multiple: false);
                     _logger.LogInformation("Message {MessageId} ACKed ({Result})", message.MessageId, result);
+                    break;
+
+                case JobProcessResult.WaitForLease:
+                    // A live lease is not a failed attempt; retry TTL backs off without consuming the error budget.
+                    PublishToRetryQueue(ea, transportRetryCount);
+                    _channel?.BasicAck(deliveryTag, false);
                     break;
 
                 case JobProcessResult.Requeue:

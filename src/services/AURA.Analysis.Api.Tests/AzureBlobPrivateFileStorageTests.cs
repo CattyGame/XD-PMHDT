@@ -24,6 +24,21 @@ public sealed class AzureBlobPrivateFileStorageTests
     }
 
     [Fact]
+    public void Explicit_local_TLS_is_accepted_without_allowing_external_or_production_emulators()
+    {
+        foreach (var endpoint in new[] { "https://127.0.0.1:10000/devstoreaccount1", "https://azurite:10000/devstoreaccount1" })
+        {
+            var options = Options(endpoint, "https://127.0.0.1:10000/devstoreaccount1");
+            options.ConnectionString = options.ConnectionString.Replace("Protocol=http;", "Protocol=https;");
+            Assert.NotNull(new AzureBlobPrivateFileStorage(options, true));
+            Assert.Throws<InvalidOperationException>(() => new AzureBlobPrivateFileStorage(options, false));
+        }
+        var external = Options("https://external.invalid:10000/devstoreaccount1");
+        external.ConnectionString = external.ConnectionString.Replace("Protocol=http;", "Protocol=https;");
+        Assert.Throws<InvalidOperationException>(() => new AzureBlobPrivateFileStorage(external, true));
+    }
+
+    [Fact]
     public void Emulator_cannot_be_enabled_in_production()
     {
         Assert.Throws<InvalidOperationException>(() => new AzureBlobPrivateFileStorage(Options(), false));

@@ -21,6 +21,9 @@ public sealed class RabbitPaymentEventTransport(IOptions<BillingSettlementOption
         var factory = new ConnectionFactory
         {
             HostName=o.Host,Port=o.Port,VirtualHost=o.VirtualHost,UserName=o.User,Password=o.Password,
+            Ssl = new() { Enabled = o.UseTls, ServerName = o.Host,
+                AcceptablePolicyErrors = System.Net.Security.SslPolicyErrors.None,
+                Version = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13 },
             RequestedConnectionTimeout=TimeSpan.FromSeconds(5),ClientProvidedName="aura-billing-payment-outbox"
         };
         await using var connection=await factory.CreateConnectionAsync(ct);

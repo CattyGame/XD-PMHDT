@@ -20,6 +20,7 @@ public class RabbitMqOptions
 
     public string HostName { get; set; } = "rabbitmq";
     public int Port { get; set; } = 5672;
+    public bool UseTls { get; set; }
     public string VirtualHost { get; set; } = "/aura-s3";
     public string UserName { get; set; } = "aura_worker";
     public string Password { get; set; } = string.Empty;

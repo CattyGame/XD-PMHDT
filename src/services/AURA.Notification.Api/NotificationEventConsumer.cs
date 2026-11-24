@@ -20,6 +20,7 @@ public sealed class RabbitMqConsumerOptions
 
     public string HostName { get; set; } = "127.0.0.1";
     public int Port { get; set; } = 5672;
+    public bool UseTls { get; set; }
     public string VirtualHost { get; set; } = "/aura-s3";
     public string UserName { get; set; } = "s3-notification";
     public string Password { get; set; } = "";
@@ -95,6 +96,9 @@ public sealed class NotificationEventConsumer(
         {
             HostName = _options.HostName,
             Port = _options.Port,
+            Ssl = new() { Enabled = _options.UseTls, ServerName = _options.HostName,
+                AcceptablePolicyErrors = System.Net.Security.SslPolicyErrors.None,
+                Version = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13 },
             VirtualHost = _options.VirtualHost,
             UserName = _options.UserName,
             Password = _options.Password,

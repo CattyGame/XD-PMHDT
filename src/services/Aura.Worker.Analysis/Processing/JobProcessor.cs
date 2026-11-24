@@ -17,7 +17,8 @@ public enum JobProcessResult
     AckFailure,
     AckDuplicate,
     HoldInvestigate,
-    Requeue
+    Requeue,
+    WaitForLease
 }
 
 public interface IJobProcessor
@@ -105,6 +106,9 @@ public class JobProcessor : IJobProcessor
             return JobProcessResult.AckDuplicate;
         }
 
+        if (job.Status is not (JobStatus.Queued or JobStatus.Running or JobStatus.RetryReady))
+            return JobProcessResult.HoldInvestigate;
+
         // 3. Acquire lease
         var leaseAcquired = await _jobRepo.TryAcquireLeaseAsync(
             message.JobId,
@@ -115,7 +119,7 @@ public class JobProcessor : IJobProcessor
         if (leaseAcquired is null)
         {
             _logger.LogWarning("Could not acquire lease for job {JobId}. Requeuing message.", message.JobId);
-            return JobProcessResult.Requeue;
+            return JobProcessResult.WaitForLease;
         }
 
         var lease = leaseAcquired;

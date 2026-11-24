@@ -5,22 +5,15 @@ namespace AURA.Notification.Api;
 
 public sealed class NotificationAuthorityClient(IHttpClientFactory clients, IConfiguration configuration)
 {
+    private readonly SemaphoreSlim refresh = new(1, 1);
+    private readonly Dictionary<(string Audience, string Scope), CachedToken> tokens = new();
+    private sealed record CachedToken(string Value, string? ClientId, string? Secret, DateTimeOffset RefreshAt);
+
     public async Task<HttpResponseMessage> SendAsync(string audience, string scope, string path, object body, CancellationToken ct)
     {
-        var identity = clients.CreateClient("IdentityAuthority");
-        using var issued = await identity.PostAsJsonAsync("/internal/v1/identity/service-tokens", new
-        {
-            clientId = configuration["ServiceAuth:ClientId"],
-            clientSecret = configuration["ServiceAuth:ClientSecret"],
-            audience,
-            scope
-        }, ct);
-        issued.EnsureSuccessStatusCode();
-        var token = await issued.Content.ReadFromJsonAsync<Token>(cancellationToken: ct);
-        if (string.IsNullOrWhiteSpace(token?.AccessToken)) throw new HttpRequestException("Missing service authority token.");
-
+        var token = await GetTokenAsync(audience, scope, ct);
         using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(body) };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         var clientName = audience switch
         {
@@ -32,7 +25,41 @@ public sealed class NotificationAuthorityClient(IHttpClientFactory clients, ICon
         return await clients.CreateClient(clientName).SendAsync(request, ct);
     }
 
-    private sealed record Token(string AccessToken);
+    private async Task<string> GetTokenAsync(string audience, string scope, CancellationToken ct)
+    {
+        if ((audience, scope) is not (("aura-identity", "identity:directory") or ("aura-profile", "profile:resolve")
+            or ("aura-analysis", "analysis:notify") or ("aura-billing", "billing:notify")))
+            throw new HttpRequestException("Unsupported notification authority scope.");
+        var clientId = configuration["ServiceAuth:ClientId"];
+        var secret = configuration["ServiceAuth:ClientSecret"];
+        await refresh.WaitAsync(ct);
+        try
+        {
+            if (tokens.TryGetValue((audience, scope), out var cached) && cached.ClientId == clientId
+                && cached.Secret == secret && cached.RefreshAt > DateTimeOffset.UtcNow) return cached.Value;
+            var identity = clients.CreateClient("IdentityAuthority");
+            using var issued = await identity.PostAsJsonAsync("/internal/v1/identity/service-tokens", new
+            {
+                clientId,
+                clientSecret = secret,
+                audience,
+                scope
+            }, ct);
+            issued.EnsureSuccessStatusCode();
+            var token = await issued.Content.ReadFromJsonAsync<Token>(cancellationToken: ct);
+            if (token?.AccessToken is not { Length: > 0 and <= 16384 }
+                || !token.AccessToken.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-'))
+                throw new HttpRequestException("Invalid service authority token.");
+
+            // Reuse only the machine JWT; each resource/account decision still goes to its owner.
+            if (token.TokenType == "Bearer" && token.ExpiresIn is > 30 and <= 300)
+                tokens[(audience, scope)] = new(token.AccessToken, clientId, secret, DateTimeOffset.UtcNow.AddSeconds(token.ExpiresIn - 30));
+            return token.AccessToken;
+        }
+        finally { refresh.Release(); }
+    }
+
+    private sealed record Token(string AccessToken, string? TokenType, int ExpiresIn);
 }
 
 public sealed record ConsultationAccessRequest(

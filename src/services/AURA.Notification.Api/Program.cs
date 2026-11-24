@@ -15,25 +15,7 @@ builder.Services.AddHealthChecks();
 
 var projectId = RequiredConfiguration("Firebase:ProjectId");
 
-var databaseSettings = new NpgsqlConnectionStringBuilder
-{
-    Host = builder.Configuration["NotificationDatabase:Host"]
-        ?? "127.0.0.1",
-    Port = builder.Configuration.GetValue(
-        "NotificationDatabase:Port",
-        5432),
-    Database = RequiredConfiguration("NotificationDatabase:Database"),
-    Username = RequiredConfiguration("NotificationDatabase:Username"),
-    Password = RequiredConfiguration("NotificationDatabase:Password"),
-    Timeout = 5,
-    CommandTimeout = 10,
-    MaxPoolSize = builder.Configuration.GetValue("NotificationDatabase:MaximumPoolSize", 16),
-    IncludeErrorDetail = false,
-
-    // Local: loopback on host or private Docker network.
-    // Remote deployments require a separate TLS configuration.
-    SslMode = SslMode.Disable
-};
+var databaseSettings = NotificationDatabaseConfiguration.Build(builder.Configuration);
 
 builder.Services.AddSingleton<FirebaseApp>(_ =>
 {
