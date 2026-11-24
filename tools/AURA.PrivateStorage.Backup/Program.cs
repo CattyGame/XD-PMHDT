@@ -8,7 +8,8 @@ try
 {
     if (args.Length < 2 || args[0] is not ("export" or "restore" or "verify")) throw new ArgumentException("export|restore|verify directory [expected endpoint]");
     var service=new BlobServiceClient(Environment.GetEnvironmentVariable("AURA_STORAGE_CONNECTION_STRING")
-        ?? throw new InvalidOperationException("Storage connection required."));
+        ?? throw new InvalidOperationException("Storage connection required."),
+        new BlobClientOptions(BlobClientOptions.ServiceVersion.V2023_11_03));
     var directory=Path.GetFullPath(args[1]);
     var manifestFile=Path.Combine(Directory.GetParent(directory)!.FullName,"assets.manifest.json");
     var json=new JsonSerializerOptions(JsonSerializerDefaults.Web) {WriteIndented=true};

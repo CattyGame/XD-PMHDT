@@ -11,6 +11,19 @@ namespace AURA.Analysis.Api.Tests;
 public sealed class ItemUploadPostgresTests
 {
     [PostgresFact]
+    public async Task Upload_inventory_checks_each_distinct_patient_resource_once_per_request_and_rechecks_revoke()
+    {
+        await using var f=new Fixture();var patient=Guid.NewGuid();var png=TestImages.Png(100,100);
+        var items=Enumerable.Range(0,100).Select(i=>Item(patient,$"image-{i}.png",png)).ToArray();
+        var parent=await f.Service.CreateAsync(f.Actor,f.Clinic,Guid.NewGuid(),new(items),default);
+        f.Policy.Calls=0;
+        await f.Service.GetAsync(f.Actor,f.Clinic,parent.BatchId,default);
+        Assert.Equal(1,f.Policy.Calls);
+        f.Policy.Allowed=false;
+        Assert.Equal(404,(await Assert.ThrowsAsync<UploadFailure>(()=>f.Service.GetAsync(f.Actor,f.Clinic,parent.BatchId,default))).Status);
+        Assert.Equal(2,f.Policy.Calls);
+    }
+    [PostgresFact]
     public async Task Background_reconciliation_recovers_unknown_acceptance_without_client_or_second_reserve()
     {
         await using var f=new Fixture(loseResponse:true);var png=TestImages.Png(100,100);var item=Item(Guid.NewGuid(),"recover.png",png);
@@ -26,10 +39,15 @@ public sealed class ItemUploadPostgresTests
     }
     private sealed class Access(Guid tenant,Guid actor,Guid clinic) : IPatientAccessResolver
     {
-        public bool Allowed=true;
+        public bool Allowed=true;public int Calls;
         public Task<AccessDecision> ResolveAsync(PatientAccessRequest request,CancellationToken ct) =>
-            Task.FromResult(new AccessDecision(Allowed && request.RequesterId==actor && request.ClinicId==clinic,
-                tenant,"CLINIC",clinic,$"CLINIC:{clinic:D}",1));
+            Task.FromResult(Resolve(request));
+        private AccessDecision Resolve(PatientAccessRequest request)
+        {
+            Calls++;
+            return new AccessDecision(Allowed && request.RequesterId==actor && request.ClinicId==clinic,
+                tenant,"CLINIC",clinic,$"CLINIC:{clinic:D}",1);
+        }
     }
     private sealed class Progress : IBatchRedisProgressService
     {

@@ -1,0 +1,43 @@
+# Merge last for the measured, single-host research profile (four worker replicas).
+services:
+  ai-core:
+    environment:
+      # One inference plus three FIFO waiters for the four-worker comparison.
+      AURA_AI_MAX_WAITERS: '3'
+  analysis-worker:
+    deploy:
+      replicas: ${AURA_WORKER_REPLICAS:-4}
+  postgres:
+    command: [postgres, -c, max_connections=160, -c, shared_buffers=128MB, -c, work_mem=2MB]
+    mem_limit: 1g
+    cpus: 1.5
+  redis:
+    mem_limit: 256m
+    cpus: 0.5
+    command: [redis-server, /usr/local/etc/redis/redis.conf, --requirepass, '${REDIS_PASSWORD:?Set REDIS_PASSWORD}', --maxmemory, 64mb]
+  rabbitmq:
+    mem_limit: 1g
+    cpus: 1.0
+  azurite:
+    mem_limit: 512m
+    cpus: 0.5
+  identity-api:
+    mem_limit: 512m
+    cpus: 1.0
+  profile-api:
+    mem_limit: 512m
+    cpus: 1.0
+  analysis-api:
+    mem_limit: 1g
+    cpus: 1.5
+  billing-api:
+    mem_limit: 512m
+    cpus: 1.0
+  notification-api:
+    environment:
+      NotificationDatabase__MaximumPoolSize: "16"
+    mem_limit: 512m
+    cpus: 1.0
+  api-gateway:
+    mem_limit: 384m
+    cpus: 1.0

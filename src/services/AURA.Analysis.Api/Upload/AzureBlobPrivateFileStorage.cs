@@ -85,7 +85,7 @@ public sealed class AzureBlobPrivateFileStorage : IPrivateFileStorage, IPrivateS
             || !string.IsNullOrEmpty(endpoint.Fragment)) throw new ArgumentException();
         if (emulator)
         {
-            if (!development || endpoint.Scheme != "http" || endpoint.Port != 10000
+            if (!development || endpoint.Scheme is not ("http" or "https") || endpoint.Port != 10000
                 || endpoint.AbsolutePath.TrimEnd('/') != "/devstoreaccount1"
                 || !(endpoint.Host == "127.0.0.1" || (!browserEndpoint && endpoint.Host == "azurite")))
                 throw new ArgumentException();
@@ -186,7 +186,7 @@ public sealed class AzureBlobPrivateFileStorage : IPrivateFileStorage, IPrivateS
         {
             BlobContainerName = container, BlobName = key, Resource = "b",
             StartsOn = now.AddMinutes(-5), ExpiresOn = expires,
-            Protocol = _emulator ? SasProtocol.HttpsAndHttp : SasProtocol.Https,
+            Protocol = _publicService.Uri.Scheme == "https" ? SasProtocol.Https : SasProtocol.HttpsAndHttp,
             CacheControl = "no-store"
         };
         sas.SetPermissions(BlobSasPermissions.Read);

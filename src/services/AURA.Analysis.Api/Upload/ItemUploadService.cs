@@ -209,7 +209,8 @@ public sealed class ItemUploadService(NpgsqlDataSource db, IPatientAccessResolve
     {
         if(action=="ANALYSIS_CREATE" && state.RequesterId!=actor || state.ClinicId!=clinic)throw Missing();
         if(state.Items.All(i=>i.UploadStatus=="REJECTED") && state.RequesterId!=actor)throw Missing();
-        foreach(var item in state.Items.Where(i=>i.UploadStatus!="REJECTED"))
+        // Coalesce identical checks within this request only; every resource is revalidated on the next request.
+        foreach(var item in state.Items.Where(i=>i.UploadStatus!="REJECTED").DistinctBy(i=>(i.PatientId,i.AnalysisId)))
         {
             var d=await access.ResolveAsync(new(actor,clinic,item.PatientId,action,item.AnalysisId){CorrelationId=correlation},ct);
             if(!d.Allowed || d.TenantId!=state.TenantId || d.OwnerPrincipalId!=state.OwnerId)throw Missing();

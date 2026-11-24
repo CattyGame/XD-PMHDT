@@ -1,5 +1,7 @@
 # Hướng dẫn Cài đặt và Vận hành Hệ thống AURA (Installation & Operations Manual)
 
+> **Quy trình vận hành hiện hành Sprint 7:** xem [runbook v2](m1_sprint7_runbook_v2.md) để dùng đúng thứ tự Compose, pool budget, quét bảo mật và diễn tập restore. Các mô tả phiên bản cũ bên dưới không thay thế cấu hình/evidence của candidate đang nghiệm thu.
+
 > **Đồ án môn học**: Xây dựng Phần mềm Hướng đối tượng (XD-PMHDT)
 > **Dự án**: AURA — Hệ thống sàng lọc sức khỏe mạch máu võng mạc qua ảnh chụp đáy mắt (Fundus)
 > **Gói công việc**: **Task Package 5 (Required Documents)** & **SCRUM-319 (M1 DevOps Handover)**

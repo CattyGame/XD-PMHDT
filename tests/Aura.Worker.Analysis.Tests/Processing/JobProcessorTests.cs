@@ -253,6 +253,23 @@ public class JobProcessorTests
         _aiMock.Verify(a => a.AnalyzeAsync(It.IsAny<AiAnalyzeRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData(JobStatus.Running, JobProcessResult.WaitForLease)]
+    [InlineData(JobStatus.DeadLetter, JobProcessResult.HoldInvestigate)]
+    public async Task Unclaimable_job_never_invokes_authorities_or_AI(string status, JobProcessResult expected)
+    {
+        var message = new JobRunMessage { JobId = Guid.NewGuid(), AnalysisId = Guid.NewGuid(), TenantId = Guid.NewGuid(), Attempt = 1 };
+        _jobRepoMock.Setup(r => r.GetJobAsync(message.JobId, It.IsAny<CancellationToken>())).ReturnsAsync(
+            new JobRecord { JobId = message.JobId, AnalysisId = message.AnalysisId, TenantId = message.TenantId, AttemptNo = 1, Status = status });
+        _analysisRepoMock.Setup(r => r.GetAnalysisAsync(message.AnalysisId, It.IsAny<CancellationToken>())).ReturnsAsync(
+            new AnalysisRecord { AnalysisId = message.AnalysisId, TenantId = message.TenantId, ProcessingStatus = AnalysisStatus.Queued });
+        _jobRepoMock.Setup(r => r.TryAcquireLeaseAsync(message.JobId, It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((JobLease?)null);
+        Assert.Equal(expected, await CreateProcessor().ProcessAsync(message, default));
+        _profileMock.Verify(r => r.RecheckAccessAsync(It.IsAny<WorkerAccessContext>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _aiMock.Verify(r => r.AnalyzeAsync(It.IsAny<AiAnalyzeRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task AC3_LowQualityImage_CommitsTerminalLowQualityStatus()
     {

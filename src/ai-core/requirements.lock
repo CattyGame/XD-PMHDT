@@ -1,13 +1,14 @@
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
-certifi==2026.7.22
+certifi==2026.10.18
 click==8.5.0
 colorama==0.4.6
 fastapi==0.142.2
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
+httpx2==2.16.2
 idna==3.20
 ImageIO==2.38.1
 iniconfig==2.3.0
@@ -17,7 +18,7 @@ numpy==2.5.3
 opencv-python-headless==5.0.0.93
 opentelemetry-api==1.45.0
 packaging==26.3
-Pillow==12.3.0
+Pillow==13.0.0
 pluggy==1.6.0
 pydantic==2.13.5
 pydantic_core==2.46.5
@@ -26,6 +27,7 @@ pytest==9.1.1
 PyYAML==6.0.3
 scikit-image==0.26.0
 scipy==1.18.1
+setuptools==84.2.1
 starlette==1.7.0
 tifffile==2026.9.20
 typing-inspection==0.4.4

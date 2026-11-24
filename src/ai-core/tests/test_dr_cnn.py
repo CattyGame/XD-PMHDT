@@ -39,7 +39,7 @@ def test_gradcam_uses_gradient_and_removes_hook():
     assert len(model.layer4._forward_hooks) == 0
 
 
-def test_checkpoint_integrity_and_actual_resnet_roundtrip(tmp_path):
+def test_checkpoint_integrity_and_actual_resnet_roundtrip(tmp_path, monkeypatch):
     torch.set_num_threads(2)
     model = torchvision.models.resnet34(weights=None)
     model.fc = torch.nn.Linear(model.fc.in_features, 1)
@@ -48,7 +48,23 @@ def test_checkpoint_integrity_and_actual_resnet_roundtrip(tmp_path):
     rgb = np.full((256, 320, 3), 80, dtype=np.uint8)
     with pytest.raises(ValueError, match='SHA-256'):
         screen_dr_cnn(rgb, str(path), '0' * 64)
-    result = screen_dr_cnn(rgb, str(path), hashlib.sha256(path.read_bytes()).hexdigest())
+    from app.services import dr_cnn_service as cnn
+    cnn._dr_model.cache_clear()
+    original_load = torch.load
+    loads = []
+    def counted_load(*args, **kwargs):
+        loads.append(1)
+        return original_load(*args, **kwargs)
+    monkeypatch.setattr(torch, 'load', counted_load)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    result = screen_dr_cnn(rgb, str(path), digest)
+    again = screen_dr_cnn(rgb, str(path), digest)
+    assert loads == [1]
+    assert again['probability_dr'] == result['probability_dr']
+    path.write_bytes(b'tampered after warm-up')
+    with pytest.raises(ValueError, match='SHA-256'):
+        screen_dr_cnn(rgb, str(path), digest)
+    cnn._dr_model.cache_clear()
     assert result['status'] == 'RESEARCH_ONLY' and not result['risk_available']
     assert result['explainability']['method'] == 'GRAD_CAM'
     assert result['explainability']['geometry'] == 'IMAGENET_CENTER_CROP_224'

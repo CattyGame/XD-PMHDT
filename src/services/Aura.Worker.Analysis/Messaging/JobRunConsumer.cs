@@ -77,6 +77,9 @@ public class JobRunConsumer : BackgroundService
         {
             HostName = _rabbitOptions.HostName,
             Port = _rabbitOptions.Port,
+            Ssl = new() { Enabled = _rabbitOptions.UseTls, ServerName = _rabbitOptions.HostName,
+                AcceptablePolicyErrors = System.Net.Security.SslPolicyErrors.None,
+                Version = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13 },
             VirtualHost = _rabbitOptions.VirtualHost,
             UserName = _rabbitOptions.UserName,
             Password = _rabbitOptions.Password,
@@ -119,6 +122,12 @@ public class JobRunConsumer : BackgroundService
                     // ACK ONLY after transaction committed or recognized duplicate
                     _channel?.BasicAck(deliveryTag, multiple: false);
                     _logger.LogInformation("Message {MessageId} ACKed ({Result})", message.MessageId, result);
+                    break;
+
+                case JobProcessResult.WaitForLease:
+                    // A live lease is not a failed attempt; retry TTL backs off without consuming the error budget.
+                    PublishToRetryQueue(ea, transportRetryCount);
+                    _channel?.BasicAck(deliveryTag, false);
                     break;
 
                 case JobProcessResult.Requeue:
@@ -171,35 +180,34 @@ public class JobRunConsumer : BackgroundService
 
     private void PublishToRetryQueue(BasicDeliverEventArgs ea, int nextCount)
     {
-        var props = _channel?.CreateBasicProperties();
-        if (props != null)
-        {
-            props.DeliveryMode = 2; // Persistent
-            props.Headers = ea.BasicProperties.Headers ?? new Dictionary<string, object>();
-            props.Headers["x-aura-transport-retry-count"] = Encoding.UTF8.GetBytes(nextCount.ToString());
-            _channel?.BasicPublish(
-                exchange: _rabbitOptions.RetryExchange,
-                routingKey: ea.RoutingKey,
-                basicProperties: props,
-                body: ea.Body);
-            _logger.LogInformation("Message published to retry exchange with count {Count}", nextCount);
-        }
+        PublishTransport(ea, _rabbitOptions.RetryExchange, nextCount);
+        _logger.LogInformation("Message published to retry exchange with count {Count}", nextCount);
     }
 
     private void PublishToDeadLetter(BasicDeliverEventArgs ea, JobRunMessage msg)
     {
-        var props = _channel?.CreateBasicProperties();
-        if (props != null)
-        {
-            props.DeliveryMode = 2;
-            props.Headers = ea.BasicProperties.Headers ?? new Dictionary<string, object>();
-            _channel?.BasicPublish(
-                exchange: _rabbitOptions.DeadExchange,
-                routingKey: ea.RoutingKey,
-                basicProperties: props,
-                body: ea.Body);
-            _logger.LogWarning("Message {MessageId} published to dead exchange", msg.MessageId);
-        }
+        PublishTransport(ea, _rabbitOptions.DeadExchange, null);
+        _logger.LogWarning("Message {MessageId} published to dead exchange", msg.MessageId);
+    }
+
+    private void PublishTransport(BasicDeliverEventArgs ea, string exchange, int? retryCount)
+    {
+        // Separate publisher channel: a publish failure must not close the channel owning the delivery.
+        using var publisher = _connection?.CreateModel() ?? throw new InvalidOperationException("Broker unavailable.");
+        publisher.ConfirmSelect();
+        var returned = 0;
+        publisher.BasicReturn += (_, _) => Interlocked.Exchange(ref returned, 1);
+        var props = publisher.CreateBasicProperties();
+        props.DeliveryMode = 2;
+        props.MessageId = ea.BasicProperties.MessageId;
+        props.ContentType = ea.BasicProperties.ContentType;
+        props.CorrelationId = ea.BasicProperties.CorrelationId;
+        props.Headers = new Dictionary<string, object>(ea.BasicProperties.Headers ?? new Dictionary<string, object>());
+        if (retryCount is { } count) props.Headers["x-aura-transport-retry-count"] = Encoding.UTF8.GetBytes(count.ToString());
+        // The canonical retry/dead bindings use "jobs", not the incoming "analysis.job.run" key.
+        publisher.BasicPublish(exchange, "jobs", mandatory: true, props, ea.Body);
+        publisher.WaitForConfirmsOrDie(TimeSpan.FromSeconds(5));
+        if (Volatile.Read(ref returned) != 0) throw new InvalidOperationException("Transport handoff was unroutable.");
     }
 
     private void Cleanup()

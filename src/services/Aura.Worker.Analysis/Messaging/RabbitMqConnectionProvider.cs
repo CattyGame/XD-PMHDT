@@ -21,6 +21,9 @@ public sealed class RabbitMqConnectionProvider(IOptions<RabbitMqOptions> options
             {
                 HostName = settings.HostName,
                 Port = settings.Port,
+                Ssl = new() { Enabled = settings.UseTls, ServerName = settings.HostName,
+                    AcceptablePolicyErrors = System.Net.Security.SslPolicyErrors.None,
+                    Version = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13 },
                 VirtualHost = settings.VirtualHost,
                 UserName = settings.UserName,
                 Password = settings.Password,

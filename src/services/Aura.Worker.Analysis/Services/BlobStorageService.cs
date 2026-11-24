@@ -24,7 +24,11 @@ public class BlobStorageService : IBlobStorageService
     {
         _options = options.Value;
         _logger = logger;
-        _blobServiceClient = new BlobServiceClient(_options.ConnectionString);
+        // Match Analysis API's pinned protocol and the supported Azurite fixture.
+        var clientOptions = new BlobClientOptions(BlobClientOptions.ServiceVersion.V2023_11_03);
+        clientOptions.Diagnostics.IsLoggingEnabled = false;
+        clientOptions.Diagnostics.IsLoggingContentEnabled = false;
+        _blobServiceClient = new BlobServiceClient(_options.ConnectionString, clientOptions);
     }
 
     public async Task<byte[]> DownloadOriginalImageAsync(string blobKey, CancellationToken cancellationToken)

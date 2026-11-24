@@ -1,0 +1,73 @@
+name: M1 Sprint 7 security
+on:
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: m1-sprint7-security-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  research-image-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Build the actual research image without embedding model weights or secrets
+        run: docker build --pull --build-arg INSTALL_RESEARCH_CNN=true -t aura-ai:sprint7-candidate src/ai-core
+      - name: Research image regression (independent expert dataset gates are separate)
+        run: |
+          docker run --rm --cpus 2 --memory 3g --workdir /repo/src/ai-core \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/repo,readonly" \
+            --entrypoint sh aura-ai:sprint7-candidate -c \
+            'python -c "import torch, torchvision, safetensors, onnxruntime" && pip install --quiet --target /tmp/testlibs -c requirements.lock -r requirements-dev.txt && PYTHONPATH=/repo/src/ai-core:/tmp/testlibs python -m pytest tests -q -rs -p no:cacheprovider' \
+            | tee "$RUNNER_TEMP/ai-image-tests.log"
+      - name: Scan the exact built image ID
+        run: |
+          image_id=$(docker image inspect aura-ai:sprint7-candidate --format '{{.Id}}')
+          python scripts/release/security_gate.py --source . --image "$image_id" --output "$RUNNER_TEMP/ai-image-security.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-image-security-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/ai-image-security.json
+            ${{ runner.temp }}/ai-image-tests.log
+          if-no-files-found: error
+  source-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Security and capacity gate controls
+        run: |
+          python -m unittest discover -s scripts/release -p test_security_gate.py
+          python -m unittest discover -s scripts/dev -p test_capacity_budget.py
+          python -m unittest discover -s scripts/dev -p test_nfr_samples.py
+          python -m unittest discover -s scripts/dev -p test_m1_harnesses.py
+          python -m unittest discover -s scripts/dev -p test_reader_capacity_controls.py
+          python -m unittest discover -s scripts/dev -p test_dependency_recovery_controls.py
+      - name: Audit NuGet including transitive dependencies
+        run: |
+          dotnet restore AURA.sln
+          dotnet list AURA.sln package --vulnerable --include-transitive --format json > "$RUNNER_TEMP/nuget-vulnerabilities.json"
+      - name: Scan current source and lockfiles
+        run: python scripts/release/security_gate.py --source . --nuget-report "$RUNNER_TEMP/nuget-vulnerabilities.json" --output "$RUNNER_TEMP/m1-security.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m1-security-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/m1-security.json
+            ${{ runner.temp }}/nuget-vulnerabilities.json
+          if-no-files-found: error

@@ -9,6 +9,7 @@ public sealed class RabbitMqOptions
     public const string Section = "RabbitMq";
     public string Host { get; set; } = "rabbitmq";
     public int Port { get; set; } = 5672;
+    public bool UseTls { get; set; }
     /// <summary>config/common.yaml messaging.connectionTimeoutSeconds = 5.</summary>
     public int ConnectionTimeoutSeconds { get; set; } = 5;
     public string VirtualHost { get; set; } = "/aura-s3";
@@ -84,6 +85,9 @@ public sealed class RabbitMqBrokerPublisher : IBrokerPublisher, IAsyncDisposable
         var factory = new ConnectionFactory
         {
             HostName = _opt.Host, Port = _opt.Port, VirtualHost = _opt.VirtualHost,
+            Ssl = new() { Enabled = _opt.UseTls, ServerName = _opt.Host,
+                AcceptablePolicyErrors = System.Net.Security.SslPolicyErrors.None,
+                Version = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13 },
             UserName = _opt.User, Password = _opt.Password, AutomaticRecoveryEnabled = true,
             RequestedConnectionTimeout = TimeSpan.FromSeconds(_opt.ConnectionTimeoutSeconds),
             ClientProvidedName = "aura-analysis-outbox-publisher"

@@ -20,12 +20,13 @@ public class RabbitMqOptions
 
     public string HostName { get; set; } = "rabbitmq";
     public int Port { get; set; } = 5672;
+    public bool UseTls { get; set; }
     public string VirtualHost { get; set; } = "/aura-s3";
     public string UserName { get; set; } = "aura_worker";
     public string Password { get; set; } = string.Empty;
     public string QueueName { get; set; } = "aura.s3.analysis.jobs";
-    public string RetryExchange { get; set; } = "aura.s3.retry";
-    public string DeadExchange { get; set; } = "aura.s3.dead";
+    public string RetryExchange { get; set; } = "aura.s3.retry.jobs";
+    public string DeadExchange { get; set; } = "aura.s3.dead.jobs";
     public string EventsExchange { get; set; } = "aura.s3.events";
 }
 

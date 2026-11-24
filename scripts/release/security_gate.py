@@ -1,0 +1,139 @@
+"""SCRUM-398: scan the explicit candidate, redact secrets, and retain actionable findings."""
+import argparse
+import datetime as dt
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import re
+
+TRIVY = 'aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb'
+
+
+def pinned_image(value):
+    return re.fullmatch(r'(?:[^\s@]+@)?sha256:[a-f0-9]{64}',value) is not None
+
+
+def nuget_report(audit):
+    if audit.get('problems') or not isinstance(audit.get('projects'),list) or not audit['projects']:
+        raise ValueError('Incomplete NuGet vulnerability audit')
+    results=[]
+    for project in audit['projects']:
+        for framework in project.get('frameworks',[]):
+            findings=[]
+            for key in ['topLevelPackages','transitivePackages']:
+                for package in framework.get(key,[]):
+                    for advisory in package.get('vulnerabilities',[]):
+                        severity=advisory['severity'].upper()
+                        if severity not in ['LOW','MODERATE','HIGH','CRITICAL']:raise ValueError('Unknown NuGet severity')
+                        findings.append(dict(VulnerabilityID=advisory['advisoryurl'],PkgName=package['id'],
+                            InstalledVersion=package['resolvedVersion'],Severity=severity))
+            results.append(dict(Target=project['path']+' ('+framework['framework']+')',Vulnerabilities=findings))
+    return {'Results':results}
+
+
+def redact(value):
+    if isinstance(value, list): return [redact(v) for v in value]
+    if isinstance(value, dict):
+        return {k: '[REDACTED]' if k in ('Match', 'Code') else redact(v) for k, v in value.items()}
+    return value
+
+
+def evaluate(reports, exceptions, today):
+    if not reports: return {'status': 'NOT_TESTED', 'blocking': [], 'exceptions': []}
+    blocking, waived = [], []
+    for report in reports:
+        if not isinstance(report.get('Results'), list): raise ValueError('Missing scanner Results')
+        for result in report['Results']:
+            for kind in ('Vulnerabilities', 'Secrets'):
+                for finding in result.get(kind) or []:
+                    if kind == 'Vulnerabilities' and finding.get('Severity') not in ('HIGH', 'CRITICAL'): continue
+                    row = dict(id=finding.get('VulnerabilityID', finding.get('RuleID')), target=result['Target'],
+                               package=finding.get('PkgName', ''), version=finding.get('InstalledVersion', ''),
+                               kind=kind, severity=finding.get('Severity'), fixedVersion=finding.get('FixedVersion'),
+                               startLine=finding.get('StartLine'))
+                    match = None
+                    for exception in exceptions:
+                        try: valid = dt.date.fromisoformat(exception.get('expires', '')) >= today
+                        except ValueError: valid = False
+                        if (valid and exception.get('owner') and exception.get('reason')
+                            and all(exception.get(k) == row[k] for k in ('id', 'target', 'package', 'version'))):
+                            match = exception; break
+                    if match: waived.append(dict(finding=row, exception=match))
+                    else: blocking.append(row)
+    return {'status': 'FAIL' if blocking else 'PASS_WITH_EXCEPTIONS' if waived else 'PASS',
+            'blocking': blocking, 'exceptions': waived}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', type=Path, required=True)
+    parser.add_argument('--image', action='append', default=[], help='Remote repo@sha256:digest or local sha256:image-ID')
+    parser.add_argument('--image-archive', action='append', default=[], type=Path, help='docker image save archive of a local candidate')
+    parser.add_argument('--exceptions', type=Path)
+    parser.add_argument('--nuget-report',type=Path,help='dotnet list AURA.sln package --vulnerable --include-transitive --format json')
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    source = args.source.resolve()
+    if not (source / 'AURA.sln').is_file(): parser.error('Explicit AURA source root required')
+    if any(not pinned_image(image) for image in args.image): parser.error('Pin full candidate image digests')
+    reports = []
+    evidence = {'status': 'NOT_TESTED', 'startedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
+                'scanner': TRIVY, 'scope': 'Source/lockfiles and explicitly listed images; not host volume encryption',
+                'images': args.image, 'imageArchives': []}
+    try:
+        evidence['commit'] = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+        evidence['workingTree'] = subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'], text=True).splitlines()
+        evidence['inputsSha256'] = {str(p.relative_to(source)).replace('\\', '/'): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in [source/'infra/security/trivy-secret.yaml', source/'src/web/aura-web/package-lock.json',
+                      source/'src/ai-core/requirements.lock']}
+        evidence['nugetAudit']='NOT_TESTED'
+        if args.nuget_report:
+            raw=args.nuget_report.read_bytes()
+            reports.append(nuget_report(json.loads(raw.decode('utf-8-sig'))))
+            evidence['nugetAudit']='INCLUDED'
+            evidence['nugetReportSha256']=hashlib.sha256(raw).hexdigest()
+        base = ['docker', 'run', '--rm', '--memory','1g','--cpus','1','-e','GOMEMLIMIT=768MiB',
+                '-v', 'aura-trivy-cache:/root/.cache/trivy',
+                '--mount', f'type=bind,source={source},target=/source,readonly', TRIVY]
+        commands = [base + ['fs', '--scanners', 'vuln,secret', '--include-dev-deps', '--format', 'json', '--quiet',
+                           '--secret-config', '/source/infra/security/trivy-secret.yaml',
+                           '--skip-dirs', '/source/.git,/source/datasets,/source/src/web/aura-web/node_modules,**/bin,**/obj,**/test-results,**/playwright-report', '/source']]
+        # requirements.lock is pip constraints; give Trivy its recognized filename in ephemeral storage.
+        commands.append(base[:base.index(TRIVY)]+['--entrypoint','sh',TRIVY,'-c',
+            'mkdir /tmp/aura-python && cp /source/src/ai-core/requirements.lock /tmp/aura-python/requirements.txt && '
+            'trivy fs --scanners vuln --format json --quiet /tmp/aura-python'])
+        for candidate in args.image:
+            local=candidate.startswith('sha256:')
+            image_base=base[:base.index(TRIVY)]+(['-v','/var/run/docker.sock:/var/run/docker.sock:ro'] if local else [])+[TRIVY]
+            commands.append(image_base+['image','--image-src','docker' if local else 'remote',
+                '--scanners','vuln','--parallel','1','--format','json','--quiet','--timeout','15m',candidate])
+        for archive in args.image_archive:
+            archive=archive.resolve()
+            with archive.open('rb') as stream: digest=hashlib.file_digest(stream,'sha256').hexdigest()
+            evidence['imageArchives'].append({'file':archive.name,'sha256':digest})
+            commands.append(base[:base.index(TRIVY)] + ['--mount',f'type=bind,source={archive},target=/candidate.tar,readonly',TRIVY,
+                'image','--input','/candidate.tar','--scanners','vuln','--format','json','--quiet','--timeout','25m'])
+        for command in commands:
+            result = subprocess.run(command, capture_output=True, timeout=1800)
+            if result.returncode:
+                evidence['scannerFailure'] = {'stage': len(reports), 'exitCode': result.returncode,
+                    'timedOut': b'context deadline exceeded' in result.stderr}
+                raise RuntimeError('Scanner failed; report is not acceptance evidence')
+            reports.append(redact(json.loads(result.stdout)))
+        exceptions = json.loads(args.exceptions.read_text(encoding='utf-8')) if args.exceptions else []
+        evidence.update(evaluate(reports, exceptions, dt.datetime.now(dt.timezone.utc).date()))
+    except Exception as error:
+        evidence.update(status='NOT_TESTED', errorType=type(error).__name__)
+        raise
+    finally:
+        evidence['reports'] = reports
+        evidence['completedAt'] = dt.datetime.now(dt.timezone.utc).isoformat()
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(evidence, indent=2), encoding='utf-8')
+    print(json.dumps({'status': evidence['status'], 'blockingCount': len(evidence['blocking']),
+                      'exceptionCount': len(evidence['exceptions']), 'report': str(args.output)}))
+    return 0 if evidence['status'] == 'PASS' else 1
+
+
+if __name__ == '__main__': raise SystemExit(main())

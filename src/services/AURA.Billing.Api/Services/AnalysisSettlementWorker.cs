@@ -18,6 +18,7 @@ public sealed class BillingSettlementOptions
     public string ConsumerName { get; set; } = "s3-billing";
     public string Host { get; set; } = "rabbitmq";
     public int Port { get; set; } = 5672;
+    public bool UseTls { get; set; }
     public string VirtualHost { get; set; } = "/aura-s3";
     public string User { get; set; } = "";
     public string Password { get; set; } = "";
@@ -70,6 +71,9 @@ public sealed class AnalysisSettlementWorker(
         var factory = new ConnectionFactory
         {
             HostName = _options.Host, Port = _options.Port, VirtualHost = _options.VirtualHost,
+            Ssl = new() { Enabled = _options.UseTls, ServerName = _options.Host,
+                AcceptablePolicyErrors = System.Net.Security.SslPolicyErrors.None,
+                Version = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13 },
             UserName = _options.User, Password = _options.Password,
             AutomaticRecoveryEnabled = true, RequestedConnectionTimeout = TimeSpan.FromSeconds(5),
             ClientProvidedName = "aura-billing-settlement-consumer"

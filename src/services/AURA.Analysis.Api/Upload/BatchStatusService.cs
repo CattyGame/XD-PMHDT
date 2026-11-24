@@ -120,21 +120,24 @@ public sealed class BatchStatusService(IBatchStatusRepository repository, IPatie
         if (batchId == Guid.Empty) throw Missing();
         try
         {
-            if(groups is not null && await groups.TryReadAsync(requesterId,clinicId,batchId,correlationId,ct) is {} grouped)return grouped;
-            var identity = await repository.FindIdentityAsync(batchId, ct);
-            if (identity is null) throw Missing();
-            if (identity.BatchId != batchId || identity.TenantId == Guid.Empty || identity.PatientId == Guid.Empty || identity.OwnerId == Guid.Empty)
-                throw UploadFailure.Dependency("Analysis database");
-            var decision = await access.ResolveAsync(new PatientAccessRequest(requesterId, clinicId, identity.PatientId, "ANALYSIS_READ")
-                { CorrelationId = correlationId }, ct);
-            if (!decision.Allowed || decision.TenantId != identity.TenantId || decision.OwnerPrincipalId != identity.OwnerId)
-                throw Missing();
-            // Only fetch items/counts after current Profile authorization. The SQL binds all four identity fields again.
-            var snapshot = await repository.ReadAsync(identity, ct);
-            if (snapshot is null) throw Missing();
-            if (snapshot.BatchId != batchId) throw UploadFailure.Dependency("Analysis database");
-            var response = BatchStatusProjection.Create(snapshot);
-            if (batchProgress is not null)
+            var response = groups is null ? null : await groups.TryReadAsync(requesterId,clinicId,batchId,correlationId,ct);
+            if (response is null)
+            {
+                var identity = await repository.FindIdentityAsync(batchId, ct);
+                if (identity is null) throw Missing();
+                if (identity.BatchId != batchId || identity.TenantId == Guid.Empty || identity.PatientId == Guid.Empty || identity.OwnerId == Guid.Empty)
+                    throw UploadFailure.Dependency("Analysis database");
+                var decision = await access.ResolveAsync(new PatientAccessRequest(requesterId, clinicId, identity.PatientId, "ANALYSIS_READ")
+                    { CorrelationId = correlationId }, ct);
+                if (!decision.Allowed || decision.TenantId != identity.TenantId || decision.OwnerPrincipalId != identity.OwnerId)
+                    throw Missing();
+                // Only fetch items/counts after current Profile authorization. SQL binds the identity again.
+                var snapshot = await repository.ReadAsync(identity, ct);
+                if (snapshot is null) throw Missing();
+                response = BatchStatusProjection.Create(snapshot);
+            }
+            if (response.BatchId != batchId) throw UploadFailure.Dependency("Analysis database");
+            if (batchProgress is not null && response.Summary.Total > 0 && response.UploadPending is not > 0)
             {
                 try
                 {

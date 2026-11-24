@@ -7,7 +7,8 @@ param(
     [string]$PostgresHost = '127.0.0.1', [int]$PostgresPort = 5432,
     [string]$User = 'postgres', [string]$Password = $env:PGPASSWORD, [string]$Container = '',
     [string]$AssetRoot = '', [string]$EncryptionKey = $env:AURA_BACKUP_KEY,
-    [int]$MaxRtoSeconds = 1800, [int]$MaxRpoSeconds = 3600
+    [ValidateRange(1,86400)][int]$MaxRtoSeconds = 720,
+    [Alias('MaxRpoSeconds')][ValidateRange(1,31536000)][int]$MaxBackupAgeSeconds = 3600
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Backup.Common.ps1')
@@ -28,8 +29,8 @@ try {
     [IO.Compression.ZipFile]::ExtractToDirectory($zip,$package)
     $manifest = Get-Content -LiteralPath (Join-Path $package 'manifest.json') -Raw | ConvertFrom-Json
     if ($manifest.formatVersion -ne 1) { throw 'Unsupported manifest version.' }
-    $rpo = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($manifest.startedAt)).TotalSeconds
-    if ($rpo -lt -300 -or $rpo -gt $MaxRpoSeconds) { throw 'Backup age exceeds the requested RPO or has an invalid timestamp.' }
+    $backupAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($manifest.startedAt)).TotalSeconds
+    if ($backupAge -lt -300 -or $backupAge -gt $MaxBackupAgeSeconds) { throw 'Backup age exceeds the requested limit or has an invalid timestamp.' }
     $dump = Join-Path $package 'database.dump'
     if ((Get-FileHash -LiteralPath $dump -Algorithm SHA256).Hash -ne $manifest.dumpSha256) { throw 'Database checksum mismatch.' }
     $inventory = Get-Content -LiteralPath (Join-Path $package 'assets.manifest.json') -Raw | ConvertFrom-Json
@@ -81,7 +82,7 @@ try {
     }
     $timer.Stop()
     if ($timer.Elapsed.TotalSeconds -gt $MaxRtoSeconds) { throw 'Restore completed but exceeded the requested RTO.' }
-    Write-Output "RESTORE_COMPLETE: verified DB and $(@($inventory.objects).Count) private assets; RTO=$($timer.Elapsed.TotalSeconds)s; backup age/RPO=$rpo s."
+    Write-Output "RESTORE_COMPLETE: verified DB and $(@($inventory.objects).Count) private assets; restore duration=$($timer.Elapsed.TotalSeconds)s; backup age=$backupAge s (not continuous-write RPO)."
 } finally {
     if ($Container) { & docker exec $Container rm -f $remoteDump 2>$null | Out-Null }
     Remove-BackupStaging $stage $parent

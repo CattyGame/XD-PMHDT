@@ -35,12 +35,13 @@ builder.Services.AddDbContext<WorkerDbContext>(options =>
 });
 
 // 3. Infrastructure & HTTP Clients
-builder.Services.AddHttpClient<IServiceTokenProvider, ServiceTokenProvider>(client =>
+builder.Services.AddHttpClient("WorkerIdentity", client =>
 {
     var auth=builder.Configuration.GetSection(ServiceAuthOptions.SectionName).Get<ServiceAuthOptions>() ?? new();
     client.BaseAddress=new Uri(auth.IdentityBaseUrl);
     client.Timeout=TimeSpan.FromSeconds(10);
 });
+builder.Services.AddSingleton<IServiceTokenProvider, ServiceTokenProvider>();
 builder.Services.AddSingleton<IBlobStorageService, BlobStorageService>();
 
 builder.Services.AddHttpClient<IAiHttpClient, AiHttpClient>(client =>

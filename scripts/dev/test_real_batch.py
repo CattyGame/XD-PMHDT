@@ -3,7 +3,9 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import math
 import os
+import platform
 from pathlib import Path
 import ssl
 import subprocess
@@ -12,6 +14,76 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timezone
+
+
+def save_evidence(path, evidence):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    pending=path.with_suffix('.pending')
+    pending.write_text(json.dumps(evidence,indent=2),encoding='utf-8')
+    pending.replace(path)
+
+
+def firebase_token():
+    file=os.environ.get('AURA_TEST_FIREBASE_TOKEN_FILE')
+    value=json.loads(Path(file).read_text(encoding='utf-8'))['idToken'] if file else os.environ.get('AURA_TEST_FIREBASE_TOKEN')
+    if not isinstance(value,str) or not value or len(value)>16384 or any(c.isspace() for c in value):
+        raise ValueError('Private Firebase test token is missing or invalid')
+    return value
+
+
+def latency_summary(samples):
+    if any(not isinstance(x,(int,float)) or not math.isfinite(x) or x<0 for x in samples):
+        raise ValueError('Latency samples must be finite and nonnegative')
+    warm=sorted(samples[1:])
+    return {'count':len(samples),'coldMs':samples[0] if samples else None,
+            'warm':{'count':len(warm),**{f'p{p}Ms':warm[math.ceil(len(warm)*p/100)-1] if warm else None for p in (50,95,99)}}}
+
+
+def classify_real_result(detail):
+    status=detail.get('processingStatus')
+    if status in ('FAILED','LOW_QUALITY'):
+        code=(detail.get('error') or {}).get('code')
+        if not code:raise ValueError('Terminal failure needs an explicit reason')
+        return {'measurement':'QUALITY_FAILURE' if code in ('LOW_QUALITY','ERR_IMAGE_LOW_QUALITY') else 'PIPELINE_FAILURE','errorCode':code}
+    result=detail.get('result')
+    if status!='COMPLETED' or not isinstance(result,dict) or result.get('isMock') is not False:
+        raise ValueError('Real acceptance requires completed non-mock results')
+    avr=(result.get('metrics') or {}).get('avRatio')
+    research=(result.get('research') or {}).get('avr') or {}
+    if avr is None:
+        if research.get('measurement_available') is not False or not research.get('unavailable_reason'):
+            raise ValueError('Unavailable AVR requires explicit availability and reason')
+        if result.get('riskAvailable') is not False or result.get('riskLevel') is not None:
+            raise ValueError('Unavailable research AVR cannot silently become low risk')
+        measurement='UNAVAILABLE'
+    else:
+        if isinstance(avr,bool) or not isinstance(avr,(int,float)) or not math.isfinite(avr) or avr<=0:
+            raise ValueError('Measured AVR must be finite and positive')
+        if research and research.get('measurement_available') is not True:raise ValueError('Contradictory AVR availability')
+        measurement='MEASURED'
+    latency=result.get('processingTimeMs')
+    if not isinstance(latency,(int,float)) or not math.isfinite(latency) or latency<0:raise ValueError('Missing processing duration')
+    return {'measurement':measurement,'processingTimeMs':latency,'modelVersion':result.get('modelVersion'),
+            'configVersion':result.get('configVersion'),'thresholdVersion':result.get('thresholdVersion'),
+            'unavailableReason':research.get('unavailable_reason')}
+
+
+def retry_busy_upload(operation,deadline):
+    while True:
+        try:return operation()
+        except urllib.error.HTTPError as error:
+            if error.code not in (409,429):raise
+            try:body=json.loads(error.read(8193))
+            except (ValueError,OSError):raise error
+            if not isinstance(body,dict):raise error
+            problem=body.get('error',{})
+            if not isinstance(problem,dict):raise error
+            if problem.get('retryable') is not True or error.code==409 and problem.get('code')!='ERR_REQUEST_IN_PROGRESS':raise error
+            try:delay=float(error.headers.get('Retry-After','1'))
+            except ValueError:raise error
+            if not math.isfinite(delay) or not 0<delay<=60 or time.monotonic()+delay>=deadline:raise error
+            time.sleep(delay)
 
 
 def request(base, token, path, method="GET", body=None, content_type="application/json", key=None):
@@ -46,8 +118,12 @@ def main():
     p.add_argument("--count", type=int, default=100)
     p.add_argument("--timeout", type=int, default=1800)
     p.add_argument("--containers", nargs="+", required=True)
+    p.add_argument('--expected-workers',type=int,choices=[1,4])
+    p.add_argument('--require-real-results',action='store_true',help='Read every terminal result and check AVR/null/provenance')
+    p.add_argument('--allow-quality-failures',action='store_true',help='Allow only explicit low-quality terminal failures, still reconcile their release')
     args = p.parse_args()
-    token = os.environ.get("AURA_TEST_FIREBASE_TOKEN")
+    if args.allow_quality_failures and not args.require_real_results:raise ValueError('Quality acceptance requires real per-image result verification')
+    token = firebase_token()
     if args.require_financial_reconciliation and not args.postgres_container:
         raise ValueError("--require-financial-reconciliation requires --postgres-container")
     url = urllib.parse.urlparse(args.url)
@@ -73,7 +149,10 @@ def main():
             expected = record.get("expectedStatus", "SUCCEEDED").upper()
             if expected not in ("SUCCEEDED", "FAILED") or name in manifest:
                 raise ValueError("Manifest filenames must be unique and expectedStatus must be SUCCEEDED or FAILED")
-            manifest[name] = {"patientId": patient_id, "expectedStatus": expected}
+            availability=record.get('expectedAvrAvailable')
+            if availability is not None and type(availability) is not bool:raise ValueError('Expected AVR availability must be boolean')
+            manifest[name] = {"patientId": patient_id, "expectedStatus": expected,
+                              'expectedAvrAvailable':availability,'expectedErrorCode':record.get('expectedErrorCode')}
         if set(manifest) != {f.name for f in files}:
             raise ValueError("Manifest filenames must match the image directory exactly")
     elif not args.patient:
@@ -102,24 +181,51 @@ def main():
         item = manifest.get(f.name, {"patientId": args.patient, "expectedStatus": "SUCCEEDED"})
         items.append(dict(itemId=str(uuid.uuid4()), patientId=item["patientId"], fileName=f.name,
                           sha256=digest, modality="FUNDUS", eyeSide="unknown",
-                          expectedStatus=item["expectedStatus"]))
+                          expectedStatus=item["expectedStatus"],expectedAvrAvailable=item.get('expectedAvrAvailable'),
+                          expectedErrorCode=item.get('expectedErrorCode')))
     evidence = {"status": "RUNNING", "declared": len(items), "samples": [],
+                'observedFromUtc':datetime.now(timezone.utc).isoformat(),
+                'harnessSha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                'elapsedScope':'Resumed observation only' if args.resume_batch_id else 'Admission through reconciliation',
+                'resumedExistingBatch':bool(args.resume_batch_id),
                 "clinicContextId": str(args.clinic_context_id) if args.clinic_context_id else None,
-                "manifest": items}
+                "manifest": items,"apiSamples":[],"inputManifestSha256":hashlib.sha256(json.dumps(
+                    [{k:i[k] for k in ('fileName','sha256','patientId','expectedStatus','expectedAvrAvailable','expectedErrorCode')} for i in items],sort_keys=True).encode()).hexdigest(),
+                'hardware':{'platform':platform.platform(),'logicalCpuCount':os.cpu_count()},
+                'uptimeScope':'This workload observation window only; no annual availability inference',
+                'qualityAcceptancePolicy':'Known low-quality failures allowed' if args.allow_quality_failures else 'Exact predeclared terminal counts'}
     started = time.monotonic()
+    next_checkpoint=started
     base = args.url.rstrip("/")
     def api(path, method="GET", body=None, content_type="application/json", key=None):
         if args.clinic_context_id:
             path += "?" + urllib.parse.urlencode({"clinicContextId": str(args.clinic_context_id)})
-        return request(base, token, path, method, body, content_type, key)
+        for attempt in range(4):
+            called=time.monotonic();code=None
+            try:return request(base, firebase_token(), path, method, body, content_type, key)
+            except urllib.error.HTTPError as error:
+                code=error.code
+                if method!='GET' or code!=503 or attempt==3 or time.monotonic()+2>=started+args.timeout:raise
+            except Exception:code=0;raise
+            finally:evidence['apiSamples'].append({'method':method,'durationMs':(time.monotonic()-called)*1000,
+                                                  'succeeded':code is None,'httpErrorStatus':code})
+            time.sleep(2)
     def sample():
+        nonlocal next_checkpoint
         result = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{json .}}", *args.containers], capture_output=True, text=True, check=True)
         rows = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         if len(rows) != len(args.containers):
             raise RuntimeError("Missing container resource samples")
         evidence["samples"].append(rows)
-        if any(float(row["MemPerc"].rstrip("%")) >= 80 for row in rows):
-            raise RuntimeError("Observed memory >=80%")
+        for row in rows:
+            percent=float(row["MemPerc"].rstrip("%"))
+            if percent>=80:
+                peaks=evidence.setdefault('resourceViolations',{})
+                peaks[row['Name']]=max(peaks.get(row['Name'],0),percent)
+        if time.monotonic()>=next_checkpoint:
+            evidence['lastObservedUtc']=datetime.now(timezone.utc).isoformat()
+            save_evidence(args.output,evidence)
+            next_checkpoint=time.monotonic()+30
     try:
         sample()
         if args.resume_batch_id:
@@ -135,7 +241,7 @@ def main():
                 item["itemId"] = server["itemId"]
                 item["uploadStatus"] = server["uploadStatus"]
         else:
-            inventory = api("/api/v1/analysis-upload-batches", "POST", json.dumps({"items": [{k:v for k,v in item.items() if k != "expectedStatus"} for item in items]}).encode(), key=str(uuid.uuid4()))
+            inventory = api("/api/v1/analysis-upload-batches", "POST", json.dumps({"items": [{k:v for k,v in item.items() if not k.startswith('expected')} for item in items]}).encode(), key=str(uuid.uuid4()))
             batch = str(uuid.UUID(inventory["batchId"]))
             for item, admitted in zip(items, inventory["items"]):
                 if item["itemId"] != admitted["itemId"] or item["sha256"] != admitted["sha256"]:
@@ -150,7 +256,8 @@ def main():
             mime = "image/png" if file.suffix.lower() == ".png" else "image/jpeg"
             body = (f'--{boundary}\r\nContent-Disposition: form-data; name="image"; filename="image{file.suffix.lower()}"\r\nContent-Type: {mime}\r\n\r\n'.encode()
                     + file.read_bytes() + f"\r\n--{boundary}--\r\n".encode())
-            return api(f"/api/v1/analysis-upload-batches/{batch}/items/{item['itemId']}", "PUT", body, "multipart/form-data; boundary=" + boundary, item["itemId"])
+            return retry_busy_upload(lambda:api(f"/api/v1/analysis-upload-batches/{batch}/items/{item['itemId']}",
+                "PUT",body,"multipart/form-data; boundary="+boundary,item["itemId"]),started+args.timeout)
         pending = [(item, file) for item, file in zip(items, files) if item["uploadStatus"] == "DECLARED"]
         if args.stop_after_uploads is not None:
             pending = pending[:args.stop_after_uploads]
@@ -179,7 +286,8 @@ def main():
         accepted = api(f"/api/v1/analysis-upload-batches/{batch}/finalize", "POST", b"{}", key=str(uuid.uuid4()))
         expected_by_analysis = {}
         expected_by_name = {item["fileName"]: item["expectedStatus"] for item in items}
-        accepted_names = [item["fileName"] for item in accepted["items"] if item["uploadStatus"] == "ACCEPTED"]
+        accepted_names = [item["fileName"] for item in accepted["items"] if item.get("analysisId")
+                          and item.get("processingStatus") in ("QUEUED","DUPLICATE")]
         if len(accepted_names) != args.count or set(accepted_names) != set(expected_by_name):
             raise RuntimeError("Finalize receipts do not match every declared image exactly once")
         for receipt in accepted["items"]:
@@ -193,15 +301,59 @@ def main():
             evidence["outcome"] = result
             summary = result["summary"]
             if summary["total"] == len(items) and summary["active"] == 0:
-                if summary["succeeded"] != expected_succeeded or summary["failed"] != expected_failed or summary["duplicate"]:
+                if summary['duplicate'] or summary['succeeded']+summary['failed']!=args.count or (not args.allow_quality_failures and
+                        (summary["succeeded"] != expected_succeeded or summary["failed"] != expected_failed)):
                     raise RuntimeError("Terminal outcome counts do not match the acceptance manifest")
                 break
             time.sleep(2)
         else:
             raise TimeoutError("Pipeline did not reach terminal outcomes")
         states = json.loads(subprocess.run(["docker", "inspect", *args.containers], capture_output=True, text=True, check=True).stdout)
+        evidence['runtime']=[{'containerId':s.get('Id'),'imageId':s.get('Image'),
+            'service':s.get('Config',{}).get('Labels',{}).get('com.docker.compose.service'),
+            'memoryLimitBytes':s.get('HostConfig',{}).get('Memory'),
+            'nanoCpus':s.get('HostConfig',{}).get('NanoCpus'),
+            'cpusetCpus':s.get('HostConfig',{}).get('CpusetCpus'),
+            'inferenceMaxWaitersEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
+                                         if entry.startswith('AURA_AI_MAX_WAITERS=')),None),
+            'gcHeapHardLimitEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
+                                     if entry.startswith('DOTNET_GCHeapHardLimit=')),None),
+            'gcConserveMemoryEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
+                                       if entry.startswith('DOTNET_GCConserveMemory=')),None),
+            'gcHeapHardLimitPercentEnv':next((entry.partition('=')[2] for entry in s.get('Config',{}).get('Env',[])
+                                            if entry.startswith('DOTNET_GCHeapHardLimitPercent=')),None),
+            'threads':{k:v for entry in s.get('Config',{}).get('Env',[]) for k,_,v in [entry.partition('=')]
+                       if k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS')}} for s in states]
         if any(s["State"]["OOMKilled"] or s["State"]["ExitCode"] == 137 or not s["State"]["Running"] for s in states):
             raise RuntimeError("Container stopped or was OOMKilled")
+        if args.expected_workers is not None:
+            actual=sum(s.get('Config',{}).get('Labels',{}).get('com.docker.compose.service')=='analysis-worker' for s in states)
+            if actual!=args.expected_workers:raise RuntimeError('Actual worker replica count disagrees with workload declaration')
+            evidence['workerReplicas']=actual
+        if args.require_real_results:
+            details=[]
+            evidence['acceptanceViolations']=[]
+            expected_by_name={i['fileName']:i for i in items}
+            for receipt in accepted['items']:
+                detail=api('/api/v1/analyses/'+receipt['analysisId'])
+                row=classify_real_result(detail);expected=expected_by_name[receipt['fileName']]
+                if args.allow_quality_failures:
+                    if row['measurement']=='PIPELINE_FAILURE':
+                        evidence['acceptanceViolations'].append({'analysisId':receipt['analysisId'],'code':row['errorCode']})
+                    expected_by_analysis[receipt['analysisId']]='FAILED' if row['measurement'] in ('QUALITY_FAILURE','PIPELINE_FAILURE') else 'SUCCEEDED'
+                if expected.get('expectedAvrAvailable') is not None and (row['measurement']=='MEASURED')!=expected['expectedAvrAvailable']:
+                    raise RuntimeError('Measurement availability disagrees with workload manifest')
+                if expected.get('expectedErrorCode') and row.get('errorCode')!=expected['expectedErrorCode']:
+                    raise RuntimeError('Failure reason disagrees with workload manifest')
+                details.append({'analysisId':receipt['analysisId'],**row})
+            evidence['resultDetails']=details
+            evidence['measurementCoverage']={k:sum(r['measurement']==k for r in details) for k in
+                ('MEASURED','UNAVAILABLE','QUALITY_FAILURE','PIPELINE_FAILURE')}
+            evidence['measurementCoverage']['denominator']=len(items)
+            durations=[r['processingTimeMs'] for r in details if 'processingTimeMs' in r]
+            evidence['aiProcessingDuration']={'allResults':latency_summary([0]+durations)['warm'],
+                'coldWarmClassification':'NOT_MEASURED: manifest order is not inference execution order',
+                'scope':'Stored processing duration; queue/network time excluded'}
         evidence["status"] = "PASS_PIPELINE_ONLY"
         if args.postgres_container:
             sql = f"""
@@ -260,14 +412,21 @@ def main():
                 sample()
                 time.sleep(2)
             evidence["status"] = "PASS"
+        if evidence.get('resourceViolations'):
+            raise RuntimeError('Observed memory >=80%; terminal outcomes and settlement retained')
+        if evidence.get('acceptanceViolations'):
+            raise RuntimeError('Infrastructure failures are not accepted quality failures; complete diagnostics retained')
     except Exception as error:
         evidence["status"] = "FAIL"
         evidence["errorType"] = type(error).__name__
         raise
     finally:
         evidence["elapsedSeconds"] = time.monotonic() - started
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+        evidence['apiLatency']=latency_summary([r['durationMs'] for r in evidence['apiSamples']])
+        evidence['apiLatency']['coldInterpretation']='First observed request only; process/model cold start not inferred'
+        evidence['apiErrorRate']=sum(not r['succeeded'] for r in evidence['apiSamples'])/max(1,len(evidence['apiSamples']))
+        evidence['observedToUtc']=datetime.now(timezone.utc).isoformat()
+        save_evidence(args.output,evidence)
 
 
 if __name__ == "__main__":
