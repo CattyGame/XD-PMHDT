@@ -66,3 +66,17 @@ assert.equal(w7PerfProfile.frangiApiProfile?.srsHardSla?.passed, true, 'SRS hard
 assert.equal(w7PerfProfile.goldenParityGate?.passed, true, 'Golden parity gate must pass.');
 assert.equal(w7PerfProfile.goldenParityGate?.mismatchedPixels, 0, 'Golden parity gate must have 0 mismatched pixels.');
 console.log('PASS: Sprint 7 V2 evaluation report and latency/RAM/parity profile invariants verified.');
+
+const w8Registry = JSON.parse(fs.readFileSync(path.join(root, 'docs/benchmarks/w8_artifact_registry_v1.0.json'), 'utf8'));
+assert.equal(w8Registry.clinicalValidation, false, 'W8 artifact registry must keep clinicalValidation=false.');
+assert.equal(w8Registry.iowaRedistributedInGit, false, 'W8 registry must forbid Iowa in Git.');
+assert.equal(w8Registry.iowaRedistributedInZip, false, 'W8 registry must forbid Iowa in ZIP.');
+assert.equal(w8Registry.scientificGateScrum373?.status, 'OPEN_NOT_PASSED', 'W8 registry must keep SCRUM-373 OPEN_NOT_PASSED.');
+
+const w8Acceptance = JSON.parse(fs.readFileSync(path.join(root, 'docs/benchmarks/w8_v2_acceptance_summary.json'), 'utf8'));
+assert.equal(w8Acceptance.functionalSoftwareHandoff?.expertConfirmedGeneratedFromAuto, false, 'W8 acceptance must never fabricate expert_confirmed from AUTO.');
+assert.equal(w8Acceptance.scientificValidation?.clinicalValidation, false, 'W8 acceptance must keep clinicalValidation=false.');
+assert.equal(w8Acceptance.scientificValidation?.scientificGateScrum373?.status, 'OPEN_NOT_PASSED', 'W8 acceptance must keep SCRUM-373 OPEN_NOT_PASSED.');
+assert.ok(fs.existsSync(path.join(root, 'docs/ai/w8_m4_v2_software_and_scientific_acceptance.md')), 'Missing W8-M4-02 acceptance markdown.');
+assert.ok(fs.existsSync(path.join(root, 'docs/ai/w8_m4_3min_defense_script_and_cases.md')), 'Missing W8-M4-03 defense script markdown.');
+console.log('PASS: Sprint 8 artifact registry, V2 acceptance invariants, and defense docs verified.');
