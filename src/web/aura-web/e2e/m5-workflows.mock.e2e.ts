@@ -143,6 +143,9 @@ test('MOCK: clinician opens the result in three clicks after selecting a clinic 
   const batchId = id(7), batchPath = '/api/v1/analysis-upload-batches'
   let item: { itemId: string; patientId: string; fileName: string; eyeSide: string; uploadStatus: string }
   let finalized = 0
+  let resultReady = false
+  let resultAllowed = true
+  let resultReads = 0
   const inventory = () => ({
     batchId, statusUrl: `/api/v1/batches/${batchId}`, createdAt: '2026-11-01T09:00:00Z', status: 'UPLOADING', items: [item],
   })
@@ -182,8 +185,24 @@ test('MOCK: clinician opens the result in three clicks after selecting a clinic 
     }
     if (path === `/api/v1/analyses/${item?.itemId}`) {
       expect(url.searchParams.get('clinicContextId')).toBe(clinic)
-      return route.fulfill({ json: { analysisId: item.itemId, batchId, processingStatus: 'QUEUED',
-        reviewStatus: 'PENDING', updatedAt: '2026-11-01T09:00:00Z', image: null, result: null } })
+      resultReads++
+      if (!resultAllowed) return route.fulfill({ status: 403, json: { error: { code: 'ERR_FORBIDDEN' } } })
+      return route.fulfill({ json: { analysisId: item.itemId, batchId, processingStatus: resultReady ? 'COMPLETED' : 'QUEUED',
+        reviewStatus: 'PENDING', updatedAt: '2026-11-01T09:00:00Z',
+        image: resultReady ? { fileId: file, kind: 'original' } : null,
+        result: resultReady ? { version: 1, isMock: true, riskAvailable: false, riskLevel: null, riskScore: null,
+          confidenceScore: null, modelVersion: 'synthetic', configVersion: 'fixture', thresholdVersion: 'fixture',
+          disclaimer: 'Synthetic TEST', limitations: 'Software fixture', metrics: { avRatio: null },
+          indicators: [], annotations: [], warnings: [{ code: 'AVR_UNAVAILABLE', message: 'Synthetic AVR unavailable reason' }] } : null,
+      } })
+    }
+    if (path.startsWith(`/api/v1/analyses/${item?.itemId}/files/${file}/`)) {
+      expect(url.searchParams.get('clinicContextId')).toBe(clinic)
+      if (path.endsWith('/access')) return route.fulfill({ json: {
+        url: `/api/v1/analyses/${item.itemId}/files/${file}/content?clinicContextId=${clinic}`,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      } })
+      if (path.endsWith('/content')) return route.fulfill({ contentType: 'image/png', body: png })
     }
     return route.fallback()
   })
@@ -200,6 +219,34 @@ test('MOCK: clinician opens the result in three clicks after selecting a clinic 
   await expect(page.getByRole('heading', { name: 'Kết quả phân tích võng mạc' })).toBeVisible()
   await expect(page.getByText(/Chưa có kết quả AI hoàn tất/)).toBeVisible()
   expect(finalized).toBe(1)
+
+  resultReady = true
+  await page.reload()
+  const avr = page.getByRole('region', { name: 'Tỷ số động/tĩnh mạch (AVR)' })
+  await expect(avr).toContainText('Synthetic AVR unavailable reason')
+  await expect(avr).not.toContainText(/AVR:\s*0/)
+  const image = page.getByRole('img', { name: 'Ảnh võng mạc gốc' })
+  await expect(image).toHaveAttribute('src', /^blob:/)
+  const blobUrl = (await image.getAttribute('src'))!
+  await expect.poll(() => image.evaluate(img => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+
+  await page.getByRole('link', { name: 'Trang chủ', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Trang chủ AURA' })).toBeVisible()
+  await expect.poll(() => page.evaluate(url => fetch(url).then(() => true, () => false), blobUrl)).toBe(false)
+
+  resultAllowed = false
+  await page.goBack()
+  await expect(page.getByRole('alert')).toContainText(/không được truy cập/i)
+  await expect(image).toHaveCount(0)
+  await expect(avr).toHaveCount(0)
+  await page.getByRole('link', { name: 'Trang chủ', exact: true }).click()
+  await page.getByRole('button', { name: 'Đăng xuất', exact: true }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  const readsAfterLogout = resultReads
+  await page.goBack()
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(image).toHaveCount(0)
+  expect(resultReads).toBe(readsAfterLogout)
 })
 
 for (const [width, height] of [[390, 844], [768, 1024], [1024, 900], [1366, 768], [1920, 1080]]) {
