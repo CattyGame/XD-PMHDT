@@ -225,7 +225,8 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
     }}>Tạo lượt tải mới</button>}
     <label htmlFor="upload-clinic">Phòng khám</label>
     <select id="upload-clinic" disabled={locked || !!inventory} value={clinicId} onChange={event => {
-      setClinicId(event.target.value); setSelections([]); setInvalidFiles([]); setPatients([]); setPatientNames({}); setSearch(''); setError('')
+      setClinicId(event.target.value); setLinkedPatient(undefined)
+      setSelections([]); setInvalidFiles([]); setPatients([]); setPatientNames({}); setSearch(''); setError('')
     }}><option value="">Chọn phòng khám</option>{clinics.map(x => <option key={x.clinicId} value={x.clinicId}>{x.clinicName}</option>)}</select>
     {clinics.length === 0 && <p>Chưa có phòng khám đang hoạt động được cấp quyền cho tài khoản này.</p>}
     {clinicId && !blocked && <>

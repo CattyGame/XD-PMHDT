@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { webcrypto } from 'node:crypto'
 import { beforeEach, afterEach, it, expect, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 const m = vi.hoisted(() => ({ auth: vi.fn() }))
 vi.mock('../firebase/config', () => ({ getFirebaseAuth: m.auth }))
@@ -68,6 +68,39 @@ it('does not offer fabricated clinics when discovery is denied', async () => {
   expect((await screen.findByRole('alert')).textContent).toContain('không được truy cập')
   expect(screen.queryByLabelText('Chọn ảnh phòng khám')).toBeNull()
   expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
+it('clears the verified linked patient when changing clinics and waits for fresh authorization on return', async () => {
+  const secondClinic = '11111111-1111-4111-8111-000000000008'
+  window.history.replaceState(null, '', `/clinic-upload?clinicContextId=${clinicId}&patientId=${patientA}`)
+  const originalFetch = fetchMock.getMockImplementation()!
+  let details = 0
+  let deny!: (response: Response) => void
+  fetchMock.mockImplementation(async (url, init) => {
+    const path = String(url).split('?')[0]
+    if (path === '/api/v1/clinics') return json({ items: [
+      { clinicId, clinicName: 'Clinic A', role: 'CLINIC_ADMIN', status: 'ACTIVE' },
+      { clinicId: secondClinic, clinicName: 'Clinic B', role: 'CLINIC_ADMIN', status: 'ACTIVE' },
+    ] })
+    if (path === `/api/v1/clinics/${clinicId}/patients/${patientA}`) {
+      return ++details === 1
+        ? json({ clinicId, patientId: patientA, fullName: 'Selected patient A', status: 'ACTIVE' })
+        : new Promise<Response>(resolve => { deny = resolve })
+    }
+    return originalFetch(url, init)
+  })
+  page()
+  await screen.findByText('Selected patient A')
+  const clinic = screen.getByRole('combobox', { name: 'Phòng khám' })
+  fireEvent.change(clinic, { target: { value: secondClinic } })
+  expect(screen.queryByText('Selected patient A')).toBeNull()
+  fireEvent.change(clinic, { target: { value: clinicId } })
+  expect(screen.queryByText('Selected patient A')).toBeNull()
+  expect((screen.getByLabelText('Chọn ảnh phòng khám') as HTMLInputElement).disabled).toBe(true)
+  await waitFor(() => expect(details).toBe(2))
+  deny(json({ error: { code: 'ERR_FORBIDDEN' } }, 403))
+  await screen.findByText(/Không thể xác nhận bệnh nhân đã chọn/)
+  expect(screen.queryByText('Selected patient A')).toBeNull()
 })
 
 it('renders 100 lazy previews on drop, rejects an overflowing selection, and releases removed and remaining previews', async () => {
