@@ -86,6 +86,56 @@ async function openDoctor(page: Page) {
   await expect(page.getByRole('img', { name: 'Ảnh võng mạc gốc' }).first()).toHaveAttribute('src', /^blob:/)
 }
 
+for (const width of [1024, 1366, 1920]) {
+  test(`MOCK: Doctor approves through authenticated image bytes at ${width}px`, async ({ page }, info) => {
+    const state = await fixture(page)
+    await page.setViewportSize({ width, height: 900 })
+    await openDoctor(page)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
+    await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
+    await expect(page.getByText(/Ca chụp đã được đánh giá/)).toBeVisible()
+    expect(state.posts).toBe(1)
+    await page.screenshot({ path: info.outputPath(`doctor-approved-${width}.png`), fullPage: true })
+  })
+}
+
+test('MOCK: offline review preserves draft; 409 blocks overwrite; revoked access clears detail', async ({ page }) => {
+  const state = await fixture(page)
+  await openDoctor(page)
+  const notes = page.getByRole('textbox', { name: 'Ghi chú / khuyến nghị điều trị' })
+  await notes.fill('Synthetic in-memory draft')
+  state.reviewHttp = 0
+  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: /Không/ })).toBeVisible()
+  await expect(notes).toHaveValue('Synthetic in-memory draft')
+  state.reviewHttp = 409
+  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
+  await expect(page.getByRole('alertdialog')).toBeVisible()
+  expect(state.posts).toBe(2)
+  await page.getByRole('button', { name: 'Tải phiên bản mới nhất' }).click()
+  await expect(page.getByRole('alertdialog')).toHaveCount(0)
+  state.reviewHttp = 403
+  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
+  await expect(page.getByRole('region', { name: 'Chi tiết ca chụp' })).toHaveCount(0)
+  expect(await page.evaluate(() => Object.values(localStorage).some(value => value.includes('Synthetic in-memory draft')))).toBe(false)
+})
+
+test('MOCK: global PATIENT with ClinicAdmin membership buys for clinic; refresh reads current credit', async ({ page }) => {
+  const state = await fixture(page, ['PATIENT'])
+  await page.setViewportSize({ width: 1024, height: 900 })
+  await page.goto('/billing/packages')
+  await page.getByRole('radio', { name: 'Ví tổ chức' }).check()
+  await expect(page.getByRole('status', { name: 'Thông tin Credit' }).getByText('0', { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
+  await page.getByRole('button', { name: 'Mua gói', exact: true }).click()
+  await page.getByRole('button', { name: 'Thanh toán thành công (Sandbox)' }).click()
+  await expect(page.getByText('Thanh toán đã được backend xác nhận')).toBeVisible()
+  await expect(page.getByRole('status', { name: 'Thông tin Credit' }).getByText('10', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('status', { name: 'Thông tin Credit' }).getByText('10', { exact: true })).toBeVisible()
+  expect(state.paymentPosts).toBe(1)
+})
+
 test('MOCK: SCRUM-394 resends the same message, catches up through pages, and clears the thread on revoke', async ({ page }) => {
   await fixture(page, ['PATIENT'])
   await page.setViewportSize({ width: 390, height: 844 })
@@ -221,54 +271,4 @@ test('MOCK: SCRUM-394 starts consultation using the eligible doctor list and reu
   await page.getByRole('button', { name: 'Mở cuộc trò chuyện' }).click()
   await expect(page.getByRole('region', { name: 'Nội dung tư vấn' })).toBeVisible()
   expect(keys).toHaveLength(2)
-})
-
-for (const width of [1024, 1366, 1920]) {
-  test(`MOCK: Doctor approves through authenticated image bytes at ${width}px`, async ({ page }, info) => {
-    const state = await fixture(page)
-    await page.setViewportSize({ width, height: 900 })
-    await openDoctor(page)
-    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
-    await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
-    await expect(page.getByText(/Ca chụp đã được đánh giá/)).toBeVisible()
-    expect(state.posts).toBe(1)
-    await page.screenshot({ path: info.outputPath(`doctor-approved-${width}.png`), fullPage: true })
-  })
-}
-
-test('MOCK: offline review preserves draft; 409 blocks overwrite; revoked access clears detail', async ({ page }) => {
-  const state = await fixture(page)
-  await openDoctor(page)
-  const notes = page.getByRole('textbox', { name: 'Ghi chú / khuyến nghị điều trị' })
-  await notes.fill('Synthetic in-memory draft')
-  state.reviewHttp = 0
-  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
-  await expect(page.getByRole('alert').filter({ hasText: /Không/ })).toBeVisible()
-  await expect(notes).toHaveValue('Synthetic in-memory draft')
-  state.reviewHttp = 409
-  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
-  await expect(page.getByRole('alertdialog')).toBeVisible()
-  expect(state.posts).toBe(2)
-  await page.getByRole('button', { name: 'Tải phiên bản mới nhất' }).click()
-  await expect(page.getByRole('alertdialog')).toHaveCount(0)
-  state.reviewHttp = 403
-  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
-  await expect(page.getByRole('region', { name: 'Chi tiết ca chụp' })).toHaveCount(0)
-  expect(await page.evaluate(() => Object.values(localStorage).some(value => value.includes('Synthetic in-memory draft')))).toBe(false)
-})
-
-test('MOCK: global PATIENT with ClinicAdmin membership buys for clinic; refresh reads current credit', async ({ page }) => {
-  const state = await fixture(page, ['PATIENT'])
-  await page.setViewportSize({ width: 1024, height: 900 })
-  await page.goto('/billing/packages')
-  await page.getByRole('radio', { name: 'Ví tổ chức' }).check()
-  await expect(page.getByRole('status', { name: 'Thông tin Credit' }).getByText('0', { exact: true })).toBeVisible()
-  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
-  await page.getByRole('button', { name: 'Mua gói', exact: true }).click()
-  await page.getByRole('button', { name: 'Thanh toán thành công (Sandbox)' }).click()
-  await expect(page.getByText('Thanh toán đã được backend xác nhận')).toBeVisible()
-  await expect(page.getByRole('status', { name: 'Thông tin Credit' }).getByText('10', { exact: true })).toBeVisible()
-  await page.reload()
-  await expect(page.getByRole('status', { name: 'Thông tin Credit' }).getByText('10', { exact: true })).toBeVisible()
-  expect(state.paymentPosts).toBe(1)
 })

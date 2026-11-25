@@ -24,9 +24,10 @@ import BillingPage from '../pages/billing/BillingPage'
 import PaymentPage from '../pages/billing/PaymentPage'
 import PaymentSuccessPage from '../pages/billing/PaymentSuccessPage'
 import FcmToastHost from '../components/FcmToastHost'
-const ConsultationsPage = lazy(() => import('../pages/consultations/ConsultationsPage'))
 import ProfilePage from '../pages/ProfilePage'
 import AdminManagementPage from '../pages/AdminManagementPage'
+
+const ConsultationsPage = lazy(() => import('../pages/consultations/ConsultationsPage'))
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
