@@ -124,27 +124,27 @@ describe('Điều hướng tài khoản thật và khu vực minh họa', () => 
     expect(screen.getByRole('heading', { name: 'Trang chủ AURA' })).toBeTruthy()
   })
 
-  it('mở đúng /upload từ trang chủ thật', () => {
+  it('mở đúng /upload từ trang chủ thật', async () => {
     show({ status: 'ready', context })
     fireEvent.click(screen.getByRole('link', { name: 'Mở trang tải ảnh' }))
+    expect(await screen.findByText('Form upload cá nhân')).toBeTruthy()
     expect(screen.getByTestId('current-route').textContent).toBe('/upload')
-    expect(screen.getByText('Form upload cá nhân')).toBeTruthy()
     expect(screen.queryByText('Dashboard minh họa cũ')).toBeNull()
   })
 
-  it('Dashboard cũ chỉ xuất hiện trong /demo với nhãn minh họa rõ ràng', () => {
+  it('Dashboard cũ chỉ xuất hiện trong /demo với nhãn minh họa rõ ràng', async () => {
     show({ status: 'ready', context }, '/demo')
+    expect(await screen.findByText('Dashboard minh họa cũ')).toBeTruthy()
     expect(screen.getByRole('note').textContent).toContain('Vai trò và dữ liệu trong khu vực này là giả lập')
-    expect(screen.getByText('Dashboard minh họa cũ')).toBeTruthy()
     fireEvent.click(screen.getByRole('link', { name: 'Về trang tài khoản thật' }))
     expect(screen.getByRole('heading', { name: 'Trang chủ AURA' })).toBeTruthy()
     expect(screen.queryByText('Dashboard minh họa cũ')).toBeNull()
   })
 
-  it('giữ router-demo trong khu vực có nhãn giả lập', () => {
+  it('giữ router-demo trong khu vực có nhãn giả lập', async () => {
     show({ status: 'anonymous' }, '/router-demo/admin/dashboard')
+    expect(await screen.findByText('Router minh họa cũ')).toBeTruthy()
     expect(screen.getByRole('note')).toBeTruthy()
-    expect(screen.getByText('Router minh họa cũ')).toBeTruthy()
     expect(screen.queryByText('Form upload cá nhân')).toBeNull()
   })
 
