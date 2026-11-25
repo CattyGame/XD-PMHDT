@@ -4,7 +4,7 @@
 
 ## Hành trình clinician
 
-**PASS (Playwright mock).** Bắt đầu khi tài khoản DOCTOR đã đăng nhập và hồ sơ bệnh nhân đã mở tại `/clinics/patients`. Luồng trước đây điều hướng qua trang upload, bỏ qua `patientId` đã được truyền, và cần thêm click qua batch để mở kết quả. Luồng hiện tại:
+**PASS (Playwright mock).** Bắt đầu khi tài khoản DOCTOR đã đăng nhập và hồ sơ bệnh nhân đã mở tại `/clinics/patients`. Luồng trước đây điều hướng qua trang upload, bỏ qua `patientId` đã được truyền, và cần thêm click qua batch để mở kết quả. Luồng hiện tại có ba thao tác.
 
 1. Click **Chụp / Gửi ảnh phân tích** để mở hộp chọn tệp. Playwright mô phỏng thao tác chọn PNG trong hộp hệ điều hành.
 2. Click **Gửi ảnh phòng khám** sau khi trang gán bệnh nhân đã được kiểm tra quyền lại ở API.
@@ -35,14 +35,15 @@ Baseline `547f35592f1255c6bd034b056129eed212e0a6a6`, tree `d516826260b78d84b3461
 - **PASS (RTL)** — Blob URL bị thu hồi tại hạn quyền thực tế, kể cả khi tải bytes tốn thời gian. Khi viewer unmount hoặc đổi scope, yêu cầu đang chạy bị abort và Blob URL được thu hồi. Viewer gắn key với UID, account, profile version, clinic và analysis.
 - **PASS (targeted)** — `ApplicationRoutes.test.tsx` 17 ca. Sau cập nhật luồng clinician, 25 ca ở `ApplicationRoutes`, `ClinicPatientPage` và `ClinicUploadPage`. `AnalysisResultPage` và `analysisResult` 25 ca. Playwright chromium luồng ba click 1 ca.
 
-## Live performance acceptance
+## Đo trên Gateway TEST cục bộ
 
-| Gate | Trước | Sau |
+| Chỉ số | Trước · `547f355` | Sau · `beca9c6` |
 | --- | --- | --- |
-| Dashboard p95 < 3 s | BLOCKED | BLOCKED |
-| Result p95 < 3 s | BLOCKED | BLOCKED |
-| LCP < 1,8 s (stretch) | BLOCKED | BLOCKED |
+| Dashboard p95 < 3 s | 3.490 ms · FAIL mục tiêu cục bộ | 2.970 ms · PASS mục tiêu cục bộ |
+| Dashboard LCP p95 < 1,8 s (stretch) | 3.076 ms · FAIL | 2.704 ms · FAIL |
+| Result p95 < 3 s | 5.346 ms · FAIL | 5.207 ms · FAIL |
+| Result LCP p95 < 1,8 s (stretch) | 2.860 ms · FAIL | 2.612 ms · FAIL |
 
-Gateway loopback phản hồi health 200. Chưa xác minh image/contract/model/config/migration khớp candidate SCRUM-397 và chưa có bộ tài khoản/ca TEST trong cấu hình thực thi. Số lượt live **0**. Bundle build fixture và Chromium mock là bằng chứng kỹ thuật riêng.
+Build production trước và sau dùng cùng Firebase TEST và Gateway `127.0.0.1:5000` qua Vite preview loopback. Google Chrome 158.0.8127.88 headless, viewport 1366×768, cùng máy Windows ghi ở trên, mạng máy hiện hành, không throttle mạng/CPU. Khởi tạo phiên DOCTOR trước phép đo, warm-up mỗi route một lượt rồi giữ cache HTTP ấm. Mỗi mẫu bắt đầu từ full navigation. Dashboard kết thúc khi heading danh tính được cấp quyền xuất hiện. Result kết thúc khi UI hiển thị trạng thái COMPLETED của ca tổng hợp cố định và ảnh gốc riêng tư decode từ Blob. LCP lấy từ PerformanceObserver kể từ navigation, đọc ở 250 ms sau assertion readiness. p95 là mẫu thứ 29 của 30 giá trị đã sắp tăng. Các GET bảo vệ vẫn dùng `no-store`. Tổng cộng 120 mẫu readiness. Chuỗi đo nằm trong `test-results/scrum7-live-evidence.json` và `test-results/scrum7-live-result-evidence.json` của frontend checkout.
 
-Khi có candidate và tài khoản TEST, chạy cả hai production build sau HTTPS với Gateway và dữ liệu tổng hợp cố định. Ghi SHA/tree, phiên bản Chrome, CPU/RAM, viewport 1366×768, link mạng và các image/config digest. Chạy riêng 30 lần mỗi route và mỗi chế độ cache trên cùng thiết bị và profile mạng. Tham số đề xuất cho profile giới hạn là 150 ms RTT, 1,6 Mbps tải xuống, 0,75 Mbps tải lên, CPU 1×. Khởi tạo phiên TEST trước khi bắt đầu đo. Với cache lạnh, xóa HTTP cache giữa lượt và giữ phiên. Với cache ấm, chạy một lượt warm-up ngoài mẫu. Đo từ navigation start đến Dashboard hiển thị danh tính thật hoặc Result hiển thị trạng thái và nội dung kết quả đã được cấp quyền. Thu LCP bằng PerformanceObserver có buffered entries. Báo từng chuỗi 30 giá trị và p95 nearest-rank tại vị trí `ceil(0,95 × n)` của dãy đã sắp tăng. Ghi riêng lỗi, timeout và trạng thái route.
+**Nghiệm thu performance live Sprint 7 · BLOCKED.** Các image backend hiện chạy thiếu thông tin revision để ghép với SCRUM-397. Phép đo cục bộ dùng Gateway thật, ca TEST đã seed từ Sprint 6 và kết quả có nhãn `isMock=true`. Dashboard đạt mục tiêu cục bộ với biên 30 ms. Result vẫn vượt mục tiêu 2.207 ms khi tính đến lúc ảnh gốc sẵn sàng. Để nghiệm thu, dùng deployment HTTPS đã chốt manifest, lấy timing riêng từ navigation → kết quả → cấp quyền ảnh → bytes/decode và chạy lại cả hai build trên profile lạnh/giới hạn như 150 ms RTT, 1,6 Mbps tải xuống và 0,75 Mbps tải lên. Ghi các image/model/config digest. Candidate đo sau là `beca9c627556b15357c74032781e2a937685fac0`, tree `bd69ddec1d4efcaeb7b3028826b1962191bf033b`.
