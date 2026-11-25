@@ -85,6 +85,20 @@ describe('SCRUM-333 — Analysis Result client', () => {
     }
   })
 
+  it('preserves terminal error details for LOW_QUALITY or FAILED analyses and rejects malformed errors', () => {
+    const failed = parseAnalysis({
+      ...completed, processingStatus: 'LOW_QUALITY', result: null,
+      error: { code: 'LOW_QUALITY_IMAGE', message: 'Ảnh mờ hoặc quá tối.', correlationId: 'corr-1', retryable: false },
+    }, analysisId)
+    expect(failed.result).toBeNull()
+    expect(failed.error).toEqual({
+      code: 'LOW_QUALITY_IMAGE', message: 'Ảnh mờ hoặc quá tối.', correlationId: 'corr-1', retryable: false,
+    })
+    expect(() => parseAnalysis({
+      ...completed, processingStatus: 'FAILED', result: null, error: { code: '', message: 'broken' },
+    }, analysisId)).toThrow(AnalysisResultError)
+  })
+
   it('retains research provenance and rejects impossible DR probabilities or misplaced Grad-CAM', () => {
     const research = {
       avr: { measurement_available: false, avr: null, crae_px: null, crve_px: null,

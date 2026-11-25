@@ -34,11 +34,21 @@ CREATE INDEX IF NOT EXISTS idx_account_lifecycle_audit_target
 GRANT SELECT, INSERT ON identity.account_lifecycle_audit TO aura_identity_app;
 REVOKE UPDATE, DELETE ON identity.account_lifecycle_audit FROM aura_identity_app;
 
--- 2. Profile clinic version and append-only audit_events
+-- Preserve the original M6 audit shape separately from M1's owner outbox payloads.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema='profile' AND table_name='audit_events' AND column_name='source_service')
+       AND to_regclass('profile.clinic_lifecycle_audit_events') IS NULL THEN
+        ALTER TABLE profile.audit_events RENAME TO clinic_lifecycle_audit_events;
+    END IF;
+END $$;
+
+-- 2. Profile clinic version and append-only lifecycle history
 ALTER TABLE profile.clinics
     ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1 CHECK (version >= 1);
 
-CREATE TABLE IF NOT EXISTS profile.audit_events (
+CREATE TABLE IF NOT EXISTS profile.clinic_lifecycle_audit_events (
     event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source_service VARCHAR(64) NOT NULL,
     actor_account_id UUID NULL,
@@ -51,9 +61,9 @@ CREATE TABLE IF NOT EXISTS profile.audit_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_profile_audit_events_occurred
-    ON profile.audit_events(occurred_at DESC, event_id DESC);
+    ON profile.clinic_lifecycle_audit_events(occurred_at DESC, event_id DESC);
 
-GRANT SELECT, INSERT ON profile.audit_events TO aura_profile_app;
-REVOKE UPDATE, DELETE ON profile.audit_events FROM aura_profile_app;
+GRANT SELECT, INSERT ON profile.clinic_lifecycle_audit_events TO aura_profile_app;
+REVOKE UPDATE, DELETE ON profile.clinic_lifecycle_audit_events FROM aura_profile_app;
 
 COMMIT;

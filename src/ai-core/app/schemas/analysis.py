@@ -113,11 +113,23 @@ class AvrResearchResult(BaseModel):
 
 class DrResearchResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    probability_dr: float = Field(ge=0, le=1, allow_inf_nan=False)
+    probability_dr: float = Field(
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
+        description="Binary HRF DR research probability; never an ICDR clinical grade.",
+    )
     model_version: str = Field(min_length=1)
     checkpoint_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    gradcam_method: Literal["GRAD_CAM"]
-    gradcam_geometry: Literal["IMAGENET_CENTER_CROP_224"]
+    gradcam_method: Literal["GRAD_CAM"] = Field(
+        description="Autograd gradient attribution on ResNet34 layer4.",
+    )
+    gradcam_geometry: Literal["IMAGENET_CENTER_CROP_224"] = Field(
+        description=(
+            "Transform coordinates: Resize(shorter_edge=256) -> CenterCrop(224x224) "
+            "-> ImageNet normalization; not native full-image lesion segmentation."
+        ),
+    )
 
 
 class ResearchResults(BaseModel):
@@ -206,6 +218,8 @@ class AnalysisResponse(BaseModel):
             raise ValueError("risk_assessment must be null when risk_available is false.")
         if self.risk_available and self.risk_assessment is None:
             raise ValueError("risk_assessment is required when risk_available is true.")
+        if self.research is not None and self.is_mock:
+            raise ValueError("research results cannot be flagged as mock.")
         if self.research is not None and self.risk_available:
             raise ValueError("research results cannot provide clinical risk assessment.")
         if self.research is not None and self.metrics.av_ratio != self.research.avr.avr:

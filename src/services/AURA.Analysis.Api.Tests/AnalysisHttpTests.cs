@@ -13,12 +13,71 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
+using AURA.Common.Audit;
 using Xunit;
 
 namespace AURA.Analysis.Api.Tests;
 
 public sealed class AnalysisHttpTests
 {
+    [Fact]
+    public async Task Camera_receipt_requires_live_delegation_and_preserves_event_metadata()
+    {
+        await using var r = await Rig.Start();
+        var key = Guid.NewGuid();
+        var tenant = Guid.NewGuid();
+        using var bare = r.Post(path: "/api/v1/analyses/camera");
+        r.Client.DefaultRequestHeaders.Authorization = null;
+        using var unauthorized = await r.Client.SendAsync(bare);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
+
+        async Task<HttpResponseMessage> Send(string device)
+        {
+            using var request = r.Post(path: "/api/v1/analyses/camera");
+            request.Headers.Authorization = new("Bearer", "camera-fixture");
+            request.Headers.Remove("Idempotency-Key");
+            request.Headers.Add("Idempotency-Key", key.ToString("D"));
+            request.Headers.Add("X-Tenant-Id", tenant.ToString("D"));
+            request.Headers.Add("X-Device-Id", device);
+            request.Headers.Add("X-Camera-Version", "1");
+            request.Headers.Add("X-Camera-SHA256", new string('a', 64));
+            return await r.Client.SendAsync(request);
+        }
+        using var allowed = await Send("device-1");
+        Assert.Equal(HttpStatusCode.Accepted, allowed.StatusCode);
+        var receipt = await allowed.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(key, receipt.GetProperty("requestId").GetGuid());
+        Assert.Equal(1, receipt.GetProperty("version").GetInt32());
+        Assert.Equal(new string('a', 64), receipt.GetProperty("imageSha256").GetString());
+        Assert.Equal(r.Camera.Actor, r.Upload.Last!.RequesterId);
+        Assert.Equal(key.ToString("D"), r.Upload.Last.CorrelationId);
+        Assert.Equal(tenant, r.Upload.Last.Camera!.TenantId);
+        var acceptedCommand = r.Upload.Last;
+        using var changedDevice = await Send("device-2");
+        Assert.Equal(HttpStatusCode.Forbidden, changedDevice.StatusCode);
+        r.Camera.Revoked = true;
+        using var revokedReplay = await Send("device-1");
+        Assert.Equal(HttpStatusCode.Forbidden, revokedReplay.StatusCode);
+        Assert.Same(acceptedCommand, r.Upload.Last);
+        Assert.Equal(3, r.Camera.Calls);
+        Assert.Equal(10, r.Upload.Length);
+    }
+
+    private sealed class CameraAuthority : ICameraDelegation
+    {
+        public readonly Guid Actor = Guid.NewGuid();
+        private readonly Guid grant = Guid.NewGuid();
+        public int Calls;
+        public bool Revoked;
+        public Task<CameraGrant> ResolveAsync(System.Net.Http.Headers.AuthenticationHeaderValue bearer,
+            Guid patient, Guid tenant, Guid? clinic, string device, CancellationToken ct)
+        {
+            Calls++;
+            if (Revoked || device != "device-1") throw new UploadFailure(403, "ERR_FORBIDDEN", "Denied");
+            return Task.FromResult(new CameraGrant(true, Actor, patient, tenant, "PERSONAL", Actor,
+                new("ACCOUNT", Actor), grant, clinic));
+        }
+    }
     [Fact]
     public async Task Patient_history_requires_bearer_before_reading_any_history()
     {
@@ -82,6 +141,8 @@ public sealed class AnalysisHttpTests
         public readonly Identity Identity=new();public readonly Upload Upload=new();public readonly FakeAccess Access=new();
         public readonly FakeFileRepo Files=new();public readonly FakeStorage Storage=new();public readonly Batch Batch=new();
         public readonly HistoryRepository History=new();
+        public readonly AuditWriter Audit=new();
+        public readonly CameraAuthority Camera=new();
         public WebApplication App=null!;public HttpClient Client=null!;
         public static async Task<Rig> Start(long imageLimit=10485760,int images=100,long total=1101004800,NpgsqlDataSource? itemDatabase=null)
         {
@@ -92,6 +153,8 @@ public sealed class AnalysisHttpTests
             b.Services.AddSingleton<IPatientAccessResolver>(r.Access);b.Services.AddSingleton<IFileAccessRepository>(r.Files);b.Services.AddSingleton<IPrivateFileStorage>(r.Storage);
             b.Services.AddSingleton<IBatchStatusRepository>(r.Batch);b.Services.AddTransient<BatchStatusService>();b.Services.AddTransient<FileAccessService>();
             b.Services.AddSingleton<IPatientHistoryRepository>(r.History);b.Services.AddTransient<PatientHistoryService>();
+            b.Services.AddSingleton<IAuditWriter>(r.Audit);
+            b.Services.AddSingleton<ICameraDelegation>(r.Camera);
             if(itemDatabase is not null)
             {b.Services.AddSingleton(itemDatabase);b.Services.AddSingleton(TimeProvider.System);b.Services.AddTransient<ItemUploadService>();}
             r.App=b.Build();r.App.MapAnalysisEndpoints();await r.App.StartAsync();r.Client=r.App.GetTestClient();r.Client.DefaultRequestHeaders.Authorization=new("Bearer","fixture-user");
@@ -234,7 +297,25 @@ public sealed class AnalysisHttpTests
         using var allowed=await r.Client.GetAsync(url);Assert.Equal(HttpStatusCode.OK,allowed.StatusCode);
         Assert.Equal("image/png",allowed.Content.Headers.ContentType!.MediaType);Assert.Equal("no-store",allowed.Headers.CacheControl!.ToString());
         Assert.Equal("nosniff",Assert.Single(allowed.Headers.GetValues("X-Content-Type-Options")));
+        var audit=Assert.Single(r.Audit.Events);Assert.Equal(AuditAction.ImageRead,audit.Action);
+        Assert.Equal(r.Identity.Account,audit.ActorAccountId);Assert.Equal(file.ToString("D"),audit.ResourceId);
         r.Access.Allowed=false;using var denied=await r.Client.GetAsync(url);await Code(denied,404,"ERR_NOT_FOUND");
+        Assert.Equal(2,r.Audit.Events.Count);Assert.Equal(AuditOutcome.Denied,r.Audit.Events[1].Outcome);
+    }
+    [Fact] public async Task Audit_failure_blocks_image_bytes_and_disposes_the_open_private_stream()
+    {
+        await using var r=await Rig.Start();var image=Guid.NewGuid();var file=Guid.NewGuid();
+        r.Files.Records.Add(new(image,file,FakeAccess.Tenant,Guid.NewGuid(),r.Identity.Account,StoredFileKind.Original,"private/key"));
+        using var stream=new MemoryStream(TestImages.Png(10,10));r.Storage.ReadOverride=(_,_)=>stream;r.Audit.Down=true;
+        using var response=await r.Client.GetAsync($"/api/v1/analyses/{image}/files/{file}/content?token=PRIVATE_TOKEN");
+        await Code(response,503,"ERR_NETWORK");Assert.False(stream.CanRead);
+        Assert.Empty(r.Audit.Events);Assert.DoesNotContain("PRIVATE_TOKEN",await response.Content.ReadAsStringAsync());
+    }
+    private sealed class AuditWriter:IAuditWriter
+    {
+        public readonly List<AuditEvent> Events=[];public bool Down;
+        public Task AppendAsync(AuditEvent e,CancellationToken ct)
+        {if(Down)throw new IOException("PRIVATE_AUDIT_FAILURE");Events.Add(e);return Task.CompletedTask;}
     }
     [Fact] public async Task Request_over_capacity_is_rejected_without_running_handler()
     {await using var r=await Rig.Start();var entered=new TaskCompletionSource();var release=new TaskCompletionSource();r.Upload.Before=async()=>{entered.SetResult();await release.Task;};using var first=r.Post();var running=r.Client.SendAsync(first);await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));try{using var second=r.Post();using var response=await r.Client.SendAsync(second);await Code(response,409,"ERR_REQUEST_IN_PROGRESS");}finally{release.SetResult();}using var done=await running;Assert.Equal(HttpStatusCode.Accepted,done.StatusCode);}

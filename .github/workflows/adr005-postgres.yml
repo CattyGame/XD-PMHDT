@@ -90,7 +90,7 @@ jobs:
           python3 - <<'PY'
           import os
           connection = "Host=127.0.0.1;Port=55432;Database=aura_dev;Username=aura_dev;Password=ci-adr005-only;Timeout=5;Command Timeout=30"
-          names = ("ADR005_TEST_POSTGRES", "AURA_SCRUM345_TEST_CONNECTION_STRING",
+          names = ("ADR005_TEST_POSTGRES", "AURA_SCRUM345_TEST_CONNECTION_STRING", "AURA_SCRUM402_TEST_CONNECTION_STRING",
                    "AURA_SCRUM370_TEST_CONNECTION_STRING", "AURA_TEST_POSTGRES",
                    "AURA_NOTIFICATION_TEST_CONNECTION", "AURA_ADR005_PROFILE_TEST_CONNECTION",
                    "AURA_ANALYSIS_PERSISTENCE_TEST_CONNECTION", "AURA_ANALYSIS_JOURNAL_TEST_CONNECTION",
@@ -131,7 +131,10 @@ jobs:
           node tests/research/m4_compose_checks.cjs 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
 
       - name: Live harness guardrails and service scope upgrade
-        run: python3 -m unittest discover -s scripts/dev -p test_m1_harnesses.py
+        run: |
+          python3 -m unittest discover -s scripts/dev -p test_m1_harnesses.py
+          python3 -m unittest discover -s scripts/dev -p test_audit_registry.py
+          python3 -m unittest discover -s scripts/dev -p test_camera_flow.py
 
       - name: Required Analysis, Billing and Worker tests including PostgreSQL
         id: tests

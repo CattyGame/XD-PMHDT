@@ -1,0 +1,304 @@
+{
+  "acceptanceSchemaVersion": "1.0.0",
+  "taskId": "W8-M4-02",
+  "jiraKey": "SCRUM-424",
+  "owner": "M4 - Dao Duy Quan",
+  "traceability": [
+    "FR-3",
+    "FR-4",
+    "NFR-15",
+    "NFR-22",
+    "NFR-23"
+  ],
+  "referenceArtifacts": {
+    "w8ArtifactRegistryPath": "docs/benchmarks/w8_artifact_registry_v1.0.json",
+    "w8ArtifactRegistrySha256Lf": "3771c85c0665e2e884239c6d2428341c42e870e5dc4033610f62b8add7876a68",
+    "modelCardV2RegistryPath": "docs/benchmarks/model_card_v2_registry.json",
+    "modelCardV2RegistrySha256Lf": "1eb664e3c857abaebd58c13ba164b0f15ab9478b2c7e57575fe4b0a021997a58",
+    "v2EvaluationReportS7Path": "docs/benchmarks/v2_evaluation_report_s7.json",
+    "v2EvaluationReportS7Sha256Lf": "7c7f536bd3b7f4a6d01043ff3aa7a1d39fcd5cc5ef55f39edd36234fbe517275",
+    "latencyRamProfilePath": "docs/benchmarks/w7_latency_ram_profile_v1.0.json",
+    "latencyRamProfileSha256Lf": "1c8049f57effd931c8b0f8c728889181054bcd9a243f9f5d2a80e9fea7b54e65"
+  },
+  "functionalSoftwareHandoff": {
+    "status": "VERIFIED_IN_SCOPE_V2",
+    "contractVersion": "1.3.0",
+    "contractFile": "contracts/ai-openapi-1.3.yaml",
+    "schemaModule": "src/ai-core/app/schemas/analysis.py",
+    "serviceAuth": {
+      "mechanism": "RS256_SERVICE_JWT_FAIL_CLOSED",
+      "issuer": "aura-identity-s3-v1",
+      "audience": "aura-ai",
+      "requiredScope": "ai:analyze",
+      "maxTtlSeconds": 300
+    },
+    "frangiGoldenParity": {
+      "passed": true,
+      "dice": 1.0,
+      "mismatchedPixels": 0,
+      "warmP95Ms": 1653.1,
+      "srsHardSlaMaxP95Ms": 20000.0,
+      "peakRssMb": 157.51,
+      "containerMemLimitMib": 2048
+    },
+    "concurrencyBackpressure": {
+      "mechanism": "BoundedSemaphore(1)",
+      "httpStatus": 429,
+      "errorCode": "RESEARCH_MODEL_BUSY",
+      "retryAfter": "1"
+    },
+    "expertConfirmedGeneratedFromAuto": false,
+    "octModalityStatus": "DEFERRED_REJECTED_422_UNSUPPORTED_MODALITY",
+    "v2ScopeSurfaces": {
+      "webUi": {
+        "file": "src/web/aura-web/src/pages/AnalysisResultPage.tsx",
+        "showsResearchSection": true,
+        "showsGradcamCenterCrop224": true,
+        "showsNotIcdrDisclaimer": true,
+        "showsAvrNullAbstention": true,
+        "separatesAiFromDoctorReview": true
+      },
+      "singleCasePdf": {
+        "file": "src/services/AURA.Analysis.Api/Upload/MedicalReportPdfRenderer.cs",
+        "header": "RESEARCH OUTPUTS - NOT A CLINICAL DIAGNOSIS",
+        "showsGradcamCenterCrop224": true,
+        "showsArtifactSha256": true,
+        "icdrOnlyWhenDoctorApproved": true
+      },
+      "batchAndResearchExports": {
+        "files": [
+          "src/services/AURA.Analysis.Api/Upload/AnalysisReportService.cs",
+          "src/services/AURA.Analysis.Api/Exports/ExportService.cs"
+        ],
+        "preservesMeasurementAvailableAndNullAvr": true,
+        "pinsModelConfigThresholdReviewVersions": true
+      }
+    }
+  },
+  "scientificValidation": {
+    "overallStatus": "RESEARCH_ONLY_PARTIAL_GATE_OPEN",
+    "clinicalValidation": false,
+    "icdrGradingSupported": false,
+    "autoCloseScrum373Allowed": false,
+    "expertConfirmedGeneratedFromAuto": false,
+    "scientificGateScrum373": {
+      "jiraKey": "SCRUM-373",
+      "status": "OPEN_NOT_PASSED",
+      "target": "abs(avr_bias) <= 0.02 on verified 40-case Iowa two-observer table",
+      "thresholdAbsBias": 0.02,
+      "surrogate29CaseBias": -0.2136,
+      "surrogate29CaseMae": 0.2335,
+      "iowa40Status": "NOT_TESTED_MISSING_EXTERNAL_DATASET"
+    },
+    "cohorts": {
+      "CHASE_DB1": {
+        "cohortSize": 28,
+        "splits": {
+          "train": 16,
+          "validation": 6,
+          "test": 6
+        },
+        "manifestPath": "docs/datasets/chase_db1/manifest.csv",
+        "manifestSha256Lf": "b22bb7f635aad4c1ef670abd15a68e038d9c5d9a1383a01976f8ae7664a6455a",
+        "evaluationDenominator": 6,
+        "measured": 6,
+        "unavailable": 0,
+        "coverage": 1.0,
+        "metrics": {
+          "test6MeanDice": 0.420052,
+          "test6MeanIou": 0.26624,
+          "full28MeanDice": 0.401484,
+          "bias": null
+        },
+        "referenceBenchmarkPath": "docs/benchmarks/chase_db1_frangi_benchmark_v1.0.json",
+        "referenceBenchmarkSha256Lf": "4156f2351b8574de36fb45f2364d9e964e5c12497f41ed1da6526b1067726db1",
+        "annotationSource": "CHASE_DB1 human observer vessel masks (_1stHO.png primary reference; _2ndHO.png retained for inter-observer comparison; zero clinical DR/AVR labels).",
+        "expertConfirmedGeneratedFromAuto": false
+      },
+      "HRF45": {
+        "cohortSize": 45,
+        "splits": {
+          "train": 18,
+          "validation": 6,
+          "test": 6,
+          "glaucoma_ood": 15
+        },
+        "manifestPath": "docs/datasets/hrf/manifest.csv",
+        "manifestSha256Lf": "a6d0d719066d01e113ca2e1ade0e89324e99ce36ef5772afd1742a55973a11ce",
+        "evaluationDenominator": 6,
+        "measured": 6,
+        "unavailable": 0,
+        "coverage": 1.0,
+        "metrics": {
+          "validationAuc": 0.888889,
+          "testAuc": 1.0,
+          "glaucomaOodExcludedFromAucCount": 15,
+          "frangiTest9MeanDice": 0.483415,
+          "bias": null
+        },
+        "referenceBenchmarkPath": "docs/benchmarks/v2_evaluation_report_s7.json",
+        "referenceBenchmarkSha256Lf": "7c7f536bd3b7f4a6d01043ff3aa7a1d39fcd5cc5ef55f39edd36234fbe517275",
+        "annotationSource": "Friedrich-Alexander-Universitat (FAU) HRF original clinical categories (15 diabetic retinopathy, 15 healthy, 15 glaucoma OOD) and expert vessel FOV/vessel masks.",
+        "expertConfirmedGeneratedFromAuto": false
+      },
+      "AVRDB100": {
+        "cohortSize": 99,
+        "emptyArchiveFoldersExcluded": [
+          "IM000189"
+        ],
+        "splits": {
+          "train": 70,
+          "validation": 15,
+          "test": 14
+        },
+        "manifestPath": "docs/datasets/inspire_avr/manifest.csv",
+        "manifestSha256Lf": "2ae7cba1d278178fc337dd622a7fba12609e2afbba0d9af1eefc980c89ac9211",
+        "evaluationDenominator": 99,
+        "measured": 0,
+        "unavailable": 99,
+        "coverage": 0.0,
+        "surrogateReferenceSubsetSize": 29,
+        "metrics": {
+          "surrogate29MeanAvrMae": 0.2335,
+          "bias": -0.2136,
+          "surrogate29MeanVesselDice": 0.3494
+        },
+        "referenceBenchmarkPath": "docs/benchmarks/inspire_avr_benchmark_v1.0.json",
+        "referenceBenchmarkSha256Lf": "e8cbdf68e9579892172d0f9da5441e8c25a68097792a42b9b4dccc0192da9120",
+        "annotationSource": "AVRDB Mendeley (DOI: 10.17632/3csr652p9y.2) vector/image artery-vein masks (surrogate mask Knudtson AVR baseline over 29 val+test cases; CI runtime coverage 0/99 due to non-bundled CC-BY-NC-4.0 weights).",
+        "expertConfirmedGeneratedFromAuto": false
+      },
+      "Iowa40": {
+        "cohortSize": 40,
+        "splits": {
+          "external_evaluation": 40
+        },
+        "manifestPath": null,
+        "manifestSha256Lf": null,
+        "evaluationDenominator": 40,
+        "measured": 0,
+        "unavailable": 40,
+        "coverage": 0.0,
+        "metrics": {
+          "status": "NOT_TESTED_MISSING_EXTERNAL_DATASET",
+          "thresholdAbsBias": 0.02,
+          "bias": null
+        },
+        "referenceBenchmarkPath": null,
+        "referenceBenchmarkSha256Lf": null,
+        "annotationSource": "University of Iowa INSPIRE-AVR Normative Set independent two-observer clinician AVR table (GT/GT.txt; external non-redistributed benchmark).",
+        "expertConfirmedGeneratedFromAuto": false
+      }
+    }
+  },
+  "rtmTraceability": [
+    {
+      "id": "FR-3",
+      "owner": "M4",
+      "status": "PARTIAL",
+      "rationale": "Research V2 results, risk_available=false separation, null+reason AVR abstention, and DoctorReview distinction verified across AI Core, Web UI, and PDF; clinical risk validation remains out of scope.",
+      "m4Evidence": [
+        "src/ai-core/tests/test_w7_m4_sprint7.py",
+        "src/ai-core/tests/test_w8_m4_sprint8.py",
+        "docs/ai/w8_m4_v2_software_and_scientific_acceptance.md"
+      ],
+      "testIds": [
+        "TC-FR-3",
+        "TC-W8-M4-02",
+        "TC-W8-M4-03"
+      ]
+    },
+    {
+      "id": "FR-4",
+      "owner": "M4, M5",
+      "status": "PARTIAL",
+      "rationale": "Mask/overlay native geometry and Grad-CAM IMAGENET_CENTER_CROP_224 explainability verified with unit/contract checks; full Doctor UI E2E approval rests with cross-module QA gate.",
+      "m4Evidence": [
+        "src/ai-core/app/services/dr_cnn_service.py",
+        "src/web/aura-web/src/pages/AnalysisResultPage.tsx",
+        "src/services/AURA.Analysis.Api/Upload/MedicalReportPdfRenderer.cs"
+      ],
+      "testIds": [
+        "TC-FR-4",
+        "TC-W8-M4-02",
+        "TC-W8-M4-03"
+      ]
+    },
+    {
+      "id": "NFR-15",
+      "owner": "M4, M5",
+      "status": "PARTIAL",
+      "rationale": "Crop coordinates, non-ICDR disclaimers, native-pixel AVR units, and abstention reasons documented and displayed consistently; formal clinical usability sign-off is outside coursework scope.",
+      "m4Evidence": [
+        "docs/ai/w7_m4_research_limitations_handover.md",
+        "docs/ai/w8_m4_v2_software_and_scientific_acceptance.md",
+        "docs/data_cards/model_card_v1.3.md"
+      ],
+      "testIds": [
+        "TC-NFR-15",
+        "TC-W8-M4-02"
+      ]
+    },
+    {
+      "id": "NFR-16",
+      "owner": "M1, M4",
+      "status": "PARTIAL",
+      "rationale": "RuntimeManifestRegistry atomic switch with smoke check, SHA-256 verification, in-flight snapshot pinning, and rollback verified in M4; production blue-green deployment rests with M1.",
+      "m4Evidence": [
+        "src/ai-core/app/services/runtime_registry.py",
+        "src/ai-core/scripts/manage_w8_artifact_registry.py",
+        "docs/benchmarks/w8_artifact_registry_v1.0.json"
+      ],
+      "testIds": [
+        "TC-NFR-16",
+        "TC-W8-M4-01"
+      ]
+    },
+    {
+      "id": "NFR-21",
+      "owner": "M1, M2, M4, M5, M6",
+      "status": "PARTIAL",
+      "rationale": "AI Service OpenAPI 1.3.0 REST contract, Draft 2020-12 schema checks, and RS256 fail-closed service JWT verified in M4.",
+      "m4Evidence": [
+        "contracts/ai-openapi-1.3.yaml",
+        "src/ai-core/app/schemas/analysis.py",
+        "src/ai-core/tests/test_frangi_sprint3.py"
+      ],
+      "testIds": [
+        "TC-NFR-21",
+        "TC-W8-M4-01"
+      ]
+    },
+    {
+      "id": "NFR-22",
+      "owner": "M4, M5",
+      "status": "PARTIAL",
+      "rationale": "Real layer4 autograd Grad-CAM on 224x224 center crop and Zone B A/V colored overlays verified algorithmically (no synthetic/fake heatmaps).",
+      "m4Evidence": [
+        "src/ai-core/app/services/dr_cnn_service.py",
+        "src/ai-core/app/services/avr_service.py",
+        "src/ai-core/tests/test_dr_screening_gradcam.py"
+      ],
+      "testIds": [
+        "TC-NFR-22",
+        "TC-W8-M4-02"
+      ]
+    },
+    {
+      "id": "NFR-23",
+      "owner": "M1, M2, M4, M5, M6",
+      "status": "PARTIAL",
+      "rationale": "Every AI response and report snapshot pins model_version, config_version, threshold_version, artifact SHA-256 hashes, and review revision; cross-service export persistence shares ownership with M2.",
+      "m4Evidence": [
+        "docs/benchmarks/w8_artifact_registry_v1.0.json",
+        "docs/benchmarks/w8_v2_acceptance_summary.json",
+        "src/services/AURA.Analysis.Api/Upload/MedicalReportPdfRenderer.cs"
+      ],
+      "testIds": [
+        "TC-NFR-23",
+        "TC-W8-M4-01",
+        "TC-W8-M4-02"
+      ]
+    }
+  ]
+}

@@ -3,7 +3,7 @@
     "identifier": "29c28b59-e36a-3446-82e0-7b52c43f003f",
     "instanceIdentifier": "20b23519-01a1-1000-59c5-5e6d0b34b1c7",
     "name": "AURA-Camera-Ingestion-v2",
-    "comments": "Sprint 4-5 Integrated Pipeline: Camera Ingestion with InvokeHTTP Gateway forwarding, SHA-256 Deduplication, Quarantine Isolation & Bounded Exponential Backoff Retry (W4-M1-05 / SCRUM-350)",
+    "comments": "NiFi camera admission with authenticated delivery, durable retry and verified receipt-v1 metadata.",
     "position": {
       "x": 232,
       "y": 32
@@ -13,7 +13,7 @@
         "identifier": "90a0dcba-230e-3030-87b6-346705a9452c",
         "instanceIdentifier": "80d4c5aa-01a1-1000-d8d3-5fc4270b24d7",
         "name": "AURA-S3-Reporting-Delivery-v1",
-        "comments": "S3 REPORTING INTEGRATION SUBFLOW v1; reviewed receipt-jdbc-v2. No test Seeds or image POST. All processors/ports/controller Disabled on import. Receipt input and output ports remain Disabled until controlled integration acceptance.",
+        "comments": "Reporting receipt metadata only. Configure the sensitive writer password and JDBC driver, enable controller and start delivery before opening camera ingress.",
         "position": {
           "x": 968.0,
           "y": 96.0
@@ -37,12 +37,19 @@
               "version": "1.27.0"
             },
             "properties": {
-              "groovyx-script-body": "import groovy.json.JsonSlurper\nimport java.nio.charset.StandardCharsets\nimport java.sql.SQLException\nimport java.sql.SQLTransientException\nimport java.sql.SQLRecoverableException\nimport java.time.OffsetDateTime\nimport org.apache.nifi.processor.io.InputStreamCallback\n\n// CTL.reporting is a Controller Service reference, NOT SQL.reporting.\n// Connection acquisition must happen inside this script's guarded DB section.\n// SQL is fixed; neither FlowFile content nor attributes can supply a statement.\ndef ff = session.get()\nif (ff == null) return\n\ndef values\nString expectedJdbcBase\nint retries = 0\nboolean retryCounterValid = false\ntry {\n    expectedJdbcBase = context.getProperty('ReportingJdbcBase').value\n    if (expectedJdbcBase == null || !(expectedJdbcBase ==~ /jdbc:postgresql:\\/\\/[A-Za-z0-9.-]+:5432\\/aura_reporting/))\n        throw new IllegalArgumentException()\n    if (ff.getAttribute('camera.reporting.contract') != 'receipt-v1'\n        || ff.getAttribute('mime.type') != 'application/json'\n        || ff.getSize() < 1 || ff.getSize() > 8192) throw new IllegalArgumentException()\n    def counter = ff.getAttribute('camera.reporting.retries')\n    if (counter == null || !(counter ==~ /(?:[0-9]|10)/)) throw new IllegalArgumentException()\n    retries = Integer.parseInt(counter)\n    retryCounterValid = true\n    byte[] payload\n    session.read(ff, { input ->\n        def output = new ByteArrayOutputStream()\n        byte[] buffer = new byte[1024]\n        int count\n        while ((count = input.read(buffer)) != -1) {\n            if (output.size() + count > 8192) throw new IllegalArgumentException()\n            output.write(buffer, 0, count)\n        }\n        payload = output.toByteArray()\n    } as InputStreamCallback)\n    def body = new JsonSlurper().parseText(new String(payload, StandardCharsets.UTF_8))\n    def expectedKeys = ['requestId','deviceId','batchId','imageCount',\n        'sourceAcceptedAt','correlationId','analysisId','processingStatus'] as Set\n    if (!(body instanceof Map)) throw new IllegalArgumentException()\n    def uuid = { value ->\n        if (!(value instanceof String) || !(value ==~ /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)\n            || UUID.fromString(value) == new UUID(0L, 0L)) throw new IllegalArgumentException()\n        value\n    }\n    def request = uuid(body.requestId)\n    def batch = uuid(body.batchId)\n    uuid(body.analysisId)\n    def imgHash = body.imageSha256 ?: body.image_hash_sha256\n    if (!(body.deviceId instanceof String) || !(body.deviceId ==~ /[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/)\n        || !(imgHash instanceof String) || !(imgHash ==~ /[0-9a-f]{64}/)\n        || !(body.correlationId instanceof String) || !(body.correlationId ==~ /[A-Za-z0-9._-]{1,64}/)\n        || !(body.imageCount instanceof Integer) || body.imageCount != 1\n        || !(body.sourceAcceptedAt instanceof String)\n        || !(body.processingStatus in ['QUEUED','DUPLICATE'])) throw new IllegalArgumentException()\n    def accepted = OffsetDateTime.parse(body.sourceAcceptedAt).toInstant()\n    if (ff.getAttribute('camera.receipt.request_id') != request\n        || ff.getAttribute('camera.receipt.batch_id') != batch\n        || ff.getAttribute('filename') != request + '.receipt.json') throw new IllegalArgumentException()\n    values = [request, body.deviceId, imgHash, batch, '1', body.sourceAcceptedAt, body.correlationId]\n    values.eachWithIndex { value, index ->\n        if (ff.getAttribute('sql.args.' + (index + 1) + '.type') != '12'\n            || ff.getAttribute('sql.args.' + (index + 1) + '.value') != value) throw new IllegalArgumentException()\n    }\n    if (ff.attributes.keySet().any { it.startsWith('sql.args.') && !(it ==~ /sql\\.args\\.[1-7]\\.(?:type|value)/) })\n        throw new IllegalArgumentException()\n} catch (Exception ignored) {\n    ff = session.putAllAttributes(ff, [\n        'camera.reporting.writer.version':'receipt-jdbc-v2',\n        'camera.reporting.outcome':'HOLD',\n        'reporting.status':'HOLD',\n        'camera.reporting.reason':'INVALID_RECEIPT_CONTRACT',\n        'quarantine.reason':'INVALID_RECEIPT_CONTRACT',\n        'camera.reporting.commit_state':'NOT_ATTEMPTED',\n        'camera.reporting.sqlstate':'NONE',\n        'camera.reporting.last_retry_count':retryCounterValid ? Integer.toString(retries) : 'INVALID',\n        'camera.reporting.cleanup_failed':'false'])\n    session.transfer(ff, REL_FAILURE)\n    return\n}\n\ndef connection = null\ndef statement = null\nboolean committed = false\nboolean commitAttempted = false\nboolean cleanupFailed = false\nString outcome = 'HOLD'\nString reason = 'REPORTING_UNCLASSIFIED_FAILURE'\nString sqlState = 'NONE'\n\ntry {\n    if (ff.getAttribute('camera.simulate.transient') == 'true' && retries == 0) {\n        throw new SQLTransientException('Simulated transient connection timeout', '08006')\n    }\n    connection = CTL.reporting.getConnection(ff.attributes)\n    def metadata = connection.getMetaData()\n    if (metadata.getURL().split('\\\\?', 2)[0] != expectedJdbcBase\n        || metadata.getUserName() != 'aura_reporting_writer') throw new IllegalStateException()\n    connection.setAutoCommit(false)\n    statement = connection.prepareStatement('CALL reporting.record_camera_receipt(CAST(? AS uuid),CAST(? AS text),CAST(? AS text),CAST(? AS uuid),CAST(? AS integer),CAST(? AS timestamptz),CAST(? AS text));')\n    statement.setQueryTimeout(10)\n    values.eachWithIndex { value, index -> statement.setString(index + 1, value) }\n    statement.execute()\n    commitAttempted = true\n    connection.commit()\n    committed = true\n    outcome = 'RECORDED'\n    reason = 'RECEIPT_COMMITTED'\n} catch (Exception error) {\n    def pending = new ArrayDeque()\n    def seen = Collections.newSetFromMap(new IdentityHashMap())\n    def states = []\n    boolean transientFailure = false\n    pending.add(error)\n    int examined = 0\n    while (!pending.isEmpty() && examined++ < 32) {\n        def item = pending.removeFirst()\n        if (!seen.add(item)) continue\n        if (item instanceof SQLException) {\n            def state = item.getSQLState()\n            if (state != null && state ==~ /[0-9A-Z]{5}/) states.add(state)\n            if (item instanceof SQLTransientException || item instanceof SQLRecoverableException) transientFailure = true\n            if (item.nextException != null) pending.add(item.nextException)\n        }\n        if (item instanceof java.net.ConnectException || item instanceof java.net.UnknownHostException\n            || item instanceof java.net.SocketTimeoutException) transientFailure = true\n        if (item.cause != null) pending.add(item.cause)\n    }\n    boolean permanent = states.any { it.startsWith('22') || it.startsWith('23') || it.startsWith('28')\n        || it.startsWith('42') || it == 'P0001' }\n    transientFailure = transientFailure || states.any { it.startsWith('08') || it.startsWith('53')\n        || it in ['40001','40P01','55P03','57014','57P01','57P02','57P03'] }\n    sqlState = states ? states[0] : 'NONE'\n    outcome = !permanent && transientFailure ? 'RETRY' : 'HOLD'\n    reason = outcome == 'RETRY' ? 'REPORTING_TRANSIENT_FAILURE' : 'REPORTING_RECONCILE_REQUIRED'\n} finally {\n    if (connection != null && !committed) {\n        try { connection.rollback() } catch (Exception ignored) { cleanupFailed = true }\n    }\n    if (statement != null) {\n        try { statement.close() } catch (Exception ignored) { cleanupFailed = true }\n    }\n    if (connection != null) {\n        try { connection.close() } catch (Exception ignored) { cleanupFailed = true }\n    }\n}\n\nif (!committed && commitAttempted) {\n    outcome = 'HOLD'\n    reason = 'REPORTING_COMMIT_UNKNOWN'\n} else if (cleanupFailed) {\n    outcome = 'HOLD'\n    reason = committed ? 'REPORTING_COMMITTED_CLEANUP_FAILED' : 'REPORTING_CLEANUP_FAILED'\n}\n\nString reportingStatus = outcome == 'RECORDED' ? 'COMMITTED' : outcome\nString quarantineReason = outcome == 'HOLD' ? (sqlState == '23505' ? 'CONFLICTING_RECEIPT_SQLSTATE_23505' : reason) : ''\n\nff = session.putAllAttributes(ff, [\n    'camera.reporting.writer.version':'receipt-jdbc-v2',\n    'camera.reporting.outcome':outcome,\n    'reporting.status':reportingStatus,\n    'camera.reporting.reason':reason,\n    'quarantine.reason':quarantineReason,\n    'camera.reporting.sqlstate':sqlState,\n    'camera.reporting.last_retry_count':Integer.toString(retries),\n    'camera.reporting.commit_state':committed ? 'COMMITTED' : commitAttempted ? 'UNKNOWN' : 'NOT_COMMITTED',\n    'camera.reporting.cleanup_failed':Boolean.toString(cleanupFailed)])\nsession.transfer(ff, outcome == 'RECORDED' && committed && !cleanupFailed ? REL_SUCCESS : REL_FAILURE)\n",
+              "groovyx-script-body": "import groovy.json.JsonSlurper\nimport java.nio.charset.StandardCharsets\nimport java.sql.SQLException\nimport java.sql.SQLTransientException\nimport java.sql.SQLRecoverableException\nimport java.time.OffsetDateTime\nimport org.apache.nifi.processor.io.InputStreamCallback\n\n// CTL.reporting is a Controller Service reference, NOT SQL.reporting.\n// Connection acquisition must happen inside this script's guarded DB section.\n// SQL is fixed; neither FlowFile content nor attributes can supply a statement.\ndef ff = session.get()\nif (ff == null) return\n\ndef values\nString expectedJdbcBase\nint retries = 0\nboolean retryCounterValid = false\ntry {\n    expectedJdbcBase = context.getProperty('ReportingJdbcBase').value\n    if (expectedJdbcBase == null || !(expectedJdbcBase ==~ /jdbc:postgresql:\\/\\/[A-Za-z0-9.-]+:5432\\/aura_reporting/))\n        throw new IllegalArgumentException()\n    if (ff.getAttribute('camera.reporting.contract') != 'receipt-v1'\n        || ff.getAttribute('mime.type') != 'application/json'\n        || ff.getSize() < 1 || ff.getSize() > 8192) throw new IllegalArgumentException()\n    def counter = ff.getAttribute('camera.reporting.retries')\n    if (counter == null || !(counter ==~ /(?:[0-9]|10)/)) throw new IllegalArgumentException()\n    retries = Integer.parseInt(counter)\n    retryCounterValid = true\n    byte[] payload\n    session.read(ff, { input ->\n        def output = new ByteArrayOutputStream()\n        byte[] buffer = new byte[1024]\n        int count\n        while ((count = input.read(buffer)) != -1) {\n            if (output.size() + count > 8192) throw new IllegalArgumentException()\n            output.write(buffer, 0, count)\n        }\n        payload = output.toByteArray()\n    } as InputStreamCallback)\n    def body = new JsonSlurper().parseText(new String(payload, StandardCharsets.UTF_8))\n    if (!(body instanceof Map) || body.version != 1) throw new IllegalArgumentException()\n    def uuid = { value ->\n        if (!(value instanceof String) || !(value ==~ /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)\n            || UUID.fromString(value) == new UUID(0L, 0L)) throw new IllegalArgumentException()\n        value\n    }\n    def request = uuid(body.requestId)\n    def batch = uuid(body.batchId)\n    uuid(body.analysisId)\n    def imgHash = body.imageSha256 ?: body.image_hash_sha256\n    if (!(body.deviceId instanceof String) || !(body.deviceId ==~ /[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/)\n        || !(imgHash instanceof String) || !(imgHash ==~ /[0-9a-f]{64}/)\n        || !(body.correlationId instanceof String) || !(body.correlationId ==~ /[A-Za-z0-9._-]{1,64}/)\n        || !(body.imageCount instanceof Integer) || body.imageCount != 1\n        || !(body.sourceAcceptedAt instanceof String)\n        || !(body.processingStatus in ['QUEUED','DUPLICATE'])) throw new IllegalArgumentException()\n    def accepted = OffsetDateTime.parse(body.sourceAcceptedAt).toInstant()\n    if (ff.getAttribute('camera.receipt.request_id') != request\n        || ff.getAttribute('camera.receipt.batch_id') != batch\n        || ff.getAttribute('filename') != request + '.receipt.json') throw new IllegalArgumentException()\n    values = [request, body.deviceId, imgHash, batch, '1', body.sourceAcceptedAt, body.correlationId]\n    values.eachWithIndex { value, index ->\n        if (ff.getAttribute('sql.args.' + (index + 1) + '.type') != '12'\n            || ff.getAttribute('sql.args.' + (index + 1) + '.value') != value) throw new IllegalArgumentException()\n    }\n    if (ff.attributes.keySet().any { it.startsWith('sql.args.') && !(it ==~ /sql\\.args\\.[1-7]\\.(?:type|value)/) })\n        throw new IllegalArgumentException()\n} catch (Exception ignored) {\n    ff = session.putAllAttributes(ff, [\n        'camera.reporting.writer.version':'receipt-jdbc-v2',\n        'camera.reporting.outcome':'HOLD',\n        'reporting.status':'HOLD',\n        'camera.reporting.reason':'INVALID_RECEIPT_CONTRACT',\n        'quarantine.reason':'INVALID_RECEIPT_CONTRACT',\n        'camera.reporting.commit_state':'NOT_ATTEMPTED',\n        'camera.reporting.sqlstate':'NONE',\n        'camera.reporting.last_retry_count':retryCounterValid ? Integer.toString(retries) : 'INVALID',\n        'camera.reporting.cleanup_failed':'false'])\n    session.transfer(ff, REL_FAILURE)\n    return\n}\n\ndef connection = null\ndef statement = null\nboolean committed = false\nboolean commitAttempted = false\nboolean cleanupFailed = false\nString outcome = 'HOLD'\nString reason = 'REPORTING_UNCLASSIFIED_FAILURE'\nString sqlState = 'NONE'\n\ntry {\n    if (ff.getAttribute('camera.simulate.transient') == 'true' && retries == 0) {\n        throw new SQLTransientException('Simulated transient connection timeout', '08006')\n    }\n    connection = CTL.reporting.getConnection(ff.attributes)\n    def metadata = connection.getMetaData()\n    if (metadata.getURL().split('\\\\?', 2)[0] != expectedJdbcBase\n        || metadata.getUserName() != 'aura_reporting_writer') throw new IllegalStateException()\n    connection.setAutoCommit(false)\n    statement = connection.prepareStatement('CALL reporting.record_camera_receipt(CAST(? AS uuid),CAST(? AS text),CAST(? AS text),CAST(? AS uuid),CAST(? AS integer),CAST(? AS timestamptz),CAST(? AS text));')\n    statement.setQueryTimeout(10)\n    values.eachWithIndex { value, index -> statement.setString(index + 1, value) }\n    statement.execute()\n    commitAttempted = true\n    connection.commit()\n    committed = true\n    outcome = 'RECORDED'\n    reason = 'RECEIPT_COMMITTED'\n} catch (Exception error) {\n    def pending = new ArrayDeque()\n    def seen = Collections.newSetFromMap(new IdentityHashMap())\n    def states = []\n    boolean transientFailure = false\n    pending.add(error)\n    int examined = 0\n    while (!pending.isEmpty() && examined++ < 32) {\n        def item = pending.removeFirst()\n        if (!seen.add(item)) continue\n        if (item instanceof SQLException) {\n            def state = item.getSQLState()\n            if (state != null && state ==~ /[0-9A-Z]{5}/) states.add(state)\n            if (item instanceof SQLTransientException || item instanceof SQLRecoverableException) transientFailure = true\n            if (item.nextException != null) pending.add(item.nextException)\n        }\n        if (item instanceof java.net.ConnectException || item instanceof java.net.UnknownHostException\n            || item instanceof java.net.SocketTimeoutException) transientFailure = true\n        if (item.cause != null) pending.add(item.cause)\n    }\n    boolean permanent = states.any { it.startsWith('22') || it.startsWith('23') || it.startsWith('28')\n        || it.startsWith('42') || it == 'P0001' }\n    transientFailure = transientFailure || states.any { it.startsWith('08') || it.startsWith('53')\n        || it in ['40001','40P01','55P03','57014','57P01','57P02','57P03'] }\n    sqlState = states ? states[0] : 'NONE'\n    outcome = !permanent && transientFailure ? 'RETRY' : 'HOLD'\n    reason = outcome == 'RETRY' ? 'REPORTING_TRANSIENT_FAILURE' : 'REPORTING_RECONCILE_REQUIRED'\n} finally {\n    if (connection != null && !committed) {\n        try { connection.rollback() } catch (Exception ignored) { cleanupFailed = true }\n    }\n    if (statement != null) {\n        try { statement.close() } catch (Exception ignored) { cleanupFailed = true }\n    }\n    if (connection != null) {\n        try { connection.close() } catch (Exception ignored) { cleanupFailed = true }\n    }\n}\n\nif (!committed && commitAttempted) {\n    outcome = 'HOLD'\n    reason = 'REPORTING_COMMIT_UNKNOWN'\n} else if (cleanupFailed) {\n    outcome = 'HOLD'\n    reason = committed ? 'REPORTING_COMMITTED_CLEANUP_FAILED' : 'REPORTING_CLEANUP_FAILED'\n}\n\nString reportingStatus = outcome == 'RECORDED' ? 'COMMITTED' : outcome\nString quarantineReason = outcome == 'HOLD' ? (sqlState == '23505' ? 'CONFLICTING_RECEIPT_SQLSTATE_23505' : reason) : ''\n\nff = session.putAllAttributes(ff, [\n    'camera.reporting.writer.version':'receipt-jdbc-v2',\n    'camera.reporting.outcome':outcome,\n    'reporting.status':reportingStatus,\n    'camera.reporting.reason':reason,\n    'quarantine.reason':quarantineReason,\n    'camera.reporting.sqlstate':sqlState,\n    'camera.reporting.last_retry_count':Integer.toString(retries),\n    'camera.reporting.commit_state':committed ? 'COMMITTED' : commitAttempted ? 'UNKNOWN' : 'NOT_COMMITTED',\n    'camera.reporting.cleanup_failed':Boolean.toString(cleanupFailed)])\nsession.transfer(ff, outcome == 'RECORDED' && committed && !cleanupFailed ? REL_SUCCESS : REL_FAILURE)\n",
               "groovyx-failure-strategy": "rollback",
               "ReportingJdbcBase": "jdbc:postgresql://reporting-postgres:5432/aura_reporting",
-              "CTL.reporting": "5a87681d-848a-385d-0981-9087e0af43d5"
+              "CTL.reporting": "314c2ad1-bd5a-5930-a208-2726de04c4f6"
             },
-            "propertyDescriptors": {},
+            "propertyDescriptors": {
+              "CTL.reporting": {
+                "name": "CTL.reporting",
+                "displayName": "CTL.reporting",
+                "identifiesControllerService": true,
+                "sensitive": false
+              }
+            },
             "style": {},
             "schedulingPeriod": "1 sec",
             "schedulingStrategy": "TIMER_DRIVEN",
@@ -53,7 +60,7 @@
             "runDurationMillis": 0,
             "concurrentlySchedulableTaskCount": 1,
             "autoTerminatedRelationships": [],
-            "scheduledState": "RUNNING",
+            "scheduledState": "ENABLED",
             "retryCount": 10,
             "retriedRelationships": [],
             "backoffMechanism": "PENALIZE_FLOWFILE",
@@ -94,7 +101,7 @@
             "runDurationMillis": 25,
             "concurrentlySchedulableTaskCount": 1,
             "autoTerminatedRelationships": [],
-            "scheduledState": "RUNNING",
+            "scheduledState": "ENABLED",
             "retryCount": 10,
             "retriedRelationships": [],
             "backoffMechanism": "PENALIZE_FLOWFILE",
@@ -133,7 +140,7 @@
             "runDurationMillis": 25,
             "concurrentlySchedulableTaskCount": 1,
             "autoTerminatedRelationships": [],
-            "scheduledState": "RUNNING",
+            "scheduledState": "ENABLED",
             "retryCount": 10,
             "retriedRelationships": [],
             "backoffMechanism": "PENALIZE_FLOWFILE",
@@ -147,14 +154,14 @@
             "identifier": "8e111bf4-6fc0-5426-a9a3-bb81fb58e66c",
             "instanceIdentifier": "bbaf4812-77ad-3632-6002-bd712e6c8aa6",
             "name": "Accepted-Camera-Receipt",
-            "comments": "Disabled integration boundary. receipt-v1 only; no remote access or automatic transfer.",
+            "comments": "Local receipt-v1 boundary wired from the authenticated camera sender. Enable after Reporting configuration.",
             "position": {
               "x": 24.0,
               "y": 32.0
             },
             "type": "INPUT_PORT",
             "concurrentlySchedulableTaskCount": 1,
-            "scheduledState": "RUNNING",
+            "scheduledState": "ENABLED",
             "allowRemoteAccess": false,
             "componentType": "INPUT_PORT",
             "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
@@ -540,7 +547,7 @@
               "dbcp-soft-min-evictable-idle-time": "-1",
               "database-driver-locations": "/opt/nifi/nifi-current/drivers/postgresql-42.7.14.jar",
               "dbcp-max-idle-conns": "2",
-              "Password": "enc{96d1ee18964e4d62f7e6329cc6e4243c1d09ad49691d37b3117a80ed435d4f50e8f214f6a9f60ab6a868c63959a3f78d6d67affc3b95fa9b76ba7b9dc0410e5a116d8d1153ed134007a1c49311ee7281}"
+              "Password": null
             },
             "propertyDescriptors": {},
             "controllerServiceApis": [
@@ -553,7 +560,7 @@
                 }
               }
             ],
-            "scheduledState": "ENABLED",
+            "scheduledState": "DISABLED",
             "bulletinLevel": "WARN",
             "componentType": "CONTROLLER_SERVICE",
             "groupIdentifier": "90a0dcba-230e-3030-87b6-346705a9452c"
@@ -1009,7 +1016,7 @@
         "properties": {
           "Script File": null,
           "Script Engine": "Groovy",
-          "Script Body": "import groovy.json.JsonSlurper\nimport org.apache.nifi.processor.io.InputStreamCallback\nimport org.apache.nifi.processor.io.OutputStreamCallback\nimport java.nio.charset.StandardCharsets\nimport java.security.MessageDigest\nimport java.util.Base64\n\nclass MultipartValidationFailure extends RuntimeException {\n    MultipartValidationFailure(String code) {\n        super(code)\n    }\n}\n\ndef flowFile = session.get()\nif (flowFile == null) {\n    return\n}\n\ndef reject = { String code ->\n    throw new MultipartValidationFailure(code)\n}\n\nfinal long MAX_JSON_BYTES = 20L * 1024 * 1024\nfinal long MAX_IMAGE_BYTES = 10L * 1024 * 1024\n\nfinal String UUID_PATTERN =\n    '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'\n\ntry {\n    if (flowFile.getAttribute(\"image.validation.status\") != \"VALID\") {\n        reject(\"IMAGE_NOT_VALIDATED\")\n    }\n\n    if (flowFile.getSize() > MAX_JSON_BYTES) {\n        reject(\"JSON_TOO_LARGE\")\n    }\n\n    String body = \"\"\n    session.read(flowFile, { inputStream ->\n        body = inputStream.getText(StandardCharsets.UTF_8.name())\n    } as InputStreamCallback)\n\n    def payload\n    try {\n        payload = new JsonSlurper().parseText(body)\n    } catch (Exception ignored) {\n        reject(\"INVALID_JSON\")\n    }\n\n    if (!(payload instanceof Map)) {\n        reject(\"INVALID_JSON_OBJECT\")\n    }\n\n    def requestId = payload.get(\"request_id\")\n    def patientId = payload.get(\"patient_id\")\n    def modality = payload.get(\"modality\")\n    def eyeSide = payload.get(\"eye_side\")\n    def encoded = payload.get(\"image_base64\")\n\n    if (!(requestId instanceof String) ||\n        !(requestId ==~ UUID_PATTERN)) {\n        reject(\"INVALID_REQUEST_ID\")\n    }\n\n    if (!(patientId instanceof String) ||\n        !(patientId ==~ UUID_PATTERN)) {\n        reject(\"INVALID_PATIENT_ID\")\n    }\n\n    if (modality != \"FUNDUS\") {\n        reject(\"UNSUPPORTED_MODALITY\")\n    }\n\n    if (!(eyeSide in [\"left\", \"right\", \"unknown\"])) {\n        reject(\"INVALID_EYE_SIDE\")\n    }\n\n    if (!(encoded instanceof String) || encoded.isEmpty()) {\n        reject(\"MISSING_IMAGE_BASE64\")\n    }\n\n    byte[] imageBytes\n    try {\n        imageBytes = Base64.getDecoder().decode(encoded)\n    } catch (IllegalArgumentException ignored) {\n        reject(\"INVALID_BASE64\")\n    }\n\n    if (imageBytes.length == 0 ||\n        imageBytes.length > MAX_IMAGE_BYTES) {\n        reject(\"INVALID_IMAGE_SIZE\")\n    }\n\n    String actualHash = MessageDigest.getInstance(\"SHA-256\")\n        .digest(imageBytes)\n        .encodeHex()\n        .toString()\n\n    if (actualHash != flowFile.getAttribute(\"image.sha256\")) {\n        reject(\"IMAGE_CHECKSUM_MISMATCH\")\n    }\n\n    String format = flowFile.getAttribute(\"image.format\")\n\n    if (!(format in [\"JPEG\", \"PNG\"])) {\n        reject(\"UNSUPPORTED_IMAGE_FORMAT\")\n    }\n\n    String mediaType = format == \"PNG\"\n        ? \"image/png\" : \"image/jpeg\"\n\n    String extension = format == \"PNG\" ? \"png\" : \"jpg\"\n    String imageName = \"image.\" + extension\n    String boundary = \"aura-\" + flowFile.getAttribute(\"uuid\")\n\n    def multipart = new ByteArrayOutputStream()\n\n    def appendText = { String text ->\n        byte[] bytes = text.getBytes(StandardCharsets.UTF_8)\n        multipart.write(bytes, 0, bytes.length)\n    }\n\n    def appendField = { String name, String value ->\n        appendText(\"--\" + boundary + \"\\r\\n\")\n        appendText(\n            \"Content-Disposition: form-data; name=\\\"\" +\n            name + \"\\\"\\r\\n\"\n        )\n        appendText(\"\\r\\n\" + value + \"\\r\\n\")\n    }\n\n    appendField(\"patientId\", patientId)\n    appendField(\"modality\", modality)\n    appendField(\"eyeSide\", eyeSide)\n\n    appendText(\"--\" + boundary + \"\\r\\n\")\n    appendText(\n        \"Content-Disposition: form-data; name=\\\"images\\\"; \" +\n        \"filename=\\\"\" + imageName + \"\\\"\\r\\n\"\n    )\n    appendText(\"Content-Type: \" + mediaType + \"\\r\\n\\r\\n\")\n\n    multipart.write(imageBytes, 0, imageBytes.length)\n    appendText(\"\\r\\n--\" + boundary + \"--\\r\\n\")\n\n    byte[] preparedBody = multipart.toByteArray()\n\n    flowFile = session.write(flowFile, { outputStream ->\n        outputStream.write(preparedBody)\n    } as OutputStreamCallback)\n\n    flowFile = session.removeAttribute(flowFile, \"quarantine.reason\")\n\n    flowFile = session.putAllAttributes(flowFile, [\n        \"mime.type\"               :\n            \"multipart/form-data; boundary=\" + boundary,\n        \"filename\"                :\n            flowFile.getAttribute(\"uuid\") + \".multipart\",\n        \"gateway.idempotency_key\" : requestId,\n        \"gateway.correlation_id\"  : requestId,\n        \"gateway.patient_id\"      : patientId,\n        \"gateway.retry_count\"     : \"0\",\n        \"gateway.payload.version\": \"analysis-multipart-v0.1\",\n        \"gateway.payload.ready\"   : \"true\"\n    ])\n\n    session.transfer(flowFile, REL_SUCCESS)\n\n} catch (MultipartValidationFailure failure) {\n    flowFile = session.putAllAttributes(flowFile, [\n        \"gateway.payload.ready\": \"false\",\n        \"quarantine.reason\"    : failure.getMessage()\n    ])\n\n    session.transfer(flowFile, REL_FAILURE)\n}",
+          "Script Body": "import groovy.json.JsonSlurper\nimport org.apache.nifi.processor.io.InputStreamCallback\nimport org.apache.nifi.processor.io.OutputStreamCallback\nimport java.nio.charset.StandardCharsets\nimport java.security.MessageDigest\nimport java.util.Base64\n\nclass MultipartValidationFailure extends RuntimeException {\n    MultipartValidationFailure(String code) {\n        super(code)\n    }\n}\n\ndef flowFile = session.get()\nif (flowFile == null) {\n    return\n}\n\ndef reject = { String code ->\n    throw new MultipartValidationFailure(code)\n}\n\nfinal long MAX_JSON_BYTES = 20L * 1024 * 1024\nfinal long MAX_IMAGE_BYTES = 10L * 1024 * 1024\n\nfinal String UUID_PATTERN =\n    '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'\n\ntry {\n    if (flowFile.getAttribute(\"image.validation.status\") != \"VALID\") {\n        reject(\"IMAGE_NOT_VALIDATED\")\n    }\n\n    if (flowFile.getSize() > MAX_JSON_BYTES) {\n        reject(\"JSON_TOO_LARGE\")\n    }\n\n    String body = \"\"\n    session.read(flowFile, { inputStream ->\n        body = inputStream.getText(StandardCharsets.UTF_8.name())\n    } as InputStreamCallback)\n\n    def payload\n    try {\n        payload = new JsonSlurper().parseText(body)\n    } catch (Exception ignored) {\n        reject(\"INVALID_JSON\")\n    }\n\n    if (!(payload instanceof Map)) {\n        reject(\"INVALID_JSON_OBJECT\")\n    }\n\n    def requestId = payload.get(\"request_id\")\n    def patientId = payload.get(\"patient_id\")\n    def modality = payload.get(\"modality\")\n    def eyeSide = payload.get(\"eye_side\")\n    def tenant = payload.tenant_id\n    def clinic = payload.clinic_id\n    def device = payload.device_id\n    if (!(tenant instanceof String) || !(tenant ==~ UUID_PATTERN) ||\n        (clinic != null && (!(clinic instanceof String) || !(clinic ==~ UUID_PATTERN))) ||\n        !(device instanceof String) || !(device ==~ /^[A-Za-z0-9._:-]{1,128}$/) ||\n        payload.version != 1) reject(\"INVALID_CAMERA_BINDING\")\n    def encoded = payload.get(\"image_base64\")\n\n    if (!(requestId instanceof String) ||\n        !(requestId ==~ UUID_PATTERN)) {\n        reject(\"INVALID_REQUEST_ID\")\n    }\n\n    if (!(patientId instanceof String) ||\n        !(patientId ==~ UUID_PATTERN)) {\n        reject(\"INVALID_PATIENT_ID\")\n    }\n\n    if (modality != \"FUNDUS\") {\n        reject(\"UNSUPPORTED_MODALITY\")\n    }\n\n    if (!(eyeSide in [\"left\", \"right\", \"unknown\"])) {\n        reject(\"INVALID_EYE_SIDE\")\n    }\n\n    if (!(encoded instanceof String) || encoded.isEmpty()) {\n        reject(\"MISSING_IMAGE_BASE64\")\n    }\n\n    byte[] imageBytes\n    try {\n        imageBytes = Base64.getDecoder().decode(encoded)\n    } catch (IllegalArgumentException ignored) {\n        reject(\"INVALID_BASE64\")\n    }\n\n    if (imageBytes.length == 0 ||\n        imageBytes.length > MAX_IMAGE_BYTES) {\n        reject(\"INVALID_IMAGE_SIZE\")\n    }\n\n    String actualHash = MessageDigest.getInstance(\"SHA-256\")\n        .digest(imageBytes)\n        .encodeHex()\n        .toString()\n\n    if (actualHash != flowFile.getAttribute(\"image.sha256\")) {\n        reject(\"IMAGE_CHECKSUM_MISMATCH\")\n    }\n\n    // Each device signs its own event. NiFi must not grant its service identity to arbitrary ingress metadata.\n    def keys\n    try { keys = new JsonSlurper().parseText(System.getenv(\"NIFI_CAMERA_DEVICE_KEYS_JSON\") ?: \"{}\") }\n    catch (Exception ignored) { reject(\"CAMERA_INGRESS_AUTH_UNAVAILABLE\") }\n    def secret = keys instanceof Map ? keys[device] : null\n    def signature = payload.signature\n    if (!(secret instanceof String) || secret.getBytes(StandardCharsets.UTF_8).length < 32 ||\n        !(signature instanceof String) || !(signature ==~ /^[a-f0-9]{64}$/)) reject(\"CAMERA_INGRESS_DENIED\")\n    def signed = [\"1\", requestId, tenant, clinic ?: \"\", patientId, device, modality, eyeSide, actualHash].join(\"\\n\")\n    def mac = javax.crypto.Mac.getInstance(\"HmacSHA256\")\n    mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), \"HmacSHA256\"))\n    if (!MessageDigest.isEqual(mac.doFinal(signed.getBytes(StandardCharsets.UTF_8)), signature.decodeHex()))\n        reject(\"CAMERA_INGRESS_DENIED\")\n\n    String format = flowFile.getAttribute(\"image.format\")\n\n    if (!(format in [\"JPEG\", \"PNG\"])) {\n        reject(\"UNSUPPORTED_IMAGE_FORMAT\")\n    }\n\n    String mediaType = format == \"PNG\"\n        ? \"image/png\" : \"image/jpeg\"\n\n    String extension = format == \"PNG\" ? \"png\" : \"jpg\"\n    String imageName = \"image.\" + extension\n    String boundary = \"aura-\" + flowFile.getAttribute(\"uuid\")\n\n    def multipart = new ByteArrayOutputStream()\n\n    def appendText = { String text ->\n        byte[] bytes = text.getBytes(StandardCharsets.UTF_8)\n        multipart.write(bytes, 0, bytes.length)\n    }\n\n    def appendField = { String name, String value ->\n        appendText(\"--\" + boundary + \"\\r\\n\")\n        appendText(\n            \"Content-Disposition: form-data; name=\\\"\" +\n            name + \"\\\"\\r\\n\"\n        )\n        appendText(\"\\r\\n\" + value + \"\\r\\n\")\n    }\n\n    appendField(\"patientId\", patientId)\n    appendField(\"modality\", modality)\n    appendField(\"eyeSide\", eyeSide)\n\n    appendText(\"--\" + boundary + \"\\r\\n\")\n    appendText(\n        \"Content-Disposition: form-data; name=\\\"images\\\"; \" +\n        \"filename=\\\"\" + imageName + \"\\\"\\r\\n\"\n    )\n    appendText(\"Content-Type: \" + mediaType + \"\\r\\n\\r\\n\")\n\n    multipart.write(imageBytes, 0, imageBytes.length)\n    appendText(\"\\r\\n--\" + boundary + \"--\\r\\n\")\n\n    byte[] preparedBody = multipart.toByteArray()\n\n    flowFile = session.write(flowFile, { outputStream ->\n        outputStream.write(preparedBody)\n    } as OutputStreamCallback)\n\n    flowFile = session.removeAttribute(flowFile, \"quarantine.reason\")\n\n    flowFile = session.putAllAttributes(flowFile, [\n        \"mime.type\"               :\n            \"multipart/form-data; boundary=\" + boundary,\n        \"filename\"                :\n            flowFile.getAttribute(\"uuid\") + \".multipart\",\n        \"gateway.idempotency_key\" : requestId.toLowerCase(java.util.Locale.ROOT),\n        \"camera.tenant_id\"         : tenant,\n        \"camera.clinic_id\"         : clinic ?: \"\",\n        \"camera.device_id\"         : device,\n        \"gateway.correlation_id\"  : requestId,\n        \"gateway.patient_id\"      : patientId,\n        \"gateway.retry_count\"     : \"0\",\n        \"gateway.payload.version\": \"analysis-multipart-v0.1\",\n        \"gateway.payload.ready\"   : \"true\"\n    ])\n\n    session.transfer(flowFile, REL_SUCCESS)\n\n} catch (MultipartValidationFailure failure) {\n    flowFile = session.putAllAttributes(flowFile, [\n        \"gateway.payload.ready\": \"false\",\n        \"quarantine.reason\"    : failure.getMessage()\n    ])\n\n    session.transfer(flowFile, REL_FAILURE)\n}",
           "Module Directory": null
         },
         "propertyDescriptors": {
@@ -1226,66 +1233,23 @@
         "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
       },
       {
-        "identifier": "proc-dedup-sha256-v2",
-        "instanceIdentifier": "inst-dedup-sha256-v2",
-        "name": "Deduplicate-By-Hash",
-        "comments": "Detects duplicate SHA-256 image hashes and drops duplicate camera flowfiles",
-        "position": {
-          "x": 620,
-          "y": 280
-        },
-        "type": "org.apache.nifi.processors.groovyx.ExecuteGroovyScript",
-        "bundle": {
-          "group": "org.apache.nifi",
-          "artifact": "nifi-groovyx-nar",
-          "version": "1.27.0"
-        },
-        "properties": {
-          "groovyx-script-body": "import java.util.concurrent.ConcurrentHashMap\ndef ff = session.get()\nif (ff == null) return\n\ndef hash = ff.getAttribute('image.sha256')\nif (hash == null || hash.isEmpty()) {\n    session.transfer(ff, REL_FAILURE)\n    return\n}\n\n// In-memory LRU cache of seen hashes (thread-safe)\ndef cache = (ConcurrentHashMap<String, Long>) context.getExecutionNode()\nif (cache == null) {\n    cache = new ConcurrentHashMap<String, Long>()\n}\n\nlong now = System.currentTimeMillis()\nif (cache.containsKey(hash)) {\n    ff = session.putAttribute(ff, 'dedup.status', 'DUPLICATE_DROPPED')\n    ff = session.putAttribute(ff, 'dedup.reason', 'IMAGE_SHA256_ALREADY_EXISTS')\n    log.warn(\"Camera pipeline detected duplicate SHA-256 hash: \" + hash + \" for request: \" + ff.getAttribute('request_id'))\n    session.transfer(ff, REL_FAILURE)\n} else {\n    cache.put(hash, now)\n    ff = session.putAttribute(ff, 'dedup.status', 'UNIQUE_VERIFIED')\n    session.transfer(ff, REL_SUCCESS)\n}\n"
-        },
-        "propertyDescriptors": {
-          "groovyx-script-body": {
-            "name": "Script Body"
-          }
-        },
-        "schedulingStrategy": "TIMER_DRIVEN",
-        "schedulingPeriod": "0 sec",
-        "executionNode": "ALL",
-        "penaltyDuration": "30 sec",
-        "yieldDuration": "1 sec",
-        "bulletinLevel": "WARN",
-        "runDurationMillis": 0,
-        "concurrentlySchedulableTaskCount": 1,
-        "autoTerminatedRelationships": [],
-        "componentType": "PROCESSOR",
-        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
-      },
-      {
-        "identifier": "proc-invokehttp-gateway-v2",
-        "instanceIdentifier": "inst-invokehttp-gateway-v2",
-        "name": "InvokeHTTP-PostToGateway",
-        "comments": "Pushes multipart camera image to API Gateway /api/v1/analyses/camera with x-device-id and Service Token",
+        "identifier": "d884a874-749f-58b5-a1d3-5566c325ee7f",
+        "instanceIdentifier": "75a1ab46-803a-5c31-825a-ea88e29c4913",
+        "name": "Send-Camera-To-Gateway",
+        "comments": "Issues a fresh scoped token in memory on each delivery attempt and verifies the persisted camera receipt.",
         "position": {
           "x": 620,
           "y": 520
         },
-        "type": "org.apache.nifi.processors.standard.InvokeHTTP",
+        "type": "org.apache.nifi.processors.script.ExecuteScript",
         "bundle": {
           "group": "org.apache.nifi",
-          "artifact": "nifi-standard-nar",
+          "artifact": "nifi-scripting-nar",
           "version": "1.27.0"
         },
         "properties": {
-          "HTTP Method": "POST",
-          "Remote URL": "#{GatewayBaseUrl}#{CameraIngestRoute}",
-          "Send Message Body": "true",
-          "Content-Type": "${mime.type}",
-          "Attributes to Send as HTTP Headers": "(x-device-id|Idempotency-Key|Authorization)",
-          "Connection Timeout": "15 secs",
-          "Read Timeout": "30 secs",
-          "Include Date Header": "true",
-          "Follow Redirects": "true",
-          "Use Chunked Encoding": "false"
+          "Script Engine": "Groovy",
+          "Script Body": "import groovy.json.JsonOutput\nimport groovy.json.JsonSlurper\nimport java.nio.charset.StandardCharsets\nimport org.apache.nifi.processor.exception.ProcessException\nimport org.apache.nifi.processor.io.InputStreamCallback\nimport org.apache.nifi.processor.io.OutputStreamCallback\n\ndef ff = session.get()\nif (ff == null) return\n\ndef post = { String url ->\n    def conn = new URI(url).toURL().openConnection() as HttpURLConnection\n    conn.instanceFollowRedirects = false\n    conn.connectTimeout = 5000\n    conn.readTimeout = 30000\n    conn.requestMethod = 'POST'\n    conn.doOutput = true\n    conn\n}\ndef readJson = { conn ->\n    conn.inputStream.withCloseable { stream ->\n        def bytes = stream.readNBytes(8193)\n        if (bytes.length > 8192) throw new IOException('Response limit')\n        new JsonSlurper().parseText(new String(bytes, StandardCharsets.UTF_8))\n    }\n}\ndef requiredOrigin = { String key ->\n    def url = new URI(System.getenv(key) ?: '')\n    boolean secure = url.scheme == 'https'\n    boolean legacyHttp = url.scheme == 'http' && System.getenv('NIFI_CAMERA_ALLOW_HTTP') == 'true'\n    if (!(secure || legacyHttp) || !url.host || url.userInfo || url.query || url.fragment || !(url.path in ['', '/']))\n        throw new IOException('Valid HTTPS origin required')\n    url.toString().replaceFirst('/$', '')\n}\ntry {\n    String secret = System.getenv('NIFI_CAMERA_CLIENT_SECRET')\n    if (!secret) throw new IOException('Missing camera credentials')\n    def identityOrigin = requiredOrigin('NIFI_CAMERA_IDENTITY_ORIGIN')\n    def gatewayOrigin = requiredOrigin('NIFI_CAMERA_GATEWAY_ORIGIN')\n    def issue = post(identityOrigin + '/internal/v1/identity/service-tokens')\n    String token\n    try {\n        issue.setRequestProperty('Content-Type', 'application/json')\n        issue.outputStream.withCloseable { it.write(JsonOutput.toJson([\n            clientId: System.getenv('NIFI_CAMERA_CLIENT_ID') ?: 'nifi-camera',\n            clientSecret: secret, audience: 'aura-profile', scope: 'profile:camera'\n        ]).getBytes(StandardCharsets.UTF_8)) }\n        if (issue.responseCode != 200) throw new IOException('Camera token unavailable')\n        def response = readJson(issue)\n        if (response.tokenType != 'Bearer' || !(response.accessToken ==~ /[A-Za-z0-9_.-]{16,16384}/))\n            throw new IOException('Invalid credential response')\n        token = response.accessToken\n    } finally { issue.disconnect() }\n\n    def req = post(gatewayOrigin + '/api/v1/analyses/camera' +\n        (ff.getAttribute('camera.clinic_id') ? '?clinicContextId=' + ff.getAttribute('camera.clinic_id') : ''))\n    try {\n        String eventId = ff.getAttribute('gateway.idempotency_key')\n        String hash = ff.getAttribute('image.sha256')\n        String device = ff.getAttribute('camera.device_id')\n        req.setRequestProperty('Authorization', 'Bearer ' + token)\n        req.setRequestProperty('Content-Type', ff.getAttribute('mime.type'))\n        req.setRequestProperty('Idempotency-Key', eventId)\n        req.setRequestProperty('X-Tenant-Id', ff.getAttribute('camera.tenant_id'))\n        req.setRequestProperty('X-Device-Id', device)\n        req.setRequestProperty('X-Camera-SHA256', hash)\n        req.setRequestProperty('X-Camera-Version', '1')\n        req.setFixedLengthStreamingMode(ff.size)\n        req.outputStream.withCloseable { output ->\n            session.read(ff, { input -> input.transferTo(output) } as InputStreamCallback)\n        }\n        int status = req.responseCode\n        ff = session.putAttribute(ff, 'camera.delivery.http_status', Integer.toString(status))\n        if (status == 202) {\n            def receipt = readJson(req)\n            if (receipt.requestId != eventId || receipt.deviceId != device || receipt.version != 1 ||\n                receipt.imageSha256 != hash || receipt.imageCount != 1 || !(receipt.processingStatus in ['QUEUED', 'DUPLICATE']) ||\n                !receipt.batchId || !receipt.analysisId || !receipt.sourceAcceptedAt)\n                throw new IOException('Receipt did not match')\n            ff = session.write(ff, { it.write(JsonOutput.toJson(receipt).getBytes(StandardCharsets.UTF_8)) } as OutputStreamCallback)\n            ff = session.putAllAttributes(ff, ['mime.type':'application/json', 'filename':eventId + '.receipt.json',\n                'camera.reporting.contract':'receipt-v1', 'camera.receipt.request_id': eventId,\n                'camera.receipt.batch_id': receipt.batchId, 'camera.reporting.retries':'0'])\n            def values = [eventId, device, hash, receipt.batchId, '1', receipt.sourceAcceptedAt, receipt.correlationId]\n            def arguments = [:]\n            values.eachWithIndex { value, index ->\n                arguments['sql.args.' + (index + 1) + '.type'] = '12'\n                arguments['sql.args.' + (index + 1) + '.value'] = value.toString()\n            }\n            ff = session.putAllAttributes(ff, arguments)\n            session.transfer(ff, REL_SUCCESS)\n        } else {\n            String code = null\n            if (status == 409 && req.errorStream != null)\n                code = req.errorStream.withCloseable { stream ->\n                    def bytes = stream.readNBytes(8193)\n                    bytes.length <= 8192 ? new JsonSlurper().parseText(new String(bytes, StandardCharsets.UTF_8)).error?.code : null\n                }\n            boolean retry = status >= 500 || status in [401, 408, 429] || code == 'ERR_REQUEST_IN_PROGRESS'\n            ff = session.putAttribute(ff, 'camera.delivery.retry', retry.toString())\n            session.transfer(ff, REL_FAILURE)\n        }\n    } finally { req.disconnect() }\n} catch (IOException | IllegalArgumentException | groovy.json.JsonException | ProcessException error) {\n    // NiFi wraps I/O failures raised during a FlowFile stream callback.\n    if (error instanceof ProcessException && !(error.cause instanceof IOException)) throw error\n    ff = session.putAttribute(ff, 'camera.delivery.retry', 'true')\n    session.transfer(ff, REL_FAILURE)\n}\n"
         },
         "schedulingStrategy": "TIMER_DRIVEN",
         "schedulingPeriod": "0 sec",
@@ -1297,13 +1261,20 @@
         "concurrentlySchedulableTaskCount": 1,
         "autoTerminatedRelationships": [],
         "componentType": "PROCESSOR",
-        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f",
+        "propertyDescriptors": {},
+        "scheduledState": "ENABLED",
+        "retryCount": 10,
+        "retriedRelationships": [],
+        "backoffMechanism": "PENALIZE_FLOWFILE",
+        "maxBackoffPeriod": "10 mins",
+        "style": {}
       },
       {
-        "identifier": "proc-bounded-retry-v2",
-        "instanceIdentifier": "inst-bounded-retry-v2",
+        "identifier": "640af132-cbaa-53e6-811e-da85ee0eebcd",
+        "instanceIdentifier": "6ea6338d-d6e0-59be-b47e-86cbaf060100",
         "name": "Bounded-Camera-Retry-Delivery-v2",
-        "comments": "Performs limited exponential backoff retry (up to 10 attempts) when Gateway is unavailable",
+        "comments": "Keeps the original multipart payload. Exhausted attempts go to quarantine for operator reconciliation.",
         "position": {
           "x": 920,
           "y": 520
@@ -1315,9 +1286,9 @@
           "version": "1.27.0"
         },
         "properties": {
-          "Maximum Retries": "10",
-          "Penalize FlowFile": "true",
-          "Retry Attribute Name": "camera.retry.count"
+          "maximum-retries": "10",
+          "penalize-retries": "true",
+          "retry-attribute": "camera.retry.count"
         },
         "schedulingStrategy": "TIMER_DRIVEN",
         "schedulingPeriod": "0 sec",
@@ -1329,19 +1300,101 @@
         "concurrentlySchedulableTaskCount": 1,
         "autoTerminatedRelationships": [],
         "componentType": "PROCESSOR",
+        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f",
+        "scheduledState": "ENABLED",
+        "retryCount": 10,
+        "retriedRelationships": [],
+        "backoffMechanism": "PENALIZE_FLOWFILE",
+        "maxBackoffPeriod": "10 mins",
+        "style": {},
+        "propertyDescriptors": {
+          "Script File": {
+            "name": "Script File",
+            "displayName": "Script File",
+            "identifiesControllerService": false,
+            "sensitive": false,
+            "resourceDefinition": {
+              "cardinality": "SINGLE",
+              "resourceTypes": [
+                "FILE"
+              ]
+            }
+          },
+          "Script Engine": {
+            "name": "Script Engine",
+            "displayName": "Script Engine",
+            "identifiesControllerService": false,
+            "sensitive": false
+          },
+          "Script Body": {
+            "name": "Script Body",
+            "displayName": "Script Body",
+            "identifiesControllerService": false,
+            "sensitive": false
+          },
+          "Module Directory": {
+            "name": "Module Directory",
+            "displayName": "Module Directory",
+            "identifiesControllerService": false,
+            "sensitive": false,
+            "resourceDefinition": {
+              "cardinality": "MULTIPLE",
+              "resourceTypes": [
+                "FILE",
+                "DIRECTORY"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "identifier": "82dcfadb-81f9-438f-8f99-aeedf62d0e8b",
+        "instanceIdentifier": "3c5dbdf7-a2ff-4fdc-b3c3-405cc275a1c7",
+        "name": "Route-Camera-Retry",
+        "comments": "",
+        "position": {
+          "x": 840,
+          "y": 640
+        },
+        "type": "org.apache.nifi.processors.standard.RouteOnAttribute",
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-standard-nar",
+          "version": "1.27.0"
+        },
+        "properties": {
+          "Routing Strategy": "Route to Property name",
+          "Retry": "${camera.delivery.retry:equals('true')}"
+        },
+        "propertyDescriptors": {},
+        "style": {},
+        "schedulingPeriod": "0 sec",
+        "schedulingStrategy": "TIMER_DRIVEN",
+        "executionNode": "ALL",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 25,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [],
+        "scheduledState": "ENABLED",
+        "retryCount": 10,
+        "retriedRelationships": [],
+        "backoffMechanism": "PENALIZE_FLOWFILE",
+        "maxBackoffPeriod": "10 mins",
+        "componentType": "PROCESSOR",
         "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
       }
     ],
     "inputPorts": [],
     "outputPorts": [
       {
-        "identifier": "ade8abaa-24c4-3da8-b1eb-bdd74d482cc0",
-        "instanceIdentifier": "20d61687-01a1-1000-3b86-ddd8e1092c2f",
-        "name": "PreparedMultipart-PendingGateway",
-        "comments": "",
+        "identifier": "268cd8da-2f2a-371e-8e05-5c5390217f94",
+        "instanceIdentifier": "20c8e83f-01a1-1000-1b95-ab8ec4ef07d5",
+        "name": "QuarantineWriteFailure",
         "position": {
-          "x": 784,
-          "y": -88
+          "x": 1032,
+          "y": 632
         },
         "type": "OUTPUT_PORT",
         "concurrentlySchedulableTaskCount": 1,
@@ -1351,12 +1404,13 @@
         "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
       },
       {
-        "identifier": "268cd8da-2f2a-371e-8e05-5c5390217f94",
-        "instanceIdentifier": "20c8e83f-01a1-1000-1b95-ab8ec4ef07d5",
-        "name": "QuarantineWriteFailure",
+        "identifier": "890db824-0d42-4b72-8fe2-a04ac20289e7",
+        "instanceIdentifier": "355d3cde-2dfa-4e1d-b517-88378027cfbb",
+        "name": "Accepted-Camera-Receipt",
+        "comments": "",
         "position": {
-          "x": 1032,
-          "y": 632
+          "x": 1060,
+          "y": 430
         },
         "type": "OUTPUT_PORT",
         "concurrentlySchedulableTaskCount": 1,
@@ -1535,42 +1589,6 @@
         "zIndex": 0,
         "selectedRelationships": [
           "matched"
-        ],
-        "backPressureObjectThreshold": 10000,
-        "backPressureDataSizeThreshold": "1 GB",
-        "flowFileExpiration": "0 sec",
-        "prioritizers": [],
-        "bends": [],
-        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
-        "partitioningAttribute": "",
-        "loadBalanceCompression": "DO_NOT_COMPRESS",
-        "componentType": "CONNECTION",
-        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
-      },
-      {
-        "identifier": "24eec963-f015-35e6-9097-ab96a8041fc6",
-        "instanceIdentifier": "2102ba29-01a1-1000-c9a3-f8e2989e4490",
-        "name": "",
-        "source": {
-          "id": "f65f0951-3c7e-3c22-b581-0b4041bb187a",
-          "type": "PROCESSOR",
-          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f",
-          "name": "ExecuteScript-PrepareMultipart",
-          "comments": "",
-          "instanceIdentifier": "20fe1703-01a1-1000-3e65-791b8ac8f495"
-        },
-        "destination": {
-          "id": "ade8abaa-24c4-3da8-b1eb-bdd74d482cc0",
-          "type": "OUTPUT_PORT",
-          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f",
-          "name": "PreparedMultipart-PendingGateway",
-          "comments": "",
-          "instanceIdentifier": "20d61687-01a1-1000-3b86-ddd8e1092c2f"
-        },
-        "labelIndex": 1,
-        "zIndex": 0,
-        "selectedRelationships": [
-          "success"
         ],
         "backPressureObjectThreshold": 10000,
         "backPressureDataSizeThreshold": "1 GB",
@@ -1764,110 +1782,229 @@
         "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
       },
       {
-        "identifier": "conn-prepare-to-invokehttp",
-        "instanceIdentifier": "inst-conn-prepare-to-invokehttp",
+        "identifier": "69f1de74-a891-570e-b0d8-bcfb11c1461e",
+        "instanceIdentifier": "700cb472-c3e3-57e1-8b2b-7b5cbe7fc6ce",
         "name": "PrepareMultipart -> InvokeHTTP",
         "source": {
           "id": "f65f0951-3c7e-3c22-b581-0b4041bb187a",
           "type": "PROCESSOR",
-          "name": "ExecuteScript-PrepareMultipart"
+          "name": "ExecuteScript-PrepareMultipart",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
         },
         "destination": {
-          "id": "proc-invokehttp-gateway-v2",
+          "id": "d884a874-749f-58b5-a1d3-5566c325ee7f",
           "type": "PROCESSOR",
-          "name": "InvokeHTTP-PostToGateway"
+          "name": "Send-Camera-To-Gateway",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
         },
         "selectedRelationships": [
           "success"
         ],
         "backPressureObjectThreshold": 1000,
         "backPressureDataSizeThreshold": "1 GB",
-        "componentType": "CONNECTION"
+        "componentType": "CONNECTION",
+        "labelIndex": 1,
+        "zIndex": 0,
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
       },
       {
-        "identifier": "conn-invokehttp-retry-to-bounded",
-        "instanceIdentifier": "inst-conn-invokehttp-retry-to-bounded",
-        "name": "InvokeHTTP Retry -> BoundedRetry",
+        "identifier": "be82f3da-2a11-5d8f-a776-4540ece4f5a5",
+        "instanceIdentifier": "c7999b14-07a4-595d-81cd-2deaeec17349",
+        "name": "Camera delivery failure -> Retry selector",
         "source": {
-          "id": "proc-invokehttp-gateway-v2",
+          "id": "d884a874-749f-58b5-a1d3-5566c325ee7f",
           "type": "PROCESSOR",
-          "name": "InvokeHTTP-PostToGateway"
+          "name": "Send-Camera-To-Gateway",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
         },
         "destination": {
-          "id": "proc-bounded-retry-v2",
+          "id": "82dcfadb-81f9-438f-8f99-aeedf62d0e8b",
           "type": "PROCESSOR",
-          "name": "Bounded-Camera-Retry-Delivery-v2"
+          "name": "Route-Camera-Retry",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
         },
         "selectedRelationships": [
-          "retry"
-        ],
-        "backPressureObjectThreshold": 1000,
-        "backPressureDataSizeThreshold": "1 GB",
-        "componentType": "CONNECTION"
-      },
-      {
-        "identifier": "conn-bounded-to-invokehttp",
-        "instanceIdentifier": "inst-conn-bounded-to-invokehttp",
-        "name": "BoundedRetry -> InvokeHTTP (Retry Loop)",
-        "source": {
-          "id": "proc-bounded-retry-v2",
-          "type": "PROCESSOR",
-          "name": "Bounded-Camera-Retry-Delivery-v2"
-        },
-        "destination": {
-          "id": "proc-invokehttp-gateway-v2",
-          "type": "PROCESSOR",
-          "name": "InvokeHTTP-PostToGateway"
-        },
-        "selectedRelationships": [
-          "retry"
-        ],
-        "backPressureObjectThreshold": 1000,
-        "backPressureDataSizeThreshold": "1 GB",
-        "componentType": "CONNECTION"
-      },
-      {
-        "identifier": "conn-bounded-exhausted-to-quarantine",
-        "instanceIdentifier": "inst-conn-bounded-exhausted-to-quarantine",
-        "name": "BoundedRetry Exhausted -> Quarantine",
-        "source": {
-          "id": "proc-bounded-retry-v2",
-          "type": "PROCESSOR",
-          "name": "Bounded-Camera-Retry-Delivery-v2"
-        },
-        "destination": {
-          "id": "78d12625-1e00-341a-b1fe-91a0cc337c31",
-          "type": "PROCESSOR",
-          "name": "UpdateAttribute-Quarantine"
-        },
-        "selectedRelationships": [
-          "retries_exceeded"
-        ],
-        "backPressureObjectThreshold": 1000,
-        "backPressureDataSizeThreshold": "1 GB",
-        "componentType": "CONNECTION"
-      },
-      {
-        "identifier": "conn-invokehttp-failure-to-quarantine",
-        "instanceIdentifier": "inst-conn-invokehttp-failure-to-quarantine",
-        "name": "InvokeHTTP Failure -> Quarantine",
-        "source": {
-          "id": "proc-invokehttp-gateway-v2",
-          "type": "PROCESSOR",
-          "name": "InvokeHTTP-PostToGateway"
-        },
-        "destination": {
-          "id": "78d12625-1e00-341a-b1fe-91a0cc337c31",
-          "type": "PROCESSOR",
-          "name": "UpdateAttribute-Quarantine"
-        },
-        "selectedRelationships": [
-          "no retry",
           "failure"
         ],
         "backPressureObjectThreshold": 1000,
         "backPressureDataSizeThreshold": "1 GB",
-        "componentType": "CONNECTION"
+        "componentType": "CONNECTION",
+        "labelIndex": 1,
+        "zIndex": 0,
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+      },
+      {
+        "identifier": "23a3a1ae-a4e7-5131-be97-6af1ab77e6a8",
+        "instanceIdentifier": "34ab2512-cb69-5cfa-9925-f1db2fd13d9c",
+        "name": "BoundedRetry -> InvokeHTTP (Retry Loop)",
+        "source": {
+          "id": "640af132-cbaa-53e6-811e-da85ee0eebcd",
+          "type": "PROCESSOR",
+          "name": "Bounded-Camera-Retry-Delivery-v2",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        },
+        "destination": {
+          "id": "d884a874-749f-58b5-a1d3-5566c325ee7f",
+          "type": "PROCESSOR",
+          "name": "Send-Camera-To-Gateway",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        },
+        "selectedRelationships": [
+          "retry"
+        ],
+        "backPressureObjectThreshold": 1000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "componentType": "CONNECTION",
+        "labelIndex": 1,
+        "zIndex": 0,
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+      },
+      {
+        "identifier": "4bb62d85-e69e-5886-90b6-9b85feaa72c8",
+        "instanceIdentifier": "8f841121-bdf6-504c-af70-589945c4838f",
+        "name": "BoundedRetry Exhausted -> Quarantine",
+        "source": {
+          "id": "640af132-cbaa-53e6-811e-da85ee0eebcd",
+          "type": "PROCESSOR",
+          "name": "Bounded-Camera-Retry-Delivery-v2",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        },
+        "destination": {
+          "id": "78d12625-1e00-341a-b1fe-91a0cc337c31",
+          "type": "PROCESSOR",
+          "name": "UpdateAttribute-Quarantine",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        },
+        "selectedRelationships": [
+          "retries_exceeded",
+          "failure"
+        ],
+        "backPressureObjectThreshold": 1000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "componentType": "CONNECTION",
+        "labelIndex": 1,
+        "zIndex": 0,
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+      },
+      {
+        "identifier": "e78ce299-0ced-51e3-b34c-fc546bb1f5a9",
+        "instanceIdentifier": "aa6d1e73-9d9e-5084-8ee6-796cf30e46e2",
+        "name": "Permanent camera rejection -> Quarantine",
+        "source": {
+          "id": "82dcfadb-81f9-438f-8f99-aeedf62d0e8b",
+          "type": "PROCESSOR",
+          "name": "Route-Camera-Retry",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        },
+        "destination": {
+          "id": "78d12625-1e00-341a-b1fe-91a0cc337c31",
+          "type": "PROCESSOR",
+          "name": "UpdateAttribute-Quarantine",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        },
+        "selectedRelationships": [
+          "unmatched"
+        ],
+        "backPressureObjectThreshold": 1000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "componentType": "CONNECTION",
+        "labelIndex": 1,
+        "zIndex": 0,
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+      },
+      {
+        "identifier": "806bd1b5-0277-40fe-a42d-dfa85e0a2438",
+        "instanceIdentifier": "d54e339c-f671-43fc-a5bb-a6add7316056",
+        "name": "Route-Camera-Retry -> Bounded-Camera-Retry-Delivery-v2",
+        "source": {
+          "id": "82dcfadb-81f9-438f-8f99-aeedf62d0e8b",
+          "type": "PROCESSOR",
+          "name": "Route-Camera-Retry",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        },
+        "destination": {
+          "id": "640af132-cbaa-53e6-811e-da85ee0eebcd",
+          "type": "PROCESSOR",
+          "name": "Bounded-Camera-Retry-Delivery-v2",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        },
+        "selectedRelationships": [
+          "Retry"
+        ],
+        "backPressureObjectThreshold": 1000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "componentType": "CONNECTION",
+        "labelIndex": 1,
+        "zIndex": 0,
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+      },
+      {
+        "identifier": "8f658fa9-8ad6-4569-ba52-e5dfecc58175",
+        "instanceIdentifier": "1f48dd9e-e02d-43e9-b564-2432500a4268",
+        "name": "Send-Camera-To-Gateway -> Reporting Receipt",
+        "source": {
+          "id": "d884a874-749f-58b5-a1d3-5566c325ee7f",
+          "type": "PROCESSOR",
+          "name": "Send-Camera-To-Gateway",
+          "groupId": "29c28b59-e36a-3446-82e0-7b52c43f003f"
+        },
+        "destination": {
+          "id": "8e111bf4-6fc0-5426-a9a3-bb81fb58e66c",
+          "type": "INPUT_PORT",
+          "name": "Accepted-Camera-Receipt",
+          "groupId": "90a0dcba-230e-3030-87b6-346705a9452c"
+        },
+        "selectedRelationships": [
+          "success"
+        ],
+        "backPressureObjectThreshold": 1000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "componentType": "CONNECTION",
+        "labelIndex": 1,
+        "zIndex": 0,
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "groupIdentifier": "29c28b59-e36a-3446-82e0-7b52c43f003f"
       }
     ],
     "labels": [],
@@ -1884,22 +2021,10 @@
   "externalControllerServices": {},
   "parameterContexts": {
     "CameraIngestionContext": {
-      "identifier": "param-ctx-camera-ingest-v2",
+      "identifier": "657ed3fb-3491-5975-9950-795fcb10b3b2",
       "name": "CameraIngestionContext",
       "description": "Configuration parameters for Camera Ingestion Pipeline v2 (No plain secrets)",
       "parameters": [
-        {
-          "name": "GatewayBaseUrl",
-          "description": "Base URL of API Gateway accessible from NiFi container",
-          "sensitive": false,
-          "value": "http://host.docker.internal:5000"
-        },
-        {
-          "name": "CameraIngestRoute",
-          "description": "API Gateway route for camera image submission",
-          "sensitive": false,
-          "value": "/api/v1/analyses/camera"
-        },
         {
           "name": "MaxRetryCount",
           "description": "Maximum number of retry attempts before quarantine",

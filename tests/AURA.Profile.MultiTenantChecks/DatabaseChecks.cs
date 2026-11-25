@@ -70,17 +70,17 @@ internal static class DatabaseChecks
         Verify((await repository.ResolveAccessAsync(doctor2,patient,clinic,"ANALYSIS_READ",caseId)).Allowed,"Suspended historical read still requires active assignment");
         await Sql("UPDATE profile.clinics SET status='ACTIVE' WHERE clinic_id=$1",clinic);
         var email=$"invite-{Guid.NewGuid():N}@example.test";
-        var invite=await repository.InviteClinicMemberAsync(clinic,email,"DOCTOR");
+        var invite=await repository.InviteClinicMemberAsync(clinic,email,"DOCTOR",owner);
         Verify(invite.Result?.InvitationToken is {Length:64},"Invite issues one-time random token");
         var member=invite.Result!;var invitedAccount=Guid.NewGuid();
         Verify(!(await repository.AcceptClinicInvitationExplicitAsync(invitedAccount,email,member.MembershipId,"wrong")).Succeeded,"Wrong invite token denied");
         Verify(!(await repository.AcceptClinicInvitationExplicitAsync(invitedAccount,"other@example.test",member.MembershipId,member.InvitationToken!)).Succeeded,"Invite email mismatch denied");
         Verify((await repository.AcceptClinicInvitationExplicitAsync(invitedAccount,email,member.MembershipId,member.InvitationToken!)).Succeeded,"Matching email and one-time token accept invitation");
         Verify(!(await repository.AcceptClinicInvitationExplicitAsync(invitedAccount,email,member.MembershipId,member.InvitationToken!)).Succeeded,"Consumed invite token replay denied");
-        var second=await repository.InviteClinicMemberAsync(clinic,$"expiry-{Guid.NewGuid():N}@example.test","STAFF");
+        var second=await repository.InviteClinicMemberAsync(clinic,$"expiry-{Guid.NewGuid():N}@example.test","STAFF",owner);
         await Sql("UPDATE profile.clinic_invitations SET issued_at=now()-interval '74 hours',expires_at=now()-interval '2 hours' WHERE membership_id=$1",second.Result!.MembershipId);
         Verify(!(await repository.AcceptClinicInvitationExplicitAsync(Guid.NewGuid(),second.Result.InvitedEmail,second.Result.MembershipId,second.Result.InvitationToken!)).Succeeded,"Expired invitation denied");
-        var reissued=await repository.InviteClinicMemberAsync(clinic,second.Result.InvitedEmail!,"STAFF");
+        var reissued=await repository.InviteClinicMemberAsync(clinic,second.Result.InvitedEmail!,"STAFF",owner);
         Verify(reissued.Result!.InvitationToken!=second.Result.InvitationToken && !(await repository.AcceptClinicInvitationExplicitAsync(Guid.NewGuid(),second.Result.InvitedEmail,second.Result.MembershipId,second.Result.InvitationToken!)).Succeeded,"Reinvite rotates hash and invalidates old token");
 
         // W6-M6-01: Consultation Chat Authority & Admin Clinic Lifecycle DB Checks

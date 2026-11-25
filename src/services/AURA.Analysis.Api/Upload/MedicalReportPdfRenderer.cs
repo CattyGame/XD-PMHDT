@@ -172,8 +172,12 @@ public static class MedicalReportPdfRenderer
                     content.Item().Text("RESEARCH OUTPUTS - NOT A CLINICAL DIAGNOSIS").Bold().FontSize(10);
                     if (!avr.GetProperty("measurement_available").GetBoolean())
                         content.Item().Text($"AVR unavailable: {avr.GetProperty("unavailable_reason").GetString()}");
-                    content.Item().Text(FormattableString.Invariant($"Binary DR probability: {dr.GetProperty("probability_dr").GetDouble():P1} | Model: {dr.GetProperty("model_version").GetString()}"));
-                    content.Item().Text("Grad-CAM uses an ImageNet center crop (224x224), not full-image lesion localization or ICDR grading.").FontSize(8);
+                    content.Item().Text(FormattableString.Invariant($"Binary DR probability: {dr.GetProperty("probability_dr").GetDouble():P1} | Model: {dr.GetProperty("model_version").GetString()} (not ICDR grading)"));
+                    content.Item().Text("Grad-CAM uses an ImageNet center crop (Resize 256 -> Crop 224x224), not full-image lesion localization or ICDR grading.").FontSize(8);
+                    var avrSha = avr.TryGetProperty("model_sha256", out var aSha) && aSha.ValueKind == JsonValueKind.String ? aSha.GetString() : null;
+                    var drSha = dr.TryGetProperty("checkpoint_sha256", out var dSha) && dSha.ValueKind == JsonValueKind.String ? dSha.GetString() : null;
+                    if (!string.IsNullOrWhiteSpace(avrSha) || !string.IsNullOrWhiteSpace(drSha))
+                        content.Item().Text($"Research artifact hashes: AVR={avrSha ?? "N/A"} | DR={drSha ?? "N/A"}").FontSize(6);
                 }
 
                 content.Item().PaddingTop(2).Text("CLINICAL REVIEW").Bold().FontSize(10);

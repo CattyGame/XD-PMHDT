@@ -7,6 +7,8 @@ using Npgsql;
 
 namespace AURA.Billing.Api.Data;
 
+public sealed class PriceVersionUnavailableException : Exception;
+
 public sealed class OrderRepository(
     NpgsqlDataSource dataSource,
     ILogger<OrderRepository> logger)
@@ -155,12 +157,15 @@ public sealed class OrderRepository(
                 package_price_version_id, package_name_snapshot, price_amount_snapshot,
                 currency_code_snapshot, credits_snapshot, environment, status,
                 idempotency_key, request_fingerprint, created_at, updated_at, notification_recipient_account_id
-            ) VALUES (
+            )
+            SELECT
                 @id, @tenant_id, @owner_type, @owner_id, @package_id,
                 @price_version_id, @name_snapshot, @price_snapshot,
                 @currency_snapshot, @credits_snapshot, @environment, 'PENDING',
                 @idempotency_key, @fingerprint, now(), now(), @notification_recipient
-            )
+            FROM billing.package_price_versions
+            WHERE id=@price_version_id AND package_id=@package_id AND status='ACTIVE'
+            FOR SHARE
             RETURNING created_at, updated_at;
             """;
 
@@ -182,7 +187,7 @@ public sealed class OrderRepository(
             (object?)(notificationRecipientAccountId ?? (ownerType == "ACCOUNT" ? ownerId : null)) ?? DBNull.Value;
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        await reader.ReadAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) throw new PriceVersionUnavailableException();
         var createdAt = reader.GetDateTime(0);
         var updatedAt = reader.GetDateTime(1);
 

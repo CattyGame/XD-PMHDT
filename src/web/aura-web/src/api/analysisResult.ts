@@ -31,6 +31,12 @@ export type AnalysisResult = Readonly<{
   warnings: readonly Warning[]
   research?: ResearchResults
 }>
+export type AnalysisFailureDetail = Readonly<{
+  code: string
+  message: string
+  correlationId?: string | null
+  retryable?: boolean
+}>
 export type AnalysisDetail = Readonly<{
   analysisId: string
   batchId: string
@@ -39,6 +45,7 @@ export type AnalysisDetail = Readonly<{
   updatedAt: string
   image: FileRef | null
   result: AnalysisResult | null
+  error?: AnalysisFailureDetail | null
 }>
 export type PrivateFileAccess = Readonly<{ url: string; expiresAt: string }>
 
@@ -132,6 +139,19 @@ function parseResult(value: unknown): AnalysisResult {
   }
 }
 
+function parseFailure(value: unknown): AnalysisFailureDetail | null {
+  if (value == null) return null
+  if (!record(value) || !string(value.code) || !string(value.message)) invalid()
+  if (value.correlationId != null && !string(value.correlationId)) invalid()
+  if (value.retryable != null && typeof value.retryable !== 'boolean') invalid()
+  return {
+    code: value.code,
+    message: value.message,
+    ...(value.correlationId !== undefined ? { correlationId: value.correlationId as string | null } : {}),
+    ...(value.retryable !== undefined ? { retryable: value.retryable as boolean } : {}),
+  }
+}
+
 export function parseAnalysis(value: unknown, requestedId: string): AnalysisDetail {
   if (!record(value) || !validBatchId(requestedId) ||
     !string(value.analysisId) || value.analysisId.toLowerCase() !== requestedId.toLowerCase() ||
@@ -143,6 +163,7 @@ export function parseAnalysis(value: unknown, requestedId: string): AnalysisDeta
   if (!completed && value.result != null) invalid()
   const image = value.image == null ? null : fileRef(value.image)
   if (image && image.kind !== 'original') invalid()
+  const error = parseFailure(value.error)
   return {
     analysisId: value.analysisId,
     batchId: value.batchId,
@@ -151,6 +172,7 @@ export function parseAnalysis(value: unknown, requestedId: string): AnalysisDeta
     updatedAt: value.updatedAt,
     image,
     result: completed ? parseResult(value.result) : null,
+    ...(error ? { error } : {}),
   }
 }
 

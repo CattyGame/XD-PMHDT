@@ -73,11 +73,11 @@ internal static class HttpChecks
             var value=await response.Content.ReadFromJsonAsync<JsonElement>();
             Verify(response.StatusCode==HttpStatusCode.Created && value.GetProperty("medicalHistory").ValueKind==JsonValueKind.Null,"Staff administrative registration remains available without PHI history");
         }
-        await repository.RevokeClinicMemberAsync(clinic,staff);
+        await repository.RevokeClinicMemberAsync(clinic,staff,owner);
         using(var response=await Patient(HttpMethod.Patch,patientRoute,new{}))
             Verify(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound,"Revoked Staff loses PATCH immediately");
         var email=$"http-{Guid.NewGuid():N}@example.test";
-        var invited=await repository.InviteClinicMemberAsync(clinic,email,"STAFF");
+        var invited=await repository.InviteClinicMemberAsync(clinic,email,"STAFF",owner);
         var membership=invited.Result!;
         authority.AccountId=Guid.NewGuid();authority.Email=email;authority.EmailVerified=false;
         async Task<HttpResponseMessage> Accept(string token)

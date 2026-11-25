@@ -190,10 +190,16 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
     <p><strong>Trạng thái review:</strong> {reviewLabels[analysis.reviewStatus] ?? analysis.reviewStatus}</p>
     <p><strong>Cập nhật:</strong> {new Date(analysis.updatedAt).toLocaleString('vi-VN')}</p>
 
-    {analysis.processingStatus !== 'COMPLETED' &&
-      <p role="status">Chưa có kết quả AI hoàn tất. Hệ thống chỉ hiển thị dữ liệu thật do API cung cấp.
-        {!terminalStatuses.has(analysis.processingStatus) ? ' Trạng thái sẽ được đọc lại tự động.' : ''}
-      </p>}
+    {analysis.processingStatus !== 'COMPLETED' && (
+      terminalStatuses.has(analysis.processingStatus)
+        ? <section className="analysis-result-warning" aria-label="Lý do dừng phân tích">
+          <p role="status">Phân tích đã dừng và không trả kết quả AI hoàn tất. Hệ thống không tự đoán chỉ số AVR hoặc mức nguy cơ mặc định.</p>
+          {analysis.error && <p><strong>{analysis.error.code}:</strong> {analysis.error.message}</p>}
+          {analysis.processingStatus === 'LOW_QUALITY' &&
+            <p>Vui lòng chụp lại ảnh đáy mắt rõ nét, đủ sáng, không bị lóa rồi tải lên phân tích mới.</p>}
+        </section>
+        : <p role="status">Chưa có kết quả AI hoàn tất. Hệ thống chỉ hiển thị dữ liệu thật do API cung cấp. Trạng thái sẽ được đọc lại tự động.</p>
+    )}
 
     {result && <>
       {result.isMock
@@ -217,12 +223,12 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
       </section>
       {result.research && <section aria-label="Kết quả AI nghiên cứu">
         <h2>Kết quả AI nghiên cứu</h2>
-        <p><strong>AVR V8:</strong> {result.research.avr.model_version}</p>
+        <p><strong>AVR V8:</strong> {result.research.avr.model_version} (<code>{result.research.avr.model_sha256}</code>)</p>
         <p>CRAE: {result.research.avr.crae_px ?? 'Chưa đo được'} px · CRVE: {result.research.avr.crve_px ?? 'Chưa đo được'} px</p>
         {!result.research.avr.measurement_available && <p>Lý do chưa có AVR: {result.research.avr.unavailable_reason}</p>}
-        <p><strong>DR nhị phân:</strong> {result.research.dr.model_version}</p>
+        <p><strong>DR nhị phân:</strong> {result.research.dr.model_version} (<code>{result.research.dr.checkpoint_sha256}</code>)</p>
         <p>Xác suất DR do mô hình nghiên cứu ước lượng: {(result.research.dr.probability_dr * 100).toFixed(1)}%</p>
-        <p>Grad-CAM dùng vùng crop 224×224 từ ảnh đã resize, không phải bản đồ tổn thương trên toàn ảnh gốc.</p>
+        <p>Phương pháp giải thích: {result.research.dr.gradcam_method} ({result.research.dr.gradcam_geometry}) — resize cạnh ngắn 256 rồi crop vùng trung tâm 224×224, không phải bản đồ tổn thương trên toàn ảnh gốc.</p>
         <p>Kết quả này không phân độ ICDR và không thay thế kết luận lâm sàng.</p>
       </section>}
       {result.riskAvailable

@@ -5,6 +5,7 @@ public sealed class NotificationDeliveryWorker(
     DeviceRegistrationRepository devices,
     IAccountResolver accounts,
     IFcmClient fcm,
+    PushTemplates templates,
     IConfiguration configuration,
     ILogger<NotificationDeliveryWorker> logger) : BackgroundService
 {
@@ -42,6 +43,9 @@ public sealed class NotificationDeliveryWorker(
         timeout.CancelAfter(TimeSpan.FromSeconds(20));
         try
         {
+            var template = await templates.ForEventAsync(job.Type, timeout.Token);
+            if (template is { Enabled: false }) { await FailAsync("TEMPLATE_DISABLED", false); return; }
+            var (title, body) = PushTemplates.Render(template);
             var uid = await accounts.ResolveFirebaseUidAsync(job.AccountId, timeout.Token);
             if (string.IsNullOrWhiteSpace(uid)) { await FailAsync("ACCOUNT_INACTIVE", false); return; }
             var token = await devices.GetTokenAsync(_projectId, uid, job.DeviceId, timeout.Token);
@@ -49,12 +53,19 @@ public sealed class NotificationDeliveryWorker(
 
             var origin = new Uri(configuration["Notification:PublicBaseUrl"] ?? "http://localhost:5173");
             if ((origin.Scheme != "https" && !(origin.Scheme == "http" && origin.IsLoopback)) ||
-                origin.AbsolutePath != "/" || origin.Query.Length != 0 || origin.Fragment.Length != 0)
+                origin.AbsolutePath != "/" || origin.Query.Length != 0 || origin.Fragment.Length != 0 || origin.UserInfo.Length != 0)
                 throw new InvalidOperationException("Invalid public notification origin.");
+            if (!job.TargetPath.StartsWith('/') || job.TargetPath.StartsWith("//", StringComparison.Ordinal) ||
+                job.TargetPath.Contains('\\') || !Uri.TryCreate(origin, job.TargetPath, out var target) ||
+                target.GetLeftPart(UriPartial.Authority) != origin.GetLeftPart(UriPartial.Authority))
+            {
+                await FailAsync("INVALID_TARGET_PATH", false);
+                return;
+            }
             var message = new FirebaseAdmin.Messaging.MulticastMessage
             {
                 Tokens = [token],
-                Notification = new() { Title = job.Title, Body = "Có thông báo mới. Đăng nhập để xem chi tiết." },
+                Notification = new() { Title = title, Body = body },
                 Data = new Dictionary<string, string>
                 {
                     ["notificationId"] = job.InboxItemId.ToString("D"),
@@ -63,8 +74,8 @@ public sealed class NotificationDeliveryWorker(
                 },
                 Webpush = new()
                 {
-                    Notification = new() { Title = job.Title, Body = "Có thông báo mới. Đăng nhập để xem chi tiết.", Tag = $"notification-{job.InboxItemId:D}" },
-                    FcmOptions = new() { Link = new Uri(origin, job.TargetPath).AbsoluteUri }
+                    Notification = new() { Title = title, Body = body, Tag = $"notification-{job.InboxItemId:D}" },
+                    FcmOptions = new() { Link = target.AbsoluteUri }
                 }
             };
             var result = await fcm.SendMulticastAsync([new ActiveDeviceToken(job.DeviceId, token)], message, timeout.Token);

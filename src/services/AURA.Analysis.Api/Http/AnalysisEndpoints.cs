@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Net.Http.Headers;
 using System.Text;
+using AURA.Common.Audit;
 
 namespace AURA.Analysis.Api.Http;
 
@@ -21,6 +22,7 @@ public static class AnalysisEndpoints
 {
     public static void MapAnalysisEndpoints(this WebApplication app)
     {
+        app.MapPost("/api/v1/analyses/camera", (Func<HttpContext, Task<IResult>>)(c => Handle(c, () => Upload(c, camera: true))));
         app.MapGet("/api/v1/analyses/patients/{patientId}/history", (HttpContext c, string patientId, int? limit, Guid? beforeId) => Handle(c, async () =>
         {
             var user = await User(c);
@@ -38,18 +40,20 @@ public static class AnalysisEndpoints
         app.MapGet("/api/v1/reports/{reportId}/content",(HttpContext c,string reportId)=>Handle(c,async()=>
         {
             var user=await User(c);var id=ResourceId(reportId);var clinic=Clinic(c);
-            PrivateContent content;
-            var exports=c.RequestServices.GetRequiredService<ExportService>();
-            if(await exports.HasSnapshotAsync(id,c.RequestAborted))
+            var content=await ReadAudited(c,user.AccountId,AuditAction.ReportDownload,AuditResource.Report,id,async () =>
             {
-                content=await exports.OpenContentAsync(user.AccountId,clinic??throw UploadFailure.Validation(new ErrorDetail("clinicContextId","required")),id,Correlation(c),c.RequestAborted);
-            }
-            else content=await c.RequestServices.GetRequiredService<AnalysisReportService>().ReadDownloadContentAsync(user.AccountId,clinic,id,Correlation(c),c.RequestAborted);
+                var exports=c.RequestServices.GetService<ExportService>();
+                if(exports is not null && await exports.HasSnapshotAsync(id,c.RequestAborted))
+                    return await exports.OpenContentAsync(user.AccountId,clinic??throw UploadFailure.Validation(new ErrorDetail("clinicContextId","required")),id,Correlation(c),c.RequestAborted);
+                return await c.RequestServices.GetRequiredService<AnalysisReportService>().ReadDownloadContentAsync(user.AccountId,clinic,id,Correlation(c),c.RequestAborted);
+            });
             c.Response.Headers["X-Content-Type-Options"]="nosniff";return Results.Stream(content.Stream,content.ContentType);
         }));
         app.MapGet("/api/v1/analyses/{analysisId}/files/{fileId}/content",(HttpContext c,string analysisId,string fileId)=>Handle(c,async()=>
         {
-            var user=await User(c);var content=await c.RequestServices.GetRequiredService<FileAccessService>().ReadContentAsync(user.AccountId,Clinic(c),ResourceId(analysisId),ResourceId(fileId),c.RequestAborted);
+            var user=await User(c);
+            var content=await ReadAudited(c,user.AccountId,AuditAction.ImageRead,AuditResource.Image,ResourceId(fileId),
+                ()=>c.RequestServices.GetRequiredService<FileAccessService>().ReadContentAsync(user.AccountId,Clinic(c),ResourceId(analysisId),ResourceId(fileId),c.RequestAborted));
             c.Response.Headers["X-Content-Type-Options"]="nosniff";return Results.Stream(content.Stream,content.ContentType);
         }));
         app.MapPost("/api/v1/analysis-upload-batches",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
@@ -168,6 +172,20 @@ public static class AnalysisEndpoints
             return Results.Json(await c.RequestServices.GetRequiredService<InternalResolversService>().ResolveNotificationContextAsync(
                 request,c.RequestAborted),UploadJson.Options);
         }));
+        app.MapGet("/api/v1/admin/ai/config",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
+        {
+            await AdminUser(c);
+            return Results.Json(await c.RequestServices.GetRequiredService<AiConfigService>().GetActiveAsync(c.RequestAborted),UploadJson.Options);
+        })));
+        app.MapPut("/api/v1/admin/ai/config",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
+        {
+            var admin=await AdminUser(c);
+            Limit(c,16384);
+            using var body=await System.Text.Json.JsonDocument.ParseAsync(c.Request.Body,cancellationToken:c.RequestAborted);
+            var change=AiConfigService.ParseStrictChange(body.RootElement);
+            var view=await c.RequestServices.GetRequiredService<AiConfigService>().ActivateAsync(admin.AccountId,change,c.RequestAborted);
+            return Results.Json(view,UploadJson.Options);
+        })));
     }
 
     private static async Task<IResult> Handle(HttpContext c,Func<Task<IResult>> action)
@@ -192,6 +210,27 @@ public static class AnalysisEndpoints
             return Error(c,UploadFailure.Dependency("Analysis dependencies"));
         }
     }
+    private static async Task<PrivateContent> ReadAudited(HttpContext c, Guid actor, AuditAction action,
+        AuditResource resource, Guid id, Func<Task<PrivateContent>> read)
+    {
+        var writer=c.RequestServices.GetRequiredService<IAuditWriter>();
+        var audit=AuditEvent.Create(AuditSource.Analysis,actor,action,resource,id.ToString("D"),Correlation(c),outcome:AuditOutcome.Authorized);
+        PrivateContent content;
+        try { content=await read(); }
+        catch(OperationCanceledException) when(c.RequestAborted.IsCancellationRequested) { throw; }
+        catch(UploadFailure failure)
+        {
+            await writer.AppendAsync(audit with { Outcome=failure.Status is 403 or 404 ? AuditOutcome.Denied : AuditOutcome.Failed },c.RequestAborted);
+            throw;
+        }
+        catch
+        {
+            await writer.AppendAsync(audit with { Outcome=AuditOutcome.Failed },c.RequestAborted);
+            throw;
+        }
+        await AuditRead.RequireAsync(writer,audit with {TenantId=content.TenantId,ResourceVersion=content.ResourceVersion},content.Stream,c.RequestAborted);
+        return content;
+    }
     private static IResult Error(HttpContext c,UploadFailure e)=>Results.Json(new{error=new{
         code=e.Code,message=e.Message,correlationId=Correlation(c),retryable=e.Retryable,details=e.Details
     }},UploadJson.Options,statusCode:e.Status);
@@ -200,6 +239,11 @@ public static class AnalysisEndpoints
     {
         var user=await c.RequestServices.GetRequiredService<IAnalysisUserIdentityResolver>().ResolveAsync(c.Request,c.RequestAborted);
         AnalysisUserPolicy.RequireClinicalRole(user);return user;
+    }
+    private static async Task<AnalysisUserContext> AdminUser(HttpContext c)
+    {
+        var user=await c.RequestServices.GetRequiredService<IAnalysisUserIdentityResolver>().ResolveAsync(c.Request,c.RequestAborted);
+        AnalysisUserPolicy.RequireSystemAdmin(user);return user;
     }
     private static Guid ResourceId(string value)=>Guid.TryParse(value,out var id)&&id!=Guid.Empty?id
         :throw new UploadFailure(404,"ERR_NOT_FOUND","Không tìm thấy tài nguyên.");
@@ -223,9 +267,36 @@ public static class AnalysisEndpoints
         c.Request.Body=new LimitedReadStream(c.Request.Body,bytes);
     }
 
-    private static async Task<IResult> Upload(HttpContext c)
+    private static async Task<IResult> Upload(HttpContext c, bool camera = false)
     {
-        var user=await User(c);var clinic=Clinic(c);
+        var user = camera ? null : await User(c);
+        var clinic = Clinic(c);
+        string CameraHeader(string name, int max)
+        {
+            var value = c.Request.Headers[name];
+            if (value.Count != 1 || value[0] is not { Length: > 0 } text || text.Length > max)
+                throw UploadFailure.Validation(new ErrorDetail(name, "invalid_header"));
+            return text;
+        }
+        System.Net.Http.Headers.AuthenticationHeaderValue? cameraBearer = null;
+        Guid tenant = default;
+        string? device = null, checksum = null;
+        if (camera)
+        {
+            var auth = c.Request.Headers.Authorization;
+            if (auth.Count != 1 || !System.Net.Http.Headers.AuthenticationHeaderValue.TryParse(auth[0], out cameraBearer)
+                || !string.Equals(cameraBearer.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase)
+                || cameraBearer.Parameter is not { Length: > 0 and <= 16384 })
+                throw new UploadFailure(401, "ERR_UNAUTHORIZED", "A camera service token is required.");
+            if (!Guid.TryParse(CameraHeader("X-Tenant-Id", 36), out tenant) || tenant == Guid.Empty)
+                throw UploadFailure.Validation(new ErrorDetail("X-Tenant-Id", "invalid_uuid"));
+            device = CameraHeader("X-Device-Id", 128);
+            checksum = CameraHeader("X-Camera-SHA256", 64);
+            if (!device.All(x => char.IsAsciiLetterOrDigit(x) || x is '.' or '_' or ':' or '-')
+                || checksum.Length != 64 || !checksum.All(char.IsAsciiHexDigitLower)
+                || CameraHeader("X-Camera-Version", 1) != "1")
+                throw UploadFailure.Validation(new ErrorDetail("camera", "invalid_camera_metadata"));
+        }
         var keys=c.Request.Headers["Idempotency-Key"];
         if(keys.Count!=1||!Guid.TryParse(keys[0],out var key)||key==Guid.Empty)
             throw UploadFailure.Validation(new ErrorDetail("Idempotency-Key","invalid_uuid"));
@@ -277,8 +348,26 @@ public static class AnalysisEndpoints
                 }
             }
             fields.TryGetValue("patientId",out var patient);fields.TryGetValue("modality",out var modality);fields.TryGetValue("eyeSide",out var eye);
+            CameraUploadBinding? binding = null;
+            var actor = user?.AccountId ?? Guid.Empty;
+            if (camera)
+            {
+                if (!Guid.TryParse(patient, out var patientId) || patientId == Guid.Empty || files.Count != 1)
+                    throw UploadFailure.Validation(new ErrorDetail("camera", "patient_and_single_image_required"));
+                var grant = await c.RequestServices.GetRequiredService<ICameraDelegation>()
+                    .ResolveAsync(cameraBearer!, patientId, tenant, clinic, device!, c.RequestAborted);
+                actor = grant.ActorAccountId!.Value;
+                binding = new(grant.GrantId!.Value, tenant, device!, checksum!);
+            }
             var result=await c.RequestServices.GetRequiredService<IAnalysisUploadHandler>().CreateAsync(
-                new(user.AccountId,clinic,key,Correlation(c),patient,modality,eye,files),c.RequestAborted);
+                new(actor,clinic,key,camera ? key.ToString("D") : Correlation(c),patient,modality,eye,files) { Camera = binding },c.RequestAborted);
+            if (camera)
+            {
+                var item = result.Response.Items.Single();
+                return Results.Json(new {requestId = key, deviceId = device, imageSha256 = checksum,
+                    version = 1, result.Response.BatchId, imageCount = 1, sourceAcceptedAt = result.Response.CreatedAt,
+                    correlationId = key.ToString("D"), item.AnalysisId, item.ProcessingStatus}, UploadJson.Options, statusCode: 202);
+            }
             var response=result.Response;
             if(c.Request.Path.StartsWithSegments("/api/v1/analyses/batches"))
                 response=response with { StatusUrl=$"/api/v1/analyses/batches/{response.BatchId:D}" };
