@@ -103,7 +103,7 @@ function BillingWorkspace({ context }: { context: BackendContext }) {
   }
 
   return <main className={styles.page}>
-    <nav aria-label="Điều hướng"><Link to="/">Trang chủ</Link> / Gói khám</nav>
+    <nav aria-label="Điều hướng"><Link to="/">Trang chủ</Link> / Gói khám · <Link to="/billing/history">Lịch sử thanh toán</Link></nav>
     <div className={styles.heading}>
       <div><h1>Mua gói khám</h1><p>Chọn gói và thực hiện giao dịch trong môi trường Sandbox.</p></div>
       <CreditBalanceBadge context={context} owner={ownerType === 'ACCOUNT'

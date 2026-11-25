@@ -175,13 +175,13 @@ describe('AdminManagementPage (TC-W6-M6-02)', () => {
           items: [
             {
               eventId: '55555555-5555-4555-8555-500000000005',
-              actorAccountId: adminId,
+              sourceService: 'profile-api',
               action: 'ACCOUNT_STATUS_UPDATED',
-              targetType: 'ACCOUNT',
-              targetId: targetAccountId,
-              reason: 'Kiểm tra định kỳ',
+              resourceType: 'ACCOUNT',
+              resourceIdHash: 'a'.repeat(64),
+              outcome: 'ALLOW',
               correlationId: 'corr-audit',
-              createdAt: '2026-11-18T12:00:00Z',
+              occurredAt: '2026-11-18T12:00:00Z',
             },
           ],
           nextCursor: null,

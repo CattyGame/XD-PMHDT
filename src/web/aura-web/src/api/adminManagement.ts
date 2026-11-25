@@ -59,13 +59,13 @@ export type AdminClinicPage = Readonly<{
 
 export type AdminAuditEvent = Readonly<{
   eventId: string
-  actorAccountId: string
+  sourceService: string
   action: string
-  targetType: string
-  targetId: string
-  reason: string | null
-  correlationId: string | null
-  createdAt: string
+  resourceType: string
+  resourceIdHash: string
+  correlationId: string
+  occurredAt: string
+  outcome: 'ALLOW' | 'DENY' | 'FAIL'
 }>
 
 export type AdminAuditEventPage = Readonly<{
@@ -154,27 +154,15 @@ function parseAdminClinic(item: unknown): AdminClinic {
 }
 
 function parseAuditEvent(item: unknown): AdminAuditEvent {
-  if (
-    !isRecord(item) ||
-    typeof item.eventId !== 'string' ||
-    typeof item.actorAccountId !== 'string' ||
-    typeof item.action !== 'string' ||
-    typeof item.targetType !== 'string' ||
-    typeof item.targetId !== 'string'
-  ) {
-    invalidResponse()
-  }
-
-  return {
-    eventId: item.eventId,
-    actorAccountId: item.actorAccountId,
-    action: item.action,
-    targetType: item.targetType,
-    targetId: item.targetId,
-    reason: typeof item.reason === 'string' ? item.reason : null,
-    correlationId: typeof item.correlationId === 'string' ? item.correlationId : null,
-    createdAt: String(item.createdAt ?? ''),
-  }
+  if (!isRecord(item) || typeof item.eventId !== 'string' || !validBatchId(item.eventId) ||
+    typeof item.sourceService !== 'string' || typeof item.action !== 'string' ||
+    typeof item.resourceType !== 'string' || typeof item.resourceIdHash !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(item.resourceIdHash) || typeof item.correlationId !== 'string' ||
+    typeof item.occurredAt !== 'string' || !Number.isFinite(Date.parse(item.occurredAt)) ||
+    (item.outcome !== 'ALLOW' && item.outcome !== 'DENY' && item.outcome !== 'FAIL')) invalidResponse()
+  return { eventId: item.eventId, sourceService: item.sourceService, action: item.action,
+    resourceType: item.resourceType, resourceIdHash: item.resourceIdHash,
+    correlationId: item.correlationId, occurredAt: item.occurredAt, outcome: item.outcome }
 }
 
 export async function listAdminAccounts(

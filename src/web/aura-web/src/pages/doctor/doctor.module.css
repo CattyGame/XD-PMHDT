@@ -58,6 +58,9 @@
 .formFields { display: grid; grid-template-columns: 1fr; gap: 14px; margin: 16px 0; }
 .formFields label, .notesLabel { display: block; font-size: .89rem; font-weight: 650; }
 .notesLabel { margin: 18px 0; }
+.provenance { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 14px; margin: 0; }
+.provenance dt { color: #55707d; font-size: .85rem; font-weight: 700; }
+.provenance dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 .modal { width: min(calc(100% - 44px), 500px); border: 0; background: #fff; border-radius: 14px; padding: 26px; box-shadow: 0 24px 72px rgba(0, 0, 0, .28); }
 .modal::backdrop { background: rgba(9, 30, 43, .66); }
 .modal h2 { margin-top: 0; color: #962d31; }

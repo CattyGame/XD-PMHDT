@@ -15,6 +15,8 @@ import PatientHistoryPage from '../pages/PatientHistoryPage'
 import ClinicInvitationPage from '../pages/ClinicInvitationPage'
 import BillingOrderPage from '../pages/BillingOrderPage'
 import FcmToastHost from '../components/FcmToastHost'
+import AdminPortalPage from '../pages/portal/AdminPortalPage'
+import OwnerViewsPage from '../pages/portal/OwnerViewsPage'
 import ProfilePage from '../pages/ProfilePage'
 
 function RouteLoadError() {
@@ -39,6 +41,8 @@ const BillingPage = lazyPage(() => import('../pages/billing/BillingPage'))
 const PaymentPage = lazyPage(() => import('../pages/billing/PaymentPage'))
 const PaymentSuccessPage = lazyPage(() => import('../pages/billing/PaymentSuccessPage'))
 const AdminManagementPage = lazyPage(() => import('../pages/AdminManagementPage'))
+
+const ConsultationsPage = lazyPage(() => import('../pages/consultations/ConsultationsPage'))
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
@@ -75,8 +79,13 @@ export default function ApplicationRoutes() {
       <Route path="*" element={<NotFoundPage />} />
       <Route path="/analyses/:analysisId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><NotificationInboxPage /></ProtectedRoute>}/>
+      <Route path="/consultations" element={<ProtectedRoute><ConsultationsPage /></ProtectedRoute>} />
       <Route path="/billing/orders/:orderId" element={<ProtectedRoute><BillingOrderPage /></ProtectedRoute>}/>
       <Route path="/billing/packages" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
+      <Route path="/billing/history" element={<ProtectedRoute><OwnerViewsPage /></ProtectedRoute>} />
+      <Route path="/clinics/analytics" element={<ProtectedRoute><OwnerViewsPage mode="clinic" /></ProtectedRoute>} />
+      <Route path="/doctor/activity" element={<ProtectedRoute><OwnerViewsPage mode="doctor" /></ProtectedRoute>} />
+      <Route path="/admin/:section" element={<ProtectedRoute><AdminPortalPage /></ProtectedRoute>} />
       <Route path="/billing/pay/:orderId" element={<ProtectedRoute><PaymentPage /></ProtectedRoute>} />
       <Route path="/billing/success/:orderId" element={<ProtectedRoute><PaymentSuccessPage /></ProtectedRoute>} />
       <Route path="/doctor/workspace" element={<ProtectedRoute><DoctorWorkspacePage /></ProtectedRoute>} />

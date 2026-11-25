@@ -758,24 +758,24 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
                   <tr>
                     <th>Thời gian</th>
                     <th>Hành động</th>
-                    <th>Đối tượng</th>
-                    <th>Lý do</th>
-                    <th>Actor Account ID</th>
+                    <th>Đối tượng (mã băm)</th>
+                    <th>Kết quả</th>
+                    <th>Dịch vụ</th>
                   </tr>
                 </thead>
                 <tbody>
                   {auditEvents.map((ev) => (
                     <tr key={ev.eventId}>
-                      <td>{ev.createdAt}</td>
+                      <td>{ev.occurredAt}</td>
                       <td>
                         <code>{ev.action}</code>
                       </td>
                       <td>
-                        {ev.targetType}: <code>{ev.targetId}</code>
+                        {ev.resourceType}: <code>{ev.resourceIdHash}</code>
                       </td>
-                      <td>{ev.reason ?? '—'}</td>
+                      <td>{ev.outcome ?? '—'}</td>
                       <td>
-                        <code>{ev.actorAccountId}</code>
+                        <code>{ev.sourceService}</code>
                       </td>
                     </tr>
                   ))}

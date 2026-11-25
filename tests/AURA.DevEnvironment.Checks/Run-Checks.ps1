@@ -62,7 +62,10 @@ try {
     $adminClinics = $gateway.ReverseProxy.Routes.'profile-admin-clinics'
     Assert-Check ($adminClinics.ClusterId -eq 'profile-cluster' -and $adminClinics.Match.Path -eq '/api/v1/admin/clinics' -and $adminClinics.Match.Methods -contains 'GET') 'Admin clinic listing is routed through Gateway to Profile'
     $adminAudit = $gateway.ReverseProxy.Routes.'profile-admin-audit'
-    Assert-Check ($adminAudit.ClusterId -eq 'profile-cluster' -and $adminAudit.Match.Path -eq '/api/v1/admin/audit-events' -and $adminAudit.Match.Methods -contains 'GET') 'Admin audit log is routed through Gateway to Profile'
+    $adminAuditRoutes = @($gateway.ReverseProxy.Routes.PSObject.Properties.Value | Where-Object {
+        $_.Match.Path -eq '/api/v1/admin/audit-events' -and (-not $_.Match.Methods -or $_.Match.Methods -contains 'GET')
+    })
+    Assert-Check ($adminAuditRoutes.Count -eq 1 -and $adminAudit.ClusterId -eq 'profile-cluster' -and $adminAudit.Match.Path -eq '/api/v1/admin/audit-events' -and $adminAudit.Match.Methods -contains 'GET') 'Exactly one Gateway route forwards admin audit reads to Profile'
     $profileProgram = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src/services/AURA.Profile.Api/Program.cs') -Raw
     Assert-Check ($profileProgram.Contains('app.MapAuditEndpoints();') -and -not $profileProgram.Contains('app.MapGet("/api/v1/admin/audit-events"')) 'One canonical shared audit handler replaces the legacy route'
     $consultationDoctors = $gateway.ReverseProxy.Routes.'profile-consultation-doctors'

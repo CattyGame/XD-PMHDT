@@ -290,6 +290,11 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
         : <p>API chưa cung cấp tham chiếu ảnh có quyền truy cập.</p>}
     </section>
     {result && <ReportDownloadButton resource="analyses" resourceId={analysisId} format="pdf" context={context} />}
+    {context.clinicContextId && validBatchId(context.clinicContextId) &&
+      (context.roles.includes('PATIENT') || context.roles.includes('DOCTOR')) &&
+      <p><Link to={`/consultations?analysisId=${analysisId}&clinicContextId=${context.clinicContextId}`}>
+        Tư vấn về ca này
+      </Link></p>}
   </section>
 }
 
