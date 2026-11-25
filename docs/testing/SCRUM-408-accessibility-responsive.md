@@ -9,7 +9,9 @@
 - **PASS (tự động)** — Login có focus outline và các label đọc được. Chromium kiểm Tab tới Email và có outline. `LoginPage.test.tsx` tái sử dụng các ca lỗi đăng nhập, trạng thái xác thực và chặn gửi trùng. Hai trang lỗi công khai 403/500 qua kiểm reflow ở 1024×768.
 - **PASS (định lượng CSS, mẫu)** — Một số màu chữ cỡ thường đã điều chỉnh để qua ngưỡng 4,5:1. Login #8493a2 → #586e81 trên trắng (3,15 → 5,30). Admin #0d6efd → #0a58ca trên nền #f5f8fb (4,22 → 6,04), trắng trên nút mới đạt 6,44. Doctor #138595 → #146e80 trên nền workspace (4,04 → 5,44), chữ phụ #637d88 → #536e7b trên trắng (4,36 → 5,41).
 - **PASS (Lighthouse hỗ trợ)** — `/login` đạt Accessibility **100/100**, Lighthouse 13.6.0, Google Chrome 158 headless, cấu hình mobile mặc định, Vite loopback với Firebase fixture, một lượt. Báo cáo JSON ở `src/web/aura-web/test-results/lh-login.json` trong checkout test. Phạm vi Lighthouse là trang công khai.
-- **BLOCKED** — Chat SCRUM-394 và các mở rộng SCRUM-389/393 chưa có trong `develop`. Kiểm live các màn hình bảo vệ cần môi trường khớp SCRUM-397 và tài khoản TEST. [PR #102](https://github.com/CattyGame/XD-PMHDT/pull/102) · [PR #103](https://github.com/CattyGame/XD-PMHDT/pull/103) · [PR #104](https://github.com/CattyGame/XD-PMHDT/pull/104).
+- **PASS (tự động)** — `301beaf` đặt ngôn ngữ tài liệu là tiếng Việt. Ba ca Login công khai tại 1024/1366/1920 tiếp tục qua cùng assertion reflow và xác nhận `lang="vi"`.
+- **PASS (smoke live TEST cục bộ)** — Chrome đăng nhập bằng ba vai trò TEST. SuperAdmin mở `/admin` và đọc danh sách clinic HTTP 200. Patient gặp trạng thái từ chối quản trị và sau logout phải đăng nhập lại. Build frontend `beca9c6` dùng Firebase TEST và Gateway loopback.
+- **BLOCKED** — Chat SCRUM-394 và các mở rộng SCRUM-389/393 chưa có trong `develop`. Gate live còn chờ candidate deployment khớp SCRUM-397. [PR #102](https://github.com/CattyGame/XD-PMHDT/pull/102) · [PR #103](https://github.com/CattyGame/XD-PMHDT/pull/103) · [PR #104](https://github.com/CattyGame/XD-PMHDT/pull/104).
 
 ## Viewport đã thực thi
 
@@ -37,6 +39,6 @@ Các kiểm reflow dùng chiều rộng tài liệu trừ viewport ≤ 1 px. Doc
 | Zoom trình duyệt thật 200%, kiểm che mất nội dung và khả năng dùng bảng cuộn | SKIPPED |
 | Screen reader, thứ tự focus toàn bộ sáu luồng và thông báo loading/empty/null/409/deny | SKIPPED. Chat BLOCKED |
 | Contrast thực tế mọi trạng thái tương tác, màu hệ thống và ảnh/gradient | SKIPPED. Đã đối chiếu mẫu màu CSS |
-| Môi trường live đúng SHA, sáu luồng với quyền, điều kiện mạng và dữ liệu TEST | BLOCKED — M6 cung cấp candidate SCRUM-397; M5 xác minh bằng tài khoản TEST |
+| Môi trường live đúng SHA, sáu luồng với quyền, điều kiện mạng và dữ liệu TEST | BLOCKED — M6 cung cấp candidate SCRUM-397. Ba tài khoản TEST đã dùng cho smoke cục bộ |
 
 Nghiệm thu còn phụ thuộc checklist thủ công và các luồng tích hợp.
