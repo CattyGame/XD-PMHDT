@@ -142,13 +142,13 @@ describe('adminManagement API client (W6-M6-02)', () => {
         items: [
           {
             eventId: '44444444-4444-4444-8444-400000000004',
-            actorAccountId: adminContext.accountId,
+            sourceService: 'profile-api',
             action: 'CLINIC_STATUS_UPDATED',
-            targetType: 'CLINIC',
-            targetId: clinicId,
-            reason: 'Đủ giấy phép',
+            resourceType: 'CLINIC',
+            resourceIdHash: 'a'.repeat(64),
+            outcome: 'ALLOW',
             correlationId: 'corr-1',
-            createdAt: '2026-11-18T00:00:00Z',
+            occurredAt: '2026-11-18T00:00:00Z',
           },
         ],
         nextCursor: null,

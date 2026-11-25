@@ -1,0 +1,23 @@
+.nav, .controls, .sectionHeading { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; }
+.nav a { padding: 8px 12px; border-radius: 8px; }
+.nav a[aria-current='page'] { background: #e9f4f7; color: #105e72; font-weight: 700; }
+.sectionHeading { justify-content: space-between; margin-bottom: 12px; }
+.sectionHeading h2 { margin: 0; }
+.controls { align-items: end; margin: 12px 0; }
+.controls label, .editor label { display: block; font-size: .9rem; font-weight: 650; }
+.controls :is(input, select), .editor :is(input:not([type='checkbox']), select, textarea) { display: block; margin: 6px 0 0; padding: 8px 10px; width: 100%; min-width: 0; border: 1px solid #bfd3dc; border-radius: 8px; color: #17374a; background: #fff; font: inherit; }
+.editor { display: grid; gap: 12px; margin: 12px 0 20px; padding: 14px; min-width: 0; border: 1px solid #dce7ee; border-radius: 10px; }
+.editor button { justify-self: start; }
+.editor legend { font-weight: 700; }
+.editorRow { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; }
+.tableWrap { overflow: auto; margin: 14px 0; }
+.table { width: 100%; border-collapse: collapse; text-align: left; font-size: .9rem; }
+.table th { background: #e9f4f7; color: #31566a; white-space: nowrap; }
+.table :is(th, td) { padding: 12px 10px; border-bottom: 1px solid #dce7ee; vertical-align: top; }
+.table td { overflow-wrap: anywhere; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr)); gap: 12px; }
+.metrics > div { background: #e9f4f7; padding: 12px; border-radius: 10px; }
+.metrics dt { font-size: .88rem; }
+.metrics dd { margin: 5px 0 0; font-weight: 750; }
+.wrap { overflow-wrap: anywhere; }
+.editor :focus-visible, .controls :focus-visible, .tableWrap:focus-visible { outline: 3px solid #4d9bb0; outline-offset: 3px; }
