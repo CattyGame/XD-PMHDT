@@ -86,6 +86,34 @@ public sealed class ItemUploadPostgresTests
     private static UploadManifestItem Item(Guid patient,string name,byte[] bytes)=>new(Guid.NewGuid(),patient,name,Hash(bytes),"FUNDUS","left");
 
     [PostgresFact]
+    public async Task Camera_replay_after_handler_restart_returns_original_receipt_without_new_job_or_credit()
+    {
+        await using var f = new Fixture();
+        var bytes = TestImages.Png(100, 100);
+        var command = new UploadCommand(f.Actor, f.Clinic, Guid.NewGuid(), "camera-test", Guid.NewGuid().ToString(),
+            "FUNDUS", "left", [new MemFile("camera.png", bytes, "image/png")])
+        { Camera = new(Guid.NewGuid(), f.Tenant, "device-1", Hash(bytes)) };
+        DurableUploadService Service() => new(
+            new UploadPlanningService(new(), f.Policy, new PostgresUploadRepository(f.Db), f.Clock),
+            new PostgresUploadRecoveryRepository(f.Db), f.Billing, f.Storage, new Progress());
+        var badHash = command with { Camera = command.Camera with { ImageSha256 = new string('0', 64) } };
+        Assert.Equal(400, (await Assert.ThrowsAsync<UploadFailure>(() => Service().CreateAsync(badHash, default))).Status);
+        Assert.Equal(0, f.Billing.ReserveCalls);
+        var first = await Service().CreateAsync(command, default);
+        var replay = await Service().CreateAsync(command, default);
+        Assert.True(replay.Replayed);
+        Assert.Equal(first.Response.BatchId, replay.Response.BatchId);
+        Assert.Equal(first.Response.CreatedAt, replay.Response.CreatedAt);
+        Assert.Equal(Assert.Single(first.Response.Items), Assert.Single(replay.Response.Items));
+        var different = TestImages.Png(120, 100);
+        var conflict = command with { Files = [new MemFile("camera.png", different, "image/png")],
+            Camera = command.Camera with { ImageSha256 = Hash(different) } };
+        Assert.Equal(409, (await Assert.ThrowsAsync<UploadFailure>(() => Service().CreateAsync(conflict, default))).Status);
+        Assert.Equal(1, f.Billing.ReserveCalls);
+        Assert.Equal(1, await f.Count("SELECT count(*) FROM analysis.jobs j JOIN analysis.images i ON i.id=j.image_id WHERE i.batch_id=$1", first.Response.BatchId));
+    }
+
+    [PostgresFact]
     public async Task Manifest_exact_replay_is_stable_and_changed_metadata_conflicts_without_credit()
     {
         await using var f=new Fixture();var bytes=TestImages.Png(100,100);var item=Item(Guid.NewGuid(),"manifest.png",bytes);

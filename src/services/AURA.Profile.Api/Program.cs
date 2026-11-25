@@ -1,6 +1,7 @@
 using AURA.Profile.Api;
 using AURA.Profile.Api.Models;
 using Npgsql;
+using AURA.Common.Audit;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,6 +44,7 @@ builder.Services.AddHttpClient("AnalysisClient", client =>
 
 builder.Services.AddSingleton<ServiceTokenValidator>();
 
+builder.Services.AddOwnerAudit(builder.Configuration, AuditSource.Profile);
 var app = builder.Build();
 
 // Validate provisioned service-auth material before health or business routes start.
@@ -71,6 +73,7 @@ app.Use(async (context, next) =>
 });
 
 app.MapHealthChecks("/health");
+app.MapAuditEndpoints();
 
 // 1. POST /internal/v1/profile/provision (Bảo vệ bằng Service JWT: scope profile:provision)
 app.MapPost("/internal/v1/profile/provision", async (
@@ -289,39 +292,7 @@ app.MapPost("/internal/v1/profile/clinic-access/resolve", async Task<IResult> (H
     {return Results.StatusCode(503);}
 });
 
-// 5. POST /internal/v1/profile/camera-delegation/resolve (Bảo vệ bằng Service JWT: scope profile:resolve)
-app.MapPost("/internal/v1/profile/camera-delegation/resolve", async (
-    HttpRequest request,
-    CameraDelegationResolveRequest body,
-    ProfileRepository repository,
-    ServiceTokenValidator tokenValidator,
-    CancellationToken ct) =>
-{
-    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
-
-    var authHeader = request.Headers.Authorization.FirstOrDefault();
-    if (string.IsNullOrWhiteSpace(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-    {
-        return Results.Json(
-            new ErrorEnvelope(new ErrorDetails("ERR_UNAUTHORIZED", "Thiếu service token xác thực.", correlationId, false)),
-            statusCode: StatusCodes.Status401Unauthorized);
-    }
-
-    var token = authHeader["Bearer ".Length..].Trim();
-    var (valid, _, errCode, errMsg) = await tokenValidator.ValidateTokenAsync(token, "aura-profile", "profile:resolve");
-    if (!valid)
-    {
-        var statusCode = errCode == "ERR_FORBIDDEN" ? StatusCodes.Status403Forbidden : StatusCodes.Status401Unauthorized;
-        return Results.Json(
-            new ErrorEnvelope(new ErrorDetails(errCode ?? "ERR_UNAUTHORIZED", errMsg ?? "Service token không hợp lệ.", correlationId, false)),
-            statusCode: statusCode);
-    }
-
-    var response = await repository.ResolveCameraDelegationAsync(body, ct);
-    return Results.Ok(response);
-})
-.WithName("ResolveCameraDelegation")
-.WithTags("Internal");
+app.MapCameraDelegation();
 
 static async Task<IResult?> AuthorizeProfileResolveServiceAsync(
     HttpRequest request,
@@ -497,88 +468,6 @@ app.MapGet("/api/v1/admin/clinics", async (
 .WithName("ListAdminClinics")
 .WithTags("Admin");
 
-// GET /api/v1/admin/audit-events (Admin xem nhật ký kiểm toán không chứa PHI)
-app.MapGet("/api/v1/admin/audit-events", async (
-    HttpRequest request,
-    ProfileRepository repository,
-    UserIdentityResolver identityResolver,
-    CancellationToken ct,
-    string? from = null,
-    string? to = null,
-    int limit = 20,
-    string? cursor = null) =>
-{
-    request.HttpContext.Response.Headers.CacheControl = "no-store";
-    var correlationId = (string)request.HttpContext.Items["CorrelationId"]!;
-    var identity = await identityResolver.ResolveAsync(request, ct);
-    if (!identity.Succeeded)
-    {
-        return Results.Json(
-            new ErrorEnvelope(new ErrorDetails(identity.Code, identity.Message, correlationId, identity.Retryable)),
-            statusCode: identity.StatusCode);
-    }
-
-    if (!identity.Roles.Contains("SYSTEM_ADMIN", StringComparer.OrdinalIgnoreCase))
-    {
-        return Results.Json(
-            new ErrorEnvelope(new ErrorDetails("ERR_FORBIDDEN", "Chỉ Quản trị viên hệ thống mới có quyền xem nhật ký kiểm toán.", correlationId, false)),
-            statusCode: StatusCodes.Status403Forbidden);
-    }
-
-    if (limit is < 1 or > 100)
-    {
-        return Results.Json(
-            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số limit phải nằm trong khoảng 1..100.", correlationId, false)),
-            statusCode: StatusCodes.Status400BadRequest);
-    }
-
-    var toTime = DateTimeOffset.UtcNow;
-    if (!string.IsNullOrWhiteSpace(to))
-    {
-        if (!DateTimeOffset.TryParse(to, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out toTime))
-        {
-            return Results.Json(
-                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số thời gian 'to' không hợp lệ.", correlationId, false)),
-                statusCode: StatusCodes.Status400BadRequest);
-        }
-    }
-
-    var fromTime = toTime.AddDays(-30);
-    if (!string.IsNullOrWhiteSpace(from))
-    {
-        if (!DateTimeOffset.TryParse(from, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out fromTime))
-        {
-            return Results.Json(
-                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Tham số thời gian 'from' không hợp lệ.", correlationId, false)),
-                statusCode: StatusCodes.Status400BadRequest);
-        }
-    }
-
-    if (fromTime > toTime)
-    {
-        return Results.Json(
-            new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Khoảng thời gian 'from' phải nhỏ hơn hoặc bằng 'to'.", correlationId, false)),
-            statusCode: StatusCodes.Status400BadRequest);
-    }
-
-    Guid? cursorEventId = null;
-    if (!string.IsNullOrWhiteSpace(cursor))
-    {
-        if (!Guid.TryParse(cursor, out var parsed) || parsed == Guid.Empty)
-        {
-            return Results.Json(
-                new ErrorEnvelope(new ErrorDetails("ERR_VALIDATION", "Con trỏ phân trang (cursor) không hợp lệ.", correlationId, false)),
-                statusCode: StatusCodes.Status400BadRequest);
-        }
-        cursorEventId = parsed;
-    }
-
-    var page = await repository.ListAuditEventsAdminAsync(fromTime, toTime, limit, cursorEventId, ct);
-    return Results.Ok(page);
-})
-.WithName("ListAdminAuditEvents")
-.WithTags("Admin");
-
 // PATCH /api/v1/admin/clinics/{clinicId:guid}/status (Admin xét duyệt trạng thái phòng khám)
 app.MapPatch("/api/v1/admin/clinics/{clinicId:guid}/status", async (
     Guid clinicId,
@@ -699,7 +588,7 @@ app.MapPost("/api/v1/clinics/{clinicId:guid}/memberships/invite", async (
             statusCode: StatusCodes.Status400BadRequest);
     }
 
-    var (result, errorCode) = await repository.InviteClinicMemberAsync(clinicId, body.Email, normalizedRole, ct);
+    var (result, errorCode) = await repository.InviteClinicMemberAsync(clinicId, body.Email, normalizedRole, identity.AccountId, ct, correlationId);
     if (errorCode == "ERR_MEMBERSHIP_ALREADY_EXISTS")
     {
         return Results.Json(
@@ -808,7 +697,7 @@ app.MapPost("/api/v1/clinics/{clinicId:guid}/memberships", async (
 
     var targetRole = body.Role.Trim().ToUpperInvariant();
     var (success, member, errCode, errMsg) = await repository.AddOrReactivateClinicMemberAsync(
-        clinicId, body.AccountId, targetRole, ct);
+        clinicId, body.AccountId, targetRole, identity.AccountId, ct, correlationId);
 
     if (!success)
     {
@@ -864,7 +753,7 @@ app.MapDelete("/api/v1/clinics/{clinicId:guid}/memberships/{accountId:guid}", as
             statusCode: StatusCodes.Status403Forbidden);
     }
 
-    var (success, errCode, errMsg) = await repository.RevokeClinicMemberAsync(clinicId, accountId, ct);
+    var (success, errCode, errMsg) = await repository.RevokeClinicMemberAsync(clinicId, accountId, identity.AccountId, ct, correlationId);
     if (!success)
     {
         var statusCode = errCode switch

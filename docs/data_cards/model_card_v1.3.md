@@ -144,3 +144,30 @@ Trong phiên bản `v1.3` (`src/ai-core/app/services/frangi_service.py`), phép 
 3. **Khuyến nghị cấu hình Container cho `M1` & `M2` khi chạy Batch `>= 100` ảnh**:
    * Đặt `AURA_FRANGI_CONFIG_PATH=/app/config/ai-frangi-v1.3.yaml` (hoặc `AURA_RISK_AVAILABLE=true`) khi kích hoạt luồng Contract `1.3.0` cho Sprint 4–5; giữ nguyên `/app/config/ai-frangi.yaml` khi cần tương thích ngược Contract `1.2.0` của Sprint 3.
    * Với `10` luồng gọi đồng thời vào cùng 1 container `ai-core`, đỉnh RSS đạt `~1.04 GiB`; khuyến nghị `M1` cấp `mem_limit: 1536m` (hoặc `2g`) cho container `ai-core` và `M2` giữ `HttpClient.Timeout >= 15s` để bao phủ cả phân vị `P95 = 6.27s` khi dồn `10` request cạnh tranh CPU đồng thời.
+
+---
+
+## 7. Model Card V2 Addendum — Pipeline Nghiên cứu Tích hợp & Versioned Manifest Rollout (Sprint 6: `W6-M4-01`, `W6-M4-02`, `W6-M4-03`)
+
+Bổ sung thông số cho phiên bản nghiên cứu tích hợp **V2** (`AURA_INTEGRATED_RESEARCH_ENABLED=true`) và cơ chế nâng cấp/rollback manifest an toàn theo `docs/benchmarks/model_card_v2_registry.json`.
+
+### 7.1. Chi tiết Mô hình Nghiên cứu Tích hợp (`integrated_inference.py`)
+
+| Thành phần | Thuật toán & Kiến trúc | Kiểm soát rò rỉ dữ liệu & Tọa độ | Hash / Phiên bản & Lệnh tái lập |
+|---|---|---|---|
+| **Frangi Baseline / HRF Proxy** | Separable 6-pass 2D Hessian Filter | Không resize/crop trên baseline; giữ nguyên geometry ảnh gốc | `ai-frangi.yaml` (`sha256: 0b0451ca...a0ee`), `ai-frangi-v1.3.yaml` (`dd444ce8...5087`), `ai-frangi-hrf.yaml` (`8af374dc...9aca`) |
+| **Binary DR Screening (`SCRUM-372` V2)** | `ResNet34` (`IMAGENET1K_V1` frozen backbone) + Linear head + autograd `Grad-CAM` (`layer4`) | Patient-level split HRF (`18 train / 6 val / 6 test`); `15 Glaucoma` tách riêng OOD; chọn epoch bằng Val AUC; `gradcam_geometry = IMAGENET_CENTER_CROP_224` (`Resize 256 -> Crop 224x224`) | Lệnh: `python src/ai-core/scripts/train_dr_cnn.py --output model-artifacts/dr-resnet34-hrf-v1/model.pt --epochs 100` (`val_auc=0.8889`, `test_auc=1.0`, `sha256` với `torch 2.14.1+cpu`: `8c9114c5...f8f7`) |
+| **AVR V8 & OD Localization (`SCRUM-373`)** | `RRWNET_RITE` (`CC-BY-NC-4.0`) hoặc `PIXEL_MLP_RGB_DOG` + `lunetv2_odc.onnx` + Zone B (`2R..3R`) Knudtson (`0.88`/`0.95`) | Threshold hiệu chỉnh chỉ trên 15 ca val của `AVRDB`; `predict` chỉ dùng RGB; không đủ `6A+6V` trả `avr=null + unavailable_reason`, tính vào mẫu số `coverage` | Lệnh tải: `python src/ai-core/scripts/fetch_avr_rrwnet.py` (`model.safetensors`: `32d93fa7...4485`, `lunetv2_odc.onnx`: `f72f6c9e...b5f`) |
+
+### 7.2. Ranh giới An toàn, Rollout Manifest & Gate Khoa học
+
+1. **Tách bạch rõ `is_mock` / `research` / `clinical`:** Mọi response chứa `research` (DR + AVR V8) bắt buộc giữ `is_mock = false` và `risk_available = false`, `risk_assessment = null`. Xác suất DR nhị phân trên HRF **không phải** phân độ ICDR lâm sàng.
+2. **Versioned Config & Safe Rollout (`W6-M4-02`):** Quản trị viên `SYSTEM_ADMIN` chỉ được kích hoạt `artifactManifestId` + `thresholdConfigSha256` nằm trong registry phía server (`src/ai-core/config/artifact-manifests.json`) thông qua `/api/v1/admin/ai/config`; từ chối mọi path/URL tùy ý, chạy smoke verification trước atomic switch, pin snapshot cho các request đang chạy và cho phép rollback về manifest liền trước. AI Core không mở public reload endpoint.
+3. **Gate Khoa học `SCRUM-373` (`OPEN_NOT_PASSED`):** Giá trị baseline trên `29` ca INSPIRE-AVR cho thấy `Mean AVR MAE = 0.2335`, `Mean AVR Bias = -0.2136` (mục tiêu `|bias| <= 0.02` trên bảng 2 chuyên gia Iowa 40 ca vẫn mở). Gate khoa học này được giữ tách biệt và không đánh dấu `PASS` giả bằng script.
+
+---
+
+## 8. Sprint 8 Artifact Registry & Reproducibility Handover (`W8-M4-01` / `SCRUM-423`, `W8-M4-02` / `SCRUM-424`)
+
+- **Registry có kiểm chứng SHA-256:** Toàn bộ cấu hình Frangi YAML, trọng số JSON 13 đặc trưng DR (`dr_screening_weights.json`), thông số tái huấn luyện PyTorch `ResNet34` (`8c9114c54f1b06300081bb82b80a0ea3a10e3d035232e1c5f3570b2db42df8f7`), `RRWNet` SafeTensors (`32d93fa770f2f1c52359cc30ae524346043443b972b108974dbf524db8104485`, `CC-BY-NC-4.0`) và `lunetv2_odc.onnx` (`f72f6c9ea2ade798b80539de77fa610bb6553bb0fd7fcb78d1e841982cae0b5f`, **artifact ONNX duy nhất hiện hữu**) được pin tập trung trong [`docs/benchmarks/w8_artifact_registry_v1.0.json`](../benchmarks/w8_artifact_registry_v1.0.json) và hướng dẫn [`docs/data_cards/w8_artifact_reproducibility_guide.md`](w8_artifact_reproducibility_guide.md).
+- **Nghiệm thu chức năng vs. Kiểm định khoa học tách biệt:** Biên bản nghiệm thu V2 và đối chiếu RTM được công bố tại [`docs/ai/w8_m4_v2_software_and_scientific_acceptance.md`](../ai/w8_m4_v2_software_and_scientific_acceptance.md) và [`docs/benchmarks/w8_v2_acceptance_summary.json`](../benchmarks/w8_v2_acceptance_summary.json), bảo đảm `clinicalValidation = false`, không sinh `expert_confirmed` từ `AUTO` và giữ `SCRUM-373 = OPEN_NOT_PASSED`.

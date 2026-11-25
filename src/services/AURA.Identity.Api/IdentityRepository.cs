@@ -1,5 +1,6 @@
 using AURA.Identity.Api.Models;
 using Npgsql;
+using AURA.Common.Audit;
 
 namespace AURA.Identity.Api;
 
@@ -221,7 +222,7 @@ public class IdentityRepository
             audit.Parameters.AddWithValue(actor);
             audit.Parameters.AddWithValue(target);
             audit.Parameters.AddWithValue(approved);
-            audit.Parameters.AddWithValue(reason);
+            audit.Parameters.AddWithValue("sha256:" + AuditEvent.Correlation(reason));
             await audit.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -239,11 +240,14 @@ public class IdentityRepository
             lifecycleAudit.Parameters.AddWithValue(previousRoles);
             lifecycleAudit.Parameters.AddWithValue(newRoles);
             lifecycleAudit.Parameters.AddWithValue(nextVersion);
-            lifecycleAudit.Parameters.AddWithValue(reason);
+            lifecycleAudit.Parameters.AddWithValue("sha256:" + AuditEvent.Correlation(reason));
             lifecycleAudit.Parameters.AddWithValue((object?)correlationId ?? DBNull.Value);
             await lifecycleAudit.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        await AuditStore.AppendAsync(connection, tx, AuditEvent.Create(AuditSource.Identity, actor,
+            AuditAction.RoleChanged, AuditResource.Account, target.ToString("D"), correlationId,
+            resourceVersion: nextVersion), cancellationToken);
         await tx.CommitAsync(cancellationToken);
         return true;
     }
@@ -606,6 +610,9 @@ public class IdentityRepository
             await auditCmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        await AuditStore.AppendAsync(connection, tx, AuditEvent.Create(AuditSource.Identity, actorAccountId,
+            AuditAction.RoleChanged, AuditResource.Account, targetAccountId.ToString("D"), correlationId,
+            resourceVersion: nextVersion), cancellationToken);
         await tx.CommitAsync(cancellationToken);
 
         var updated = await GetAdminAccountByIdAsync(targetAccountId, cancellationToken, connection);

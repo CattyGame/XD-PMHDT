@@ -33,7 +33,7 @@ app.MapPost("/api/v1/clinics/invitations/{membershipId:guid}/accept", async (
 
     if (!identity.EmailVerified || string.IsNullOrWhiteSpace(identity.Email))
         return Results.Json(new ErrorEnvelope(new ErrorDetails("ERR_EMAIL_UNVERIFIED","A verified Firebase email is required.",correlationId,false)),statusCode:403);
-    var (succeeded,errorCode,member)=await repository.AcceptClinicInvitationExplicitAsync(identity.AccountId,identity.Email,membershipId,body.Token,ct);
+    var (succeeded,errorCode,member)=await repository.AcceptClinicInvitationExplicitAsync(identity.AccountId,identity.Email,membershipId,body.Token,ct,correlationId);
 
     if (!succeeded)
     {

@@ -14,6 +14,29 @@ namespace AURA.M1.RegressionTests;
 public class NotificationTests
 {
     [M1PostgresFact]
+    public async Task Delivery_uses_confirmed_generic_template_and_can_be_disabled_without_sending()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var templates = new PushTemplates(f.Db.Notification);
+        var template = (await templates.ForEventAsync("ANALYSIS_COMPLETED", default))!;
+        var change = new PushTemplateChange(template.Version, "Thông báo từ {{app_name}}",
+            "{{event_label}}. Đăng nhập để xem chi tiết.", true, "Fixture");
+        Assert.NotNull(await templates.UpdateAsync(template.Id, change, f.Account, "fixture", default));
+        await f.DeviceAsync("good");
+        await f.Consumer.ProcessNotificationEventAsync(f.Event("analysis.completed"), default);
+        Assert.Equal(1, await f.Worker.DispatchPendingAsync(default));
+        var push = Assert.Single(f.Provider.Messages);
+        Assert.Equal("Thông báo từ AURA", push.Notification.Title);
+        Assert.Equal("Có thông báo mới. Đăng nhập để xem chi tiết.", push.Notification.Body);
+        Assert.NotNull(await templates.UpdateAsync(template.Id, change with { ExpectedVersion = 2, Enabled = false },
+            f.Account, "fixture", default));
+        await f.Consumer.ProcessNotificationEventAsync(f.Event("analysis.completed"), default);
+        Assert.Equal(1, await f.Worker.DispatchPendingAsync(default));
+        Assert.Single(f.Provider.Messages);
+        Assert.Equal(1L, await f.Db.ScalarAsync<long>("SELECT count(*) FROM notification.delivery_jobs WHERE last_error='TEMPLATE_DISABLED'"));
+    }
+
+    [M1PostgresFact]
     public async Task Clinic_notification_keeps_server_resolved_selector_in_inbox_and_push()
     {
         await using var f=await Fixture.CreateAsync();
@@ -182,7 +205,7 @@ public class NotificationTests
             Worker=NewWorker();
         }
         public static async Task<Fixture> CreateAsync()=>new(await Database.CreateAsync());
-        public NotificationDeliveryWorker NewWorker()=>new(Jobs,Devices,Accounts,Provider,_config,NullLogger<NotificationDeliveryWorker>.Instance);
+        public NotificationDeliveryWorker NewWorker()=>new(Jobs,Devices,Accounts,Provider,new PushTemplates(Db.Notification),_config,NullLogger<NotificationDeliveryWorker>.Instance);
         public async Task<Guid> DeviceAsync(string token) {var id=Guid.NewGuid();await Devices.RegisterAsync("m1-tests",Accounts.Uid,id,token,default);return id;}
         public string Event(string type)=>JsonSerializer.Serialize(new{eventId=Guid.NewGuid(),schemaVersion="1.0",eventType=type,analysisId=Guid.NewGuid(),orderId=Order,tenantId=Tenant});
         public Task<string> StatusAsync(Guid device)=>Db.ScalarAsync<string>("SELECT status FROM notification.delivery_jobs WHERE device_id=$1",device);

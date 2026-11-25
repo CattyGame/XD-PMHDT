@@ -108,4 +108,12 @@ public static class AnalysisUserPolicy
             || !context.Roles.Any(r => r is "PATIENT" or "DOCTOR" or "CLINIC_ADMIN"))
             throw new UploadFailure(403, "ERR_FORBIDDEN", "Vai trò không được phép dùng chức năng này.");
     }
+
+    public static void RequireSystemAdmin(AnalysisUserContext context)
+    {
+        if (context.AccountId == Guid.Empty || context.Roles is null)
+            throw new UploadFailure(401, "ERR_UNAUTHORIZED", "Cần xác thực tài khoản.");
+        if (!context.Roles.Contains("SYSTEM_ADMIN", StringComparer.Ordinal))
+            throw new UploadFailure(403, "ERR_FORBIDDEN", "Chỉ SYSTEM_ADMIN được phép quản lý cấu hình AI.");
+    }
 }

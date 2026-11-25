@@ -1,6 +1,8 @@
 using System.Net;
 using AURA.Billing.Api.Auth;
 using AURA.Billing.Api.Models;
+using AURA.Billing.Api.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace AURA.Billing.Api.Tests.Auth;
@@ -34,6 +36,24 @@ public sealed class StaleReconciliationSafetyTests
 
         Assert.Equal("ERR_ANALYSIS_RESOLVER_INVALID_CAPTURE", ex.Code);
         Assert.False(ex.Retryable);
+    }
+
+    [Fact]
+    public async Task Unknown_nonterminal_analysis_outcome_never_executes_a_refund()
+    {
+        var settlement=new CreditSettlementService(null!,NullLogger<CreditSettlementService>.Instance);
+        var resolution=settlement.Resolve(new SettlementEventContext(
+            _eventId,_analysisId,_tenantId,_reservationId,1,"UNKNOWN",IsTerminal:false,
+            HasValidResult:false,IsRetryable:false,FailureReason:"UNKNOWN",IsMock:false));
+
+        Assert.False(resolution.Applicable);
+        Assert.Equal(SettlementAction.None,resolution.Action);
+        Assert.Equal("NOT_TERMINAL",resolution.Reason);
+
+        var execution=await settlement.ExecuteAsync(resolution,Guid.NewGuid(),CancellationToken.None);
+        Assert.True(execution.Succeeded);
+        Assert.Equal(SettlementAction.None,execution.Action);
+        Assert.Null(execution.Reservation);
     }
 
     [Fact]

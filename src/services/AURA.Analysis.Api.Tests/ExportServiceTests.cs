@@ -3,11 +3,53 @@ using AURA.Analysis.Api.Campaign;
 using AURA.Analysis.Api.Exports;
 using AURA.Analysis.Api.Upload;
 using Xunit;
+using AURA.Common.Audit;
+using AURA.Analysis.Api.Auth;
+using AURA.Analysis.Api.Http;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System.Net;
 
 namespace AURA.Analysis.Api.Tests;
 
 public sealed class ExportServiceTests
 {
+    [Fact]
+    public async Task Export_download_uses_shared_audit_and_fails_closed_after_audit_outage_or_scope_revocation()
+    {
+        var actor=Guid.NewGuid();var tenant=Guid.NewGuid();var clinic=Guid.NewGuid();var patient=Guid.NewGuid();
+        var repository=new ExportRepositoryFake();var authority=new RevocableResearchAuthority(tenant,clinic,[patient]);
+        var exports=new ExportService(repository,new CampaignsFake(),new ClinicAuthorityFake(),authority,new StorageFake(),new(),TimeProvider.System);
+        var receipt=await exports.CreateResearchExportAsync(actor,new(clinic,null,"research fixture","CSV",false),"audit-export",null,default);
+        var audit=new ExportAuditWriter();
+        var builder=WebApplication.CreateBuilder();builder.WebHost.UseTestServer();builder.Logging.ClearProviders();
+        builder.Services.AddSingleton(exports);builder.Services.AddSingleton<IAuditWriter>(audit);
+        builder.Services.AddSingleton<IAnalysisUserIdentityResolver>(new ExportIdentity(actor));
+        await using var app=builder.Build();app.MapAnalysisEndpoints();await app.StartAsync();using var client=app.GetTestClient();
+        var url=$"/api/v1/reports/{receipt.ReportId:D}/content?clinicContextId={clinic:D}";
+        using(var response=await client.GetAsync(url)) Assert.Equal(HttpStatusCode.OK,response.StatusCode);
+        var e=Assert.Single(audit.Events);Assert.Equal(AuditAction.ReportDownload,e.Action);
+        Assert.Equal(receipt.ReportId.ToString("D"),e.ResourceId);Assert.Equal(tenant,e.TenantId);Assert.Equal(1,e.ResourceVersion);
+        audit.Down=true;
+        using(var response=await client.GetAsync(url)) Assert.Equal(HttpStatusCode.ServiceUnavailable,response.StatusCode);
+        Assert.Single(audit.Events);
+        audit.Down=false;authority.AuthorizedPatients=[];
+        using(var response=await client.GetAsync(url)) Assert.Equal(HttpStatusCode.Forbidden,response.StatusCode);
+        Assert.Equal(AuditOutcome.Denied,audit.Events.Last().Outcome);
+    }
+
+    private sealed class ExportIdentity(Guid actor):IAnalysisUserIdentityResolver
+    { public Task<AnalysisUserContext> ResolveAsync(HttpRequest request,CancellationToken ct)=>Task.FromResult(new AnalysisUserContext(actor,["PATIENT"])); }
+    private sealed class ExportAuditWriter:IAuditWriter
+    {
+        public bool Down;public List<AuditEvent> Events=[];
+        public Task AppendAsync(AuditEvent e,CancellationToken ct)
+        { if(Down)throw new IOException("Test-only audit outage");Events.Add(e);return Task.CompletedTask; }
+    }
     [Fact]
     public async Task Rejects_truncated_500_patient_authority_scope_before_reading_results()
     {

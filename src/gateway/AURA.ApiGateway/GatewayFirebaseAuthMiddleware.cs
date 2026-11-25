@@ -58,8 +58,24 @@ public sealed class GatewayFirebaseAuthMiddleware(
     RequestDelegate next,
     ILogger<GatewayFirebaseAuthMiddleware> logger)
 {
+    public static void RemoveUntrustedIdentityHeaders(HttpRequest request)
+    {
+        request.Headers.Remove("X-Account-Id");
+        request.Headers.Remove("X-Role");
+        // Camera tenant is a selector; Profile verifies it against the signed service and grant.
+        if (!IsCameraPost(request)) request.Headers.Remove("X-Tenant-Id");
+        request.Headers.Remove("X-User-Authorization");
+    }
+
     public async Task InvokeAsync(HttpContext context)
     {
+        if (!context.Request.IsHttps && IsCameraPost(context.Request) &&
+            context.RequestServices.GetRequiredService<IConfiguration>().GetValue<bool>("Gateway:RequireCameraHttps"))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+
         var isConsultationHub = context.Request.Path.StartsWithSegments("/hubs/consultations");
         if (!isConsultationHub && !RequiresUserToken(context.Request))
         {
@@ -166,6 +182,10 @@ public sealed class GatewayFirebaseAuthMiddleware(
         await next(context);
     }
 
+    private static bool IsCameraPost(HttpRequest request) =>
+        HttpMethods.IsPost(request.Method) &&
+        string.Equals(request.Path.Value?.TrimEnd('/'), "/api/v1/analyses/camera", StringComparison.OrdinalIgnoreCase);
+
     private static bool RequiresUserToken(HttpRequest request)
     {
         if (
@@ -177,18 +197,9 @@ public sealed class GatewayFirebaseAuthMiddleware(
 
         var path = (request.Path.Value ?? "").TrimEnd('/');
 
-        // Support camera ingestion via InvokeHTTP with Service Token / device credentials
-        if (string.Equals(path, "/api/v1/analyses/camera", StringComparison.OrdinalIgnoreCase))
-        {
-            var authHeader = request.Headers.Authorization.ToString();
-            var hasDeviceOrServiceToken = request.Headers.ContainsKey("x-device-id") ||
-                                          request.Headers.ContainsKey("x-service-token") ||
-                                          authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase);
-            if (hasDeviceOrServiceToken)
-            {
-                return false;
-            }
-        }
+        // Camera bearer is verified by Profile against the authoritative camera grant.
+        if (IsCameraPost(request))
+            return false;
 
         // Exempt webhook callback and sandbox payment simulator from Firebase token (secured via HMAC SHA-256)
         if (string.Equals(path, "/api/v1/billing/payments/callback", StringComparison.OrdinalIgnoreCase) ||
