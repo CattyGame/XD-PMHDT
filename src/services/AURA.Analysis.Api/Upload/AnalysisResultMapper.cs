@@ -39,17 +39,37 @@ public static class AnalysisResultMapper
 
         AnalysisMetricsDetail metrics;
         JsonElement? research = null;
+        bool? researchAvrAvailable = null;
         using (var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(metricsJson) ? "{}" : metricsJson))
         {
             var m = doc.RootElement;
             if (m.TryGetProperty("research", out var extra) && extra.ValueKind == JsonValueKind.Object)
+            {
                 research = extra.Clone();
+                if (extra.TryGetProperty("avr", out var avrEl) && avrEl.ValueKind == JsonValueKind.Object
+                    && avrEl.TryGetProperty("measurement_available", out var availEl)
+                    && availEl.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    researchAvrAvailable = availEl.GetBoolean();
+                }
+            }
+            var rawAvRatio = Num(m, "avRatio", "av_ratio");
+            if (rawAvRatio is <= 0 || researchAvrAvailable == false)
+                rawAvRatio = null;
             metrics = new AnalysisMetricsDetail(
                 Num(m, "vesselDensity", "vessel_density"),
                 Num(m, "tortuosityIndex", "tortuosity_index"),
-                Num(m, "avRatio", "av_ratio"),
+                rawAvRatio,
                 Num(m, "fractalDimension", "fractal_dimension"),
                 Num(m, "branchingPoints", "branching_points") is { } b ? (int)b : null);
+        }
+
+        if (research is not null)
+        {
+            riskAvailable = false;
+            riskLevel = null;
+            riskScore = null;
+            confidence = null;
         }
 
         var warnings = new List<AnalysisWarningDetail>();

@@ -23,6 +23,9 @@ public static class AnalysisServiceClients
             client.Timeout = TimeSpan.FromSeconds(timeout);
         }
         services.AddSingleton<IServiceTokenProvider, ServiceTokenProvider>();
+        services.AddHttpClient<ICameraDelegation, CameraDelegationClient>(client => Configure(client, "Profile"))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            .RedactLoggedHeaders(["Authorization"]);
         services.AddHttpClient<IClinicAccessResolver,ProfileClinicAccessClient>(client=>Configure(client,"Profile"))
             .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false})
             .RedactLoggedHeaders(new[]{"Authorization"});

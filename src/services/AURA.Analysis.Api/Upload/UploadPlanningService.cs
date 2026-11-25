@@ -26,10 +26,17 @@ public sealed partial class UploadPlanningService(UploadOptions options,IPatient
 
         var decision = await Call("Profile", () => _access.ResolveAsync(
             new PatientAccessRequest(cmd.RequesterId, cmd.ClinicId, patientId, "ANALYSIS_CREATE") { CorrelationId = correlationId }, ct));
-        if (!decision.Allowed)
+        if (!decision.Allowed || cmd.Camera is { } camera && camera.TenantId != decision.TenantId)
             throw new UploadFailure(404, "ERR_NOT_FOUND", "Không tìm thấy bệnh nhân.");   // ngoài phạm vi = không tồn tại
 
         var fingerprint = RequestFingerprint.Compute(patientId, modality, eyeSide, inspections.Select(i => i.Sha256));
+        if (cmd.Camera is { } binding)
+        {
+            if (inspections.Count != 1 || inspections[0].Sha256 != binding.ImageSha256)
+                throw UploadFailure.Validation(new ErrorDetail("X-Camera-SHA256", "checksum_mismatch"));
+            fingerprint = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes($"camera-v1\n{binding.GrantId:D}\n{binding.DeviceId}\n{fingerprint}")));
+        }
         var scope = new IdempotencyScope(decision.TenantId, cmd.RequesterId, cmd.IdempotencyKey);
 
         var session = await Call("Analysis database", () => _repository.BeginAsync(scope, fingerprint, ct));

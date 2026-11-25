@@ -15,7 +15,8 @@ public sealed record CreateOrderResponse(
     int Credits,
     string PackageName,
     string PaymentUrl,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    Guid? PriceVersionId = null);
 
 public sealed record OrderRecord(
     Guid Id,

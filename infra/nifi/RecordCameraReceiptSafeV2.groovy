@@ -39,9 +39,7 @@ try {
         payload = output.toByteArray()
     } as InputStreamCallback)
     def body = new JsonSlurper().parseText(new String(payload, StandardCharsets.UTF_8))
-    def expectedKeys = ['requestId','deviceId','batchId','imageCount',
-        'sourceAcceptedAt','correlationId','analysisId','processingStatus'] as Set
-    if (!(body instanceof Map)) throw new IllegalArgumentException()
+    if (!(body instanceof Map) || body.version != 1) throw new IllegalArgumentException()
     def uuid = { value ->
         if (!(value instanceof String) || !(value ==~ /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)
             || UUID.fromString(value) == new UUID(0L, 0L)) throw new IllegalArgumentException()

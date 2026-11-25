@@ -66,15 +66,17 @@ async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT'], research = fal
       if (path.endsWith('/content')) return route.fulfill({ contentType: 'image/png', body: png })
       return route.fulfill({ json: detail })
     }
-    if (path === '/api/v1/billing/packages') return route.fulfill({ json: { data: [{ id: 1, name: 'Synthetic package', price: 1000, credits: 10 }],
+    if (path === '/api/v1/billing/packages') return route.fulfill({ json: { data: [{ id: 1, name: 'Synthetic package', price: 1000, credits: 10,
+      priceVersionId: id(11), currency: 'VND', version: 1 }],
       source: 'legacy', cacheHit: false, ttlSeconds: 60, databaseReadCount: 1 } })
     if (path.startsWith('/api/v1/billing/wallets/')) return route.fulfill({ json: { ownerType: path.split('/').at(-2),
       ownerId: path.split('/').at(-1), environment: 'TEST', balance: state.paid ? 10 : 0 } })
     if (path === '/api/v1/billing/orders' && request.method() === 'POST') {
       expect(request.postDataJSON().billingOwner).toEqual({ type: 'CLINIC', id: clinic })
+      expect(request.postDataJSON().packagePriceVersionId).toBe(id(11))
       expect(request.headers()['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/)
       return route.fulfill({ status: 201, json: { orderId: order, status: 'PENDING', amount: 1000, currency: 'VND', credits: 10,
-        packageName: 'Synthetic package', paymentUrl: '', createdAt: new Date().toISOString() } })
+        packageName: 'Synthetic package', priceVersionId: id(11), paymentUrl: '', createdAt: new Date().toISOString() } })
     }
     if (path === `/api/v1/billing/orders/${order}`) return route.fulfill({ json: { id: order, billingOwnerType: 'CLINIC',
       billingOwnerId: clinic, packageNameSnapshot: 'Synthetic package', priceAmountSnapshot: 1000, currencyCodeSnapshot: 'VND',

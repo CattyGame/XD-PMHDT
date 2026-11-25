@@ -5,6 +5,7 @@ using FirebaseAdmin;
 using FirebaseAdmin.Auth;
 using Google.Apis.Auth.OAuth2;
 using Npgsql;
+using AURA.Common.Audit;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -78,6 +79,7 @@ builder.Services.AddSingleton<NotificationInboxRepository>();
 builder.Services.AddSingleton<ConsultationRepository>();
 builder.Services.AddSingleton<ConsultationOutboxRepository>();
 builder.Services.AddSingleton<NotificationDeliveryJobRepository>();
+builder.Services.AddSingleton<PushTemplates>();
 builder.Services.AddHttpClient("IdentityAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Identity:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
     .ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false}).RedactLoggedHeaders(["Authorization"]);
 builder.Services.AddHttpClient("AnalysisAuthority", client=>{client.BaseAddress=new Uri(RequiredConfiguration("Services:Analysis:BaseUrl"));client.Timeout=TimeSpan.FromSeconds(5);})
@@ -105,6 +107,7 @@ builder.Services.AddHostedService<NotificationDeliveryWorker>();
 builder.Services.AddHostedService<ConsultationNotificationOutboxWorker>();
 builder.Services.AddNotificationTestPush();
 
+builder.Services.AddOwnerAudit(builder.Configuration, AuditSource.Notification);
 var app = builder.Build();
 
 app.UseExceptionHandler();
@@ -269,6 +272,7 @@ app.Use(async (context, next) =>
 });
 
 app.MapHealthChecks("/health");
+app.MapPushTemplates();
 
 app.MapGet("/health/ready", async Task<IResult> (
     DeviceRegistrationRepository repository,
@@ -471,6 +475,10 @@ app.MapGet(
                 unreadOnly ?? false,
                 context.RequestAborted);
 
+            await context.RequestServices.GetRequiredService<IAuditWriter>().AppendAsync(AuditEvent.Create(
+                AuditSource.Notification, accountId.Value, AuditAction.NotificationRead, AuditResource.Account,
+                accountId.Value.ToString("D"), context.Items["CorrelationId"] as string,
+                outcome: AuditOutcome.Authorized), context.RequestAborted);
             return Results.Ok(response);
         }
         catch (NpgsqlException)

@@ -54,6 +54,9 @@ from .services.mock_service import (
     process_mock_analysis,
 )
 from .services.integrated_inference import IntegratedModelUnavailable, configured_artifacts, process_integrated_analysis
+from .services.runtime_registry import RUNTIME_REGISTRY
+
+_ORIGINAL_LOAD_FRANGI_CONFIG = load_frangi_config
 
 APP_START_TIME = time.time()
 SERVICE_NAME = "AURA.AiCore"
@@ -128,6 +131,13 @@ async def correlation_id_middleware(request: Request, call_next):
     return response
 
 
+def resolve_active_frangi_config() -> FrangiRuntimeConfig:
+    """Return an immutable snapshot of active config; honors explicit test overrides."""
+    if load_frangi_config is not _ORIGINAL_LOAD_FRANGI_CONFIG or os.getenv("AURA_FRANGI_CONFIG_PATH"):
+        return load_frangi_config()
+    return RUNTIME_REGISTRY.get_active_snapshot().config
+
+
 def is_explicit_mock_mode() -> bool:
     """Mock is an explicit test/demo capability, never a missing-key fallback."""
     return (
@@ -166,7 +176,7 @@ def verify_runtime_and_auth(
         )
 
     try:
-        frangi_config = load_frangi_config()
+        frangi_config = resolve_active_frangi_config()
     except FrangiConfigError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -345,7 +355,7 @@ def ready():
         )
 
     try:
-        frangi_config = load_frangi_config()
+        frangi_config = resolve_active_frangi_config()
     except FrangiConfigError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -1,15 +1,188 @@
 openapi: 3.0.3
 info:
   title: AURA Billing API
-  version: 0.3.0
-  description: Sprint 2 Billing contract. Internal endpoints are service-to-service
-    only and must not be routed through the public Gateway. The package catalog remains
-    a compatibility view of the legacy demo catalog until official price versions
-    are published.
+  version: 0.4.0
+  description: Billing API with published price versions and PostgreSQL ledger reads.
+    Internal endpoints are service-to-service only.
 servers:
 - url: http://127.0.0.1:5002
   description: Local Development Billing API
 paths:
+  /api/v1/admin/billing/packages:
+    post:
+      operationId: createPackage
+      summary: Publish the first version of a new package
+      description: Requires current SYSTEM_ADMIN. Use expectedVersion 0.
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: &priceRequest
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PublishPrice'}
+      responses: &priceResponses
+        '200': {$ref: '#/components/responses/PricePublication'}
+        '201': {$ref: '#/components/responses/PricePublication'}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/admin/billing/packages/{packageId}/price-versions:
+    post:
+      operationId: createPriceVersion
+      summary: Publish a new price version and retire the active version atomically
+      description: Requires current SYSTEM_ADMIN. Order snapshots remain immutable.
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - in: path
+        name: packageId
+        required: true
+        schema: {type: integer, minimum: 1}
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: *priceRequest
+      responses: *priceResponses
+  /api/v1/billing/orders:
+    get:
+      operationId: listOwnerOrders
+      summary: List order snapshots for the authorized wallet
+      description: Requires current BILLING_READ. The server selects TEST or LIVE.
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - &ownerType {in: query, name: ownerType, required: true, schema: {type: string, enum: [ACCOUNT, CLINIC]}}
+      - &ownerId {in: query, name: ownerId, required: true, schema: {type: string, format: uuid}}
+      - &pageLimit {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      - &pageCursor {in: query, name: cursor, schema: {type: string, maxLength: 96}}
+      responses:
+        '200':
+          description: Newest orders first with a stable PostgreSQL cursor.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor, environment]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/OrderHistoryEntry'}}
+                  nextCursor: &cursorValue {type: string, nullable: true}
+                  environment: &billingEnvironment {type: string, enum: [TEST, LIVE]}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+    post:
+      operationId: createBillingOrder
+      summary: Create a sandbox order at a published price
+      description: Send packagePriceVersionId from the catalog. A retired quote returns ERR_PRICE_VERSION_CHANGED without creating an order. An exact replay returns the original snapshot.
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [billingOwner, packageId]
+              properties:
+                billingOwner:
+                  type: object
+                  required: [type, id]
+                  properties:
+                    type: {type: string, enum: [ACCOUNT, CLINIC]}
+                    id: {type: string, format: uuid}
+                packageId: {type: integer, minimum: 1}
+                packagePriceVersionId: {type: string, format: uuid}
+                paymentMethod: {type: string, enum: [SANDBOX_MOCK]}
+      responses:
+        '200': &createdOrder
+          description: Immutable sandbox order snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orderId, status, amount, currency, credits, packageName, paymentUrl, createdAt, priceVersionId]
+                properties:
+                  orderId: {type: string, format: uuid}
+                  status: {type: string}
+                  amount: {type: number}
+                  currency: {type: string}
+                  credits: {type: integer}
+                  packageName: {type: string}
+                  paymentUrl: {type: string}
+                  createdAt: {type: string, format: date-time}
+                  priceVersionId: {type: string, format: uuid}
+        '201': *createdOrder
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/billing/usage:
+    get:
+      operationId: getOwnerUsage
+      summary: Read authorized append-only credit ledger entries
+      description: Requires current BILLING_READ. The inclusive from and exclusive to may span up to 366 days. CAPTURE has zero balance delta because RESERVE already debited the wallet.
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - *ownerType
+      - *ownerId
+      - *pageLimit
+      - *pageCursor
+      - {in: query, name: from, required: true, schema: {type: string, format: date-time}}
+      - {in: query, name: to, required: true, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: Newest ledger entries first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor, environment]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/UsageEntry'}}
+                  nextCursor: *cursorValue
+                  environment: *billingEnvironment
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/admin/billing/summary:
+    get:
+      operationId: getAdminBillingSummary
+      summary: Aggregate completed payments by currency and environment
+      description: Requires current SYSTEM_ADMIN. Counts each completed order with a matching successful payment once. Defaults to the preceding 30 days.
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - {in: query, name: from, schema: {type: string, format: date-time}}
+      - {in: query, name: to, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: Payment totals without owner or patient identifiers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [from, to, groups]
+                properties:
+                  from: {type: string, format: date-time}
+                  to: {type: string, format: date-time}
+                  groups:
+                    type: array
+                    items:
+                      type: object
+                      required: [environment, currency, paidOrders, paidAmount]
+                      properties:
+                        environment: *billingEnvironment
+                        currency: {type: string}
+                        paidOrders: {type: integer, format: int64}
+                        paidAmount: {type: number}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
   /api/v1/billing/wallets/{ownerType}/{ownerId}:
     get:
       operationId: getBillingWallet
@@ -90,9 +263,8 @@ paths:
   /api/v1/billing/packages:
     get:
       operationId: getPackageCatalog
-      summary: Get the legacy package catalog
-      description: Anonymous endpoint. Returned prices are demo data, not approved
-        business prices.
+      summary: Get the published package catalog
+      description: Anonymous endpoint backed by current active prices in PostgreSQL. Cache fields are retained for response compatibility.
       responses:
         '200':
           description: Catalog returned.
@@ -122,9 +294,10 @@ paths:
   /api/v1/billing/packages/{id}:
     put:
       operationId: updateLegacyPackage
+      deprecated: true
       summary: Update the legacy PoC package
       description: Requires a valid Firebase user token whose current Identity roles
-        include SYSTEM_ADMIN. Still updates the legacy PoC catalog only.
+        include SYSTEM_ADMIN. Updates only the archived PoC catalog, with no effect on quotes or orders.
       security:
       - FirebaseBearer: []
       parameters:
@@ -407,6 +580,42 @@ components:
         type: string
         maxLength: 64
   schemas:
+    PublishPrice:
+      type: object
+      required: [expectedVersion, displayName, amountMinor, currency, credits, reason]
+      additionalProperties: false
+      properties:
+        expectedVersion: {type: integer, minimum: 0}
+        displayName: {type: string, minLength: 1, maxLength: 100}
+        amountMinor: {type: integer, format: int64, minimum: 0}
+        currency: {type: string, enum: [VND, USD, EUR]}
+        credits: {type: integer, minimum: 1}
+        reason: {type: string, minLength: 1, maxLength: 250}
+    OrderHistoryEntry:
+      type: object
+      required: [id, priceVersionId, packageName, amount, currency, credits, status, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        priceVersionId: {type: string, format: uuid}
+        packageName: {type: string}
+        amount: {type: number}
+        currency: {type: string}
+        credits: {type: integer}
+        status: {type: string, enum: [PENDING, COMPLETED, CANCELLED]}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    UsageEntry:
+      type: object
+      required: [id, entryType, balanceDelta, balanceAfter, reservationUnits, orderId, reservationId, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        entryType: {type: string, enum: [CREDIT, RESERVE, CAPTURE, RELEASE, ADJUSTMENT]}
+        balanceDelta: {type: integer}
+        balanceAfter: {type: integer, minimum: 0}
+        reservationUnits: {type: integer, nullable: true}
+        orderId: {type: string, format: uuid, nullable: true}
+        reservationId: {type: string, format: uuid, nullable: true}
+        createdAt: {type: string, format: date-time}
     Package:
       type: object
       required:
@@ -414,6 +623,9 @@ components:
       - name
       - price
       - credits
+      - priceVersionId
+      - currency
+      - version
       properties:
         id:
           type: integer
@@ -423,6 +635,9 @@ components:
           type: number
         credits:
           type: integer
+        priceVersionId: {type: string, format: uuid}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        version: {type: integer, minimum: 1}
     UpdatePackageRequest:
       type: object
       required:
@@ -548,6 +763,22 @@ components:
             retryable:
               type: boolean
   responses:
+    PricePublication:
+      description: Published immutable quote, or replay of that publication.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [packageId, priceVersionId, version, displayName, price, amountMinor, currency, credits]
+            properties:
+              packageId: {type: integer}
+              priceVersionId: {type: string, format: uuid}
+              version: {type: integer}
+              displayName: {type: string}
+              price: {type: number}
+              amountMinor: {type: integer, format: int64}
+              currency: {type: string}
+              credits: {type: integer}
     ErrorResponse:
       description: Standard AURA error envelope.
       content:

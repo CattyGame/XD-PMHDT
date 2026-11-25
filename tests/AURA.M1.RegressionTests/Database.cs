@@ -19,6 +19,9 @@ sealed class Database : IAsyncDisposable
     public NpgsqlDataSource Admin { get; }
     public NpgsqlDataSource Notification { get; }
     public NpgsqlDataSource Billing { get; }
+    public NpgsqlDataSource Identity { get; }
+    public NpgsqlDataSource Profile { get; }
+    public NpgsqlDataSource Analysis { get; }
     private readonly NpgsqlDataSource _cluster;
     private readonly string _name;
 
@@ -26,6 +29,9 @@ sealed class Database : IAsyncDisposable
     {
         _cluster=cluster; _name=name; connection.Database=name;
         Admin=NpgsqlDataSource.Create(connection.ConnectionString);
+        connection.Options="-c role=aura_identity_app"; Identity=NpgsqlDataSource.Create(connection.ConnectionString);
+        connection.Options="-c role=aura_profile_app"; Profile=NpgsqlDataSource.Create(connection.ConnectionString);
+        connection.Options="-c role=aura_analysis_app"; Analysis=NpgsqlDataSource.Create(connection.ConnectionString);
         connection.Options="-c role=aura_notification_app"; Notification=NpgsqlDataSource.Create(connection.ConnectionString);
         connection.Options="-c role=aura_billing_app"; Billing=NpgsqlDataSource.Create(connection.ConnectionString);
     }
@@ -44,6 +50,7 @@ sealed class Database : IAsyncDisposable
         {
             // Earlier suites leave fixtures in the template; reset only this uniquely owned clone.
             await database.SqlAsync("TRUNCATE billing.orders, billing.credit_wallets, notification.inbox_items CASCADE;");
+            await database.SqlAsync("TRUNCATE identity.audit_events,profile.audit_events,analysis.audit_events,billing.audit_events,notification.audit_events,profile.audit_projection,profile.audit_inbox CASCADE;");
             return database;
         }
         catch { await database.DisposeAsync(); throw; }
@@ -62,7 +69,7 @@ sealed class Database : IAsyncDisposable
     }
     public async ValueTask DisposeAsync()
     {
-        await Notification.DisposeAsync();await Billing.DisposeAsync();await Admin.DisposeAsync();
+        await Analysis.DisposeAsync();await Identity.DisposeAsync();await Profile.DisposeAsync();await Notification.DisposeAsync();await Billing.DisposeAsync();await Admin.DisposeAsync();
         await using var cmd=_cluster.CreateCommand($"DROP DATABASE {_name} WITH (FORCE);");
         await cmd.ExecuteNonQueryAsync();await _cluster.DisposeAsync();
     }

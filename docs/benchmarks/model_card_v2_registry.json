@@ -1,0 +1,198 @@
+{
+  "registryVersion": "2.0.0",
+  "taskId": "W6-M4-03",
+  "jiraKey": "SCRUM-388",
+  "owner": "M4 - Dao Duy Quan",
+  "scope": "RESEARCH_ONLY_NOT_CLINICAL_CERTIFICATION",
+  "clinicalValidation": false,
+  "icdrGradingSupported": false,
+  "scientificGateScrum373": {
+    "status": "OPEN_NOT_PASSED",
+    "targetMetric": "abs(avr_bias) <= 0.02 on verified 40-case Iowa two-observer table",
+    "thresholdAbsBias": 0.02,
+    "lastObservedBaselineBias": -0.2136,
+    "lastObservedBaselineMae": 0.2335,
+    "note": "Functional V2 integration and abstention invariants remain independent of the unresolved scientific gate SCRUM-373."
+  },
+  "datasets": {
+    "CHASE_DB1": {
+      "cohortSize": 28,
+      "subjectCount": 14,
+      "splits": {
+        "train": 16,
+        "validation": 6,
+        "test": 6
+      },
+      "license": "CC BY 4.0",
+      "sourceUrl": "https://researchinnovation.kingston.ac.uk/en/datasets/chasedb1-retinal-vessel-reference-dataset-4/",
+      "manifestPath": "docs/datasets/chase_db1/manifest.csv",
+      "manifestSha256": "b22bb7f635aad4c1ef670abd15a68e038d9c5d9a1383a01976f8ae7664a6455a",
+      "primaryTask": "retinal_vessel_segmentation_frangi",
+      "redistributedInGit": false
+    },
+    "HRF45": {
+      "cohortSize": 45,
+      "categories": {
+        "dr": 15,
+        "h": 15,
+        "g_ood": 15
+      },
+      "splits": {
+        "train": 18,
+        "validation": 6,
+        "test": 6,
+        "glaucoma_ood": 15
+      },
+      "license": "Academic Research Use (Friedrich-Alexander-Universitat Erlangen-Nurnberg)",
+      "manifestPath": "docs/datasets/hrf/manifest.csv",
+      "manifestSha256": "a6d0d719066d01e113ca2e1ade0e89324e99ce36ef5772afd1742a55973a11ce",
+      "primaryTask": "hrf_dr_vs_healthy_binary_cnn_and_frangi_proxy",
+      "redistributedInGit": false
+    },
+    "AVRDB100": {
+      "rawArchiveFolders": 100,
+      "verifiedCases": 99,
+      "emptyArchiveFolders": [
+        "IM000189"
+      ],
+      "splits": {
+        "train": 70,
+        "validation": 15,
+        "test": 14
+      },
+      "license": "CC BY 4.0 / Mendeley Data DOI: 10.17632/3csr652p9y.2",
+      "manifestPath": "docs/datasets/inspire_avr/manifest.csv",
+      "manifestSha256": "2ae7cba1d278178fc337dd622a7fba12609e2afbba0d9af1eefc980c89ac9211",
+      "avrdbsplitManifestSha256": "0481a7cad9b3a534067cc5facdaa85551eef4d6177c2c02fcfe13871d390f51f",
+      "primaryTask": "av_branch_segmentation_and_validation_threshold_calibration",
+      "redistributedInGit": false
+    },
+    "Iowa40": {
+      "cohortSize": 40,
+      "referenceSource": "University of Iowa INSPIRE-AVR Normative Set (GT/GT.txt two-observer AVR)",
+      "license": "Research evaluation only; external non-redistributed dataset",
+      "manifestPath": null,
+      "manifestSha256": null,
+      "primaryTask": "independent_two_observer_avr_agreement_benchmark",
+      "calibrationAllowed": false,
+      "redistributedInGit": false,
+      "redistributedInZip": false
+    }
+  },
+  "models": [
+    {
+      "id": "frangi-vessel-segmentation",
+      "algorithm": "Multi-scale 2D Hessian Frangi Filter (separable 6-pass vectorized CPU implementation)",
+      "task": "retinal_vessel_segmentation",
+      "clinicalClaim": false,
+      "configs": [
+        {
+          "configPath": "src/ai-core/config/ai-frangi.yaml",
+          "sha256": "0b0451cad981b69471920b374c19042f169b991a26c49e2c3e29395db7c6a0ee",
+          "configVersion": "s3-frangi-1.0.0",
+          "riskAvailable": false
+        },
+        {
+          "configPath": "src/ai-core/config/ai-frangi-v1.3.yaml",
+          "sha256": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+          "configVersion": "s45-frangi-1.3.0",
+          "riskAvailable": true,
+          "riskNature": "HEURISTIC_VESSEL_DENSITY_TORTUOSITY"
+        },
+        {
+          "configPath": "src/ai-core/config/ai-frangi-hrf.yaml",
+          "sha256": "8af374dc5dc1e70df09e333730e46a27c40e51a9f76e554498d3fa8e27119aca",
+          "configVersion": "s5-hrf-opencv-clahe-1280-v1",
+          "riskAvailable": false
+        }
+      ],
+      "evaluation": {
+        "chase_db1_28": {
+          "denominator": 28,
+          "meanDice": 0.401484,
+          "meanIou": 0.251719,
+          "benchmarkFile": "docs/benchmarks/chase_db1_frangi_benchmark_v1.0.json",
+          "command": "PYTHONPATH=src/ai-core python src/ai-core/scripts/benchmark_chase_frangi.py"
+        },
+        "hrf_test_9": {
+          "denominator": 9,
+          "meanDice": 0.483415,
+          "meanIou": 0.327454,
+          "benchmarkFile": "docs/benchmarks/frangi_hrf_benchmark_v1.0.json",
+          "command": "PYTHONPATH=src/ai-core python src/ai-core/scripts/benchmark_hrf_frangi.py"
+        }
+      }
+    },
+    {
+      "id": "dr-screening-resnet34-gradcam",
+      "algorithm": "Frozen ImageNet ResNet34 + L2-regularized binary Linear head + autograd layer4 Grad-CAM",
+      "task": "hrf_dr_vs_healthy_binary_research",
+      "notIcdrGrading": true,
+      "clinicalClaim": false,
+      "inputTransform": "Resize(shorter_edge=256) -> CenterCrop(224x224) -> ImageNet RGB normalization",
+      "gradcamMethod": "GRAD_CAM",
+      "gradcamGeometry": "IMAGENET_CENTER_CROP_224",
+      "trainingScript": "src/ai-core/scripts/train_dr_cnn.py",
+      "serviceModule": "src/ai-core/app/services/dr_cnn_service.py",
+      "dataLeakageControls": [
+        "Patient-level split enforced with duplicate image SHA-256 and patient_id overlap guards.",
+        "15 glaucoma cases excluded from binary HRF training/validation/test into separate glaucoma_ood cohort.",
+        "Checkpoint selected strictly by maximum validation AUC (tie-break minimum validation BCE); test split locked during selection.",
+        "Predict endpoint accepts RGB fundus image only (no ground-truth mask parameters)."
+      ],
+      "reproduceCommand": "python src/ai-core/scripts/train_dr_cnn.py --output model-artifacts/dr-resnet34-hrf-v1/model.pt --epochs 100",
+      "evaluation": {
+        "hrf_binary_torch_2_14_1": {
+          "cohort": "HRF45_dr_vs_h",
+          "trainDenominator": 18,
+          "validationDenominator": 6,
+          "testDenominator": 6,
+          "glaucomaOodCount": 15,
+          "selectedEpoch": 2,
+          "validationAuc": 0.888889,
+          "testAuc": 1.0,
+          "validationTargetMet": true,
+          "artifactSha256Torch2141Cpu": "8c9114c54f1b06300081bb82b80a0ea3a10e3d035232e1c5f3570b2db42df8f7"
+        }
+      }
+    },
+    {
+      "id": "avr-v8-rrwnet-knudtson",
+      "algorithm": "RRWNet (RITE, CC-BY-NC-4.0) or PIXEL_MLP_RGB_DOG A/V segmentation + LU-Net v2 ONNX OD + Zone B (2R-3R) 6-artery/6-vein revised Knudtson (0.88/0.95)",
+      "task": "research_native_pixel_avr_with_abstention",
+      "clinicalClaim": false,
+      "weightsLicense": "CC-BY-NC-4.0 (research/noncommercial weights only)",
+      "pinnedExternalArtifacts": {
+        "rrwnetWeightsSha256": "32d93fa770f2f1c52359cc30ae524346043443b972b108974dbf524db8104485",
+        "rrwnetRevision": "9b61e9042e7693f2538e01be9b15c68a3656718f",
+        "lunetOdOnnxSha256": "f72f6c9ea2ade798b80539de77fa610bb6553bb0fd7fcb78d1e841982cae0b5f",
+        "lunetOdRevision": "cf1f116d6b9898aa7b2aa3b075e071d3460e3a6e",
+        "fetchCommand": "python src/ai-core/scripts/fetch_avr_rrwnet.py --destination model-artifacts/avr-rrwnet-rite"
+      },
+      "abstentionPolicy": {
+        "returnsNullWithReason": true,
+        "neverSubstitutesZeroOrLowRisk": true,
+        "minimumArteriesInZoneB": 6,
+        "minimumVeinsInZoneB": 6,
+        "minimumCrossSectionsPerVessel": 3,
+        "unavailableInCoverageDenominator": true
+      },
+      "dataLeakageControls": [
+        "Vessel threshold calibration strictly uses the frozen 15-case AVRDB validation cohort (test_cases_used=false, iowa_references_used=false).",
+        "No ground-truth artery/vein masks are accepted in calculate_automatic_avr inference.",
+        "AVR_UNAVAILABLE emitted with null values whenever Zone B lacks 6 distinct arteries and 6 distinct veins or OD confidence fails."
+      ],
+      "evaluation": {
+        "avrdb_validation_test_29": {
+          "denominator": 29,
+          "benchmarkFile": "docs/benchmarks/inspire_avr_benchmark_v1.0.json",
+          "meanAvrMaeVsMaskSurrogate": 0.2335,
+          "meanAvrBiasVsMaskSurrogate": -0.2136,
+          "meanVesselDice": 0.3494,
+          "scientificGateStatus": "OPEN_NOT_PASSED",
+          "command": "PYTHONPATH=src/ai-core python src/ai-core/scripts/benchmark_expert_references.py --dataset iowa --root <iowa40_dir> --output <report.json>"
+        }
+      }
+    }
+  ]
+}
