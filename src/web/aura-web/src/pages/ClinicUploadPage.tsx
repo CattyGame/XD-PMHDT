@@ -3,17 +3,20 @@ import { bulkFileKey, matchPatientIdInFilename, validateBulkFiles, type InvalidB
 import { captureBatchPreviews } from '../api/batchLocalPreviews'
 import { validBatchId } from '../api/batchProgress'
 import './BulkUploadPage.css'
-import { Link } from 'react-router-dom'
+import { Link, useOutletContext } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
 import type { BackendContext } from '../api/backendContext'
+import type { ClinicUploadHandoff } from '../routes/ClinicUploadNavigation'
 import { AnalysisResultError, analysisErrorMessage } from '../api/analysisResult'
 import { getUploadClinics, getUploadPatients, type UploadClinic, type UploadPatient } from '../api/clinicUpload'
+import { getClinicPatientDetail } from '../api/clinicManagement'
 import { createClinicItemUploadAttempt, sendItemUploadAttempt, resumeItemUpload, loadUploadInventory, type ItemTransferState, type UploadInventory } from '../api/itemUpload'
 import { UploadRequestError, uploadErrorMessage, type UploadAttempt, type UploadReceipt, type EyeSide } from '../api/analysisUpload'
 import ItemUploadProgress from '../components/ItemUploadProgress'
 
 type Selection = { file: File; patientId: string; eyeSide: EyeSide }
+type LinkedPatient = { clinicId: string; patientId: string } & ({ name: string } | { error: string })
 
 /** Giai phong URL khi anh bi xoa hoac component unmount. */
 function FilePreview({ file }: { file: File }) {
@@ -36,6 +39,7 @@ function FilePreview({ file }: { file: File }) {
   )
 }
 function ClinicUploadForm({ context }: { context: BackendContext }) {
+  const { draft, setDraft } = useOutletContext<ClinicUploadHandoff | null>() ?? {}
   const [clinics, setClinics] = useState<readonly UploadClinic[]>([]), [clinicId, setClinicId] = useState('')
   const [patients, setPatients] = useState<readonly UploadPatient[]>([]), [search, setSearch] = useState('')
   const [patientNames, setPatientNames] = useState<Record<string, string>>({})
@@ -47,9 +51,16 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
   const [expired, setExpired] = useState(false)
   const [transfers, setTransfers] = useState<Record<string, ItemTransferState>>({})
   const [blocked, setBlocked] = useState(false)
+  const [linkedPatient, setLinkedPatient] = useState<LinkedPatient>()
   const active = useRef<AbortController | undefined>(undefined)
   const savedBatch = new URLSearchParams(window.location.search).get('uploadBatchId')
   const savedClinic = new URLSearchParams(window.location.search).get('clinicContextId')
+  const requestedPatient = new URLSearchParams(window.location.search).get('patientId')
+  const hasLinkedSelection = Boolean(clinicId && clinicId === savedClinic && requestedPatient)
+  const linkedClinic = hasLinkedSelection && !savedBatch ? clinicId : ''
+  const preselected = linkedClinic && linkedPatient?.clinicId === linkedClinic && linkedPatient.patientId === requestedPatient
+    ? linkedPatient : undefined
+  const checkingLinkedPatient = Boolean(linkedClinic && requestedPatient && !preselected)
   useEffect(() => {
     const controller = new AbortController()
     void getUploadClinics(context, controller.signal).then(items => {
@@ -58,12 +69,31 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
       if (savedClinic && !items.some(x => x.clinicId === savedClinic)) throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
       setClinicId(savedClinic || items[0]?.clinicId || '')
     }).catch(cause => { if (!controller.signal.aborted) {
+      setDraft?.(null)
       setRestoring(false)
       setError(analysisErrorMessage(cause instanceof AnalysisResultError ? cause : new AnalysisResultError(0, 'ERR_NETWORK')))
     } })
     return () => controller.abort()
-  }, [context, savedClinic])
+  }, [context, savedClinic, setDraft])
   useEffect(() => () => active.current?.abort(), [context])
+  useEffect(() => {
+    if (!linkedClinic || !requestedPatient) return
+    const controller = new AbortController()
+    const target = { clinicId: linkedClinic, patientId: requestedPatient }
+    void getClinicPatientDetail(context, linkedClinic, requestedPatient, controller.signal).then(patient => {
+      if (controller.signal.aborted) return
+      if (patient.clinicId !== linkedClinic || patient.patientId !== requestedPatient || patient.status !== 'ACTIVE') {
+        throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
+      }
+      setLinkedPatient({ ...target, name: patient.fullName })
+    }).catch(cause => {
+      if (!controller.signal.aborted) setLinkedPatient({
+        ...target,
+        error: analysisErrorMessage(cause instanceof AnalysisResultError ? cause : new AnalysisResultError(0, 'ERR_NETWORK')),
+      })
+    })
+    return () => controller.abort()
+  }, [context, linkedClinic, requestedPatient])
   useEffect(() => {
     if (!clinicId) return
     const controller = new AbortController()
@@ -73,14 +103,14 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
           setPatients(items)
           setPatientNames(previous => ({ ...previous, ...Object.fromEntries(items.map(x => [x.patientId, x.fullName])) }))
           // Tự nhận diện UUID trong tên file nếu bệnh nhân đã có trong danh sách hợp lệ.
-          setSelections(previous => previous.map(x => x.patientId ? x : {
+          setSelections(previous => previous.map(x => x.patientId || hasLinkedSelection ? x : {
             ...x, patientId: matchPatientIdInFilename(x.file.name, items),
           }))
         }
       }).catch(cause => { if (!controller.signal.aborted) { setPatients([]); setPatientNames({}); setError(analysisErrorMessage(cause instanceof AnalysisResultError ? cause : new AnalysisResultError(0, 'ERR_NETWORK'))) } })
     }, 200)
     return () => { clearTimeout(timer); controller.abort() }
-  }, [context, clinicId, search])
+  }, [context, clinicId, search, hasLinkedSelection])
   useEffect(() => {
     if (attempt || receipt || blocked || !savedBatch || !clinicId || savedClinic !== clinicId) return
     const controller = new AbortController()
@@ -96,8 +126,8 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
 
   const reconciling = inventory?.status === 'FINALIZING' || inventory?.items.some(item => item.uploadStatus === 'UNKNOWN')
   const locked = busy || restoring || expired || blocked || reconciling || !!attempt || !!receipt
-  function choose(files: File[]) {
-    if (locked) return
+  const choose = useCallback((files: File[]) => {
+    if (locked || checkingLinkedPatient) return
     const result = validateBulkFiles(files)
     setInvalidFiles([...result.rejected])
     if (!result.accepted.length) {
@@ -105,10 +135,23 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
       return
     }
     setError('')
+    const linkedPatientId = preselected && 'name' in preselected ? preselected.patientId : ''
     setSelections(result.accepted.map(file => ({
-      file, patientId: matchPatientIdInFilename(file.name, patients), eyeSide: 'unknown',
+      file,
+      patientId: preselected ? linkedPatientId : matchPatientIdInFilename(file.name, patients),
+      eyeSide: 'unknown',
     })))
-  }
+  }, [locked, checkingLinkedPatient, patients, preselected])
+  useEffect(() => {
+    if (!draft || !setDraft) return
+    if (savedBatch || draft.clinicId !== savedClinic || draft.patientId !== requestedPatient) {
+      setDraft(null)
+      return
+    }
+    if (!preselected) return
+    setDraft(null)
+    if ('name' in preselected) choose(draft.files)
+  }, [draft, setDraft, savedBatch, savedClinic, requestedPatient, preselected, choose])
   async function send(retryItemId?: string) {
     if (active.current || blocked || receipt || !clinicId) return
     if (!inventory && (!selections.length || selections.some(x => !validBatchId(x.patientId)))) { setError('Nhập hoặc chọn mã bệnh nhân UUID hợp lệ cho từng ảnh trước khi gửi.'); return }
@@ -162,6 +205,8 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
       if (!controller.signal.aborted) setBusy(false)
     }
   }
+  const queuedAnalysis = receipt?.items.length === 1 && receipt.items[0].processingStatus === 'QUEUED'
+    ? receipt.items[0].analysisId : undefined
   return <main style={{ maxWidth: 1000, margin: '24px auto', padding: 20 }}>
     <nav><Link to="/">Trang chủ</Link> · <Link to="/batches">Theo dõi batch</Link></nav>
     <h1>Tải ảnh phòng khám</h1>
@@ -180,17 +225,21 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
     }}>Tạo lượt tải mới</button>}
     <label htmlFor="upload-clinic">Phòng khám</label>
     <select id="upload-clinic" disabled={locked || !!inventory} value={clinicId} onChange={event => {
-      setClinicId(event.target.value); setSelections([]); setInvalidFiles([]); setPatients([]); setPatientNames({}); setSearch(''); setError('')
+      setClinicId(event.target.value); setLinkedPatient(undefined)
+      setSelections([]); setInvalidFiles([]); setPatients([]); setPatientNames({}); setSearch(''); setError('')
     }}><option value="">Chọn phòng khám</option>{clinics.map(x => <option key={x.clinicId} value={x.clinicId}>{x.clinicName}</option>)}</select>
     {clinics.length === 0 && <p>Chưa có phòng khám đang hoạt động được cấp quyền cho tài khoản này.</p>}
     {clinicId && !blocked && <>
+      {checkingLinkedPatient && <p role="status">Đang xác nhận bệnh nhân đã chọn...</p>}
+      {preselected && 'error' in preselected && <p role="alert">Không thể xác nhận bệnh nhân đã chọn. {preselected.error}</p>}
+      {preselected && 'name' in preselected && <p>Bệnh nhân đã chọn: <strong>{preselected.name}</strong></p>}
       <label htmlFor="upload-patient-search" style={{ display: 'block', marginTop: 16 }}>Tìm bệnh nhân theo tên</label>
       <input id="upload-patient-search" value={search} onChange={event => setSearch(event.target.value)} disabled={locked} />
       <div className="bulk-upload-drop" style={{ padding: 16, marginTop: 16 }}
         onDragOver={event => { if (!locked) event.preventDefault() }}
         onDrop={event => { event.preventDefault(); if (!locked) choose(Array.from(event.dataTransfer.files)) }}>
         <label htmlFor="clinic-images">Chọn ảnh phòng khám</label>
-        <input id="clinic-images" type="file" accept="image/png,image/jpeg" multiple disabled={locked || restoring} onChange={event => {
+        <input id="clinic-images" type="file" accept="image/png,image/jpeg" multiple disabled={locked || checkingLinkedPatient} onChange={event => {
           choose(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ''
         }} />
         <p>Kéo thả tối đa 100 ảnh JPG/PNG, mỗi ảnh không quá 10 MiB. Ảnh lỗi bị loại tại trình duyệt.</p>
@@ -211,7 +260,9 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
         </label>
         <label>Bệnh nhân ảnh{index + 1}<select value={selection.patientId} onChange={event => setSelections(previous => previous.map((x, i) => i === index ? { ...x, patientId: event.target.value } : x))}>
           <option value="">Chọn bệnh nhân</option>{patients.map(patient => <option key={patient.patientId} value={patient.patientId}>{patient.fullName}</option>)}
-          {selection.patientId && !patients.some(x => x.patientId === selection.patientId) && <option value={selection.patientId}>{patientNames[selection.patientId] || 'Bệnh nhân đã chọn'}</option>}
+          {selection.patientId && !patients.some(x => x.patientId === selection.patientId) && <option value={selection.patientId}>
+            {patientNames[selection.patientId] || (preselected?.patientId === selection.patientId && 'name' in preselected && preselected.name) || 'Bệnh nhân đã chọn'}
+          </option>}
         </select></label>
         <label>Mắt ảnh{index + 1}<select value={selection.eyeSide} onChange={event => setSelections(previous => previous.map((x, i) => i === index ? { ...x, eyeSide: event.target.value as EyeSide } : x))}>
           <option value="left">OS – Mắt trái</option><option value="right">OD – Mắt phải</option><option value="unknown">Chưa xác định</option>
@@ -231,6 +282,7 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
       </button>}
       {uncertain && <p role="status">Kết quả chưa rõ. Hệ thống sẽ đối chiếu máy chủ trước khi thử lại cùng lượt tải.</p>}
       {receipt && <section><h2>Đã tiếp nhận lượt tải phòng khám</h2><p>{receipt.items.length} ảnh, trạng thái riêng từng ảnh được lưu trên máy chủ.</p>
+        {queuedAnalysis && <p><Link to={`/analyses/${queuedAnalysis}?clinicContextId=${clinicId}`}>Xem kết quả phân tích</Link></p>}
         <Link to={`/batches/${receipt.batchId}?clinicContextId=${clinicId}`}>Theo dõi tiến trình phòng khám</Link>
         <ul>{receipt.items.filter(x => x.processingStatus === 'REJECTED').map(x => <li key={x.analysisId}>{x.fileName}: {x.error?.message || 'Bị từ chối tiếp nhận'}</li>)}</ul>
       </section>}
@@ -240,5 +292,5 @@ function ClinicUploadForm({ context }: { context: BackendContext }) {
 
 export default function ClinicUploadPage() {
   const { state } = useBackendSession()
-  return state.status === 'ready' ? <ClinicUploadForm key={`${state.context.firebaseUid}:${state.context.accountId}`} context={state.context} /> : <BackendSessionNotice />
+  return state.status === 'ready' ? <ClinicUploadForm key={`${state.context.firebaseUid}:${state.context.accountId}:${state.context.profileVersion}`} context={state.context} /> : <BackendSessionNotice />
 }

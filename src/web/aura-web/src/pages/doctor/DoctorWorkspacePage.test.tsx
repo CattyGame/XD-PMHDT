@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import DoctorWorkspacePage from './DoctorWorkspacePage'
 
 const clinicId = '10000000-0000-4000-8000-000000000001'
@@ -43,6 +43,21 @@ async function openDetail() {
   fireEvent.click(screen.getByRole('button', { name: 'Mở chi tiết' }))
   await screen.findByRole('heading', { name: 'Kết luận của bác sĩ' })
 }
+// jsdom has no native dialog lifecycle. Playwright exercises modal focus and Escape.
+const dialogPrototype = HTMLDialogElement.prototype
+const needsDialogStub = typeof dialogPrototype.showModal !== 'function'
+beforeAll(() => {
+  if (!needsDialogStub) return
+  Object.defineProperties(dialogPrototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true } },
+    close: { configurable: true, value(this: HTMLDialogElement) { this.open = false } },
+  })
+})
+afterAll(() => {
+  if (!needsDialogStub) return
+  Reflect.deleteProperty(dialogPrototype, 'showModal')
+  Reflect.deleteProperty(dialogPrototype, 'close')
+})
 beforeEach(() => {
   vi.clearAllMocks()
   vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:private-doctor-fixture')

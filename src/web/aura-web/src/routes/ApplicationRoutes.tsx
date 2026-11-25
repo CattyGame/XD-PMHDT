@@ -1,35 +1,48 @@
-import { lazy, Suspense, type ReactNode } from 'react'
+import { lazy, Suspense, type ComponentType, type ReactNode } from 'react'
 import { Link, Route, Routes } from 'react-router-dom'
-import App from '../App'
 import LoginPage from '../pages/LoginPage'
-import UploadPage from '../pages/UploadPage'
-import BatchProgressPage from '../pages/BatchProgressPage'
 import SessionHomePage from '../pages/SessionHomePage'
 import ForbiddenPage from '../pages/ForbiddenPage'
 import NotFoundPage from '../pages/NotFoundPage'
 import ServerErrorPage from '../pages/ServerErrorPage'
 import ProtectedRoute from './ProtectedRoute'
-import AppRouter from './AppRouter'
-import AnalysisResultPage from '../pages/AnalysisResultPage'
+import ClinicUploadNavigation from './ClinicUploadNavigation'
 import NotificationInboxPage from '../pages/NotificationInboxPage'
 import CampaignManagementPage from '../pages/CampaignManagementPage'
-import ClinicUploadPage from '../pages/ClinicUploadPage'
-import DoctorWorkspacePage from '../pages/doctor/DoctorWorkspacePage'
 import ClinicMemberPage from '../pages/ClinicMemberPage'
 import ClinicPatientPage from '../pages/ClinicPatientPage'
 import PatientHistoryPage from '../pages/PatientHistoryPage'
 import ClinicInvitationPage from '../pages/ClinicInvitationPage'
 import BillingOrderPage from '../pages/BillingOrderPage'
-import BillingPage from '../pages/billing/BillingPage'
-import PaymentPage from '../pages/billing/PaymentPage'
-import PaymentSuccessPage from '../pages/billing/PaymentSuccessPage'
 import FcmToastHost from '../components/FcmToastHost'
 import AdminPortalPage from '../pages/portal/AdminPortalPage'
 import OwnerViewsPage from '../pages/portal/OwnerViewsPage'
 import ProfilePage from '../pages/ProfilePage'
-import AdminManagementPage from '../pages/AdminManagementPage'
 
-const ConsultationsPage = lazy(() => import('../pages/consultations/ConsultationsPage'))
+function RouteLoadError() {
+  return <main>
+    <p role="alert">Không thể tải trang AURA. Kiểm tra kết nối rồi tải lại.</p>
+    <button type="button" onClick={() => window.location.reload()}>Tải lại trang</button>
+  </main>
+}
+
+function lazyPage(load: () => Promise<{ default: ComponentType }>) {
+  return lazy(() => load().catch(() => ({ default: RouteLoadError })))
+}
+
+const App = lazyPage(() => import('../App'))
+const AppRouter = lazyPage(() => import('./AppRouter'))
+const UploadPage = lazyPage(() => import('../pages/UploadPage'))
+const BatchProgressPage = lazyPage(() => import('../pages/BatchProgressPage'))
+const AnalysisResultPage = lazyPage(() => import('../pages/AnalysisResultPage'))
+const ClinicUploadPage = lazyPage(() => import('../pages/ClinicUploadPage'))
+const DoctorWorkspacePage = lazyPage(() => import('../pages/doctor/DoctorWorkspacePage'))
+const BillingPage = lazyPage(() => import('../pages/billing/BillingPage'))
+const PaymentPage = lazyPage(() => import('../pages/billing/PaymentPage'))
+const PaymentSuccessPage = lazyPage(() => import('../pages/billing/PaymentSuccessPage'))
+const AdminManagementPage = lazyPage(() => import('../pages/AdminManagementPage'))
+
+const ConsultationsPage = lazyPage(() => import('../pages/consultations/ConsultationsPage'))
 
 function DemoScope({ children }: { children: ReactNode }) {
   return <>
@@ -45,6 +58,7 @@ export default function ApplicationRoutes() {
   return (
     <>
     <FcmToastHost />
+    <Suspense fallback={<p role="status">Đang tải trang AURA...</p>}>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/403" element={<ForbiddenPage />} />
@@ -52,9 +66,11 @@ export default function ApplicationRoutes() {
       <Route path="/router-demo/*" element={<DemoScope><AppRouter /></DemoScope>} />
       <Route path="/demo/*" element={<ProtectedRoute><DemoScope><App /></DemoScope></ProtectedRoute>} />
       <Route path="/upload" element={<ProtectedRoute><UploadPage /></ProtectedRoute>} />
-      <Route path="/clinic-upload" element={<ProtectedRoute><ClinicUploadPage /></ProtectedRoute>} />
+      <Route element={<ProtectedRoute><ClinicUploadNavigation /></ProtectedRoute>}>
+        <Route path="/clinic-upload" element={<ClinicUploadPage />} />
+        <Route path="/clinics/patients" element={<ClinicPatientPage />} />
+      </Route>
       <Route path="/clinics/members" element={<ProtectedRoute><ClinicMemberPage /></ProtectedRoute>} />
-      <Route path="/clinics/patients" element={<ProtectedRoute><ClinicPatientPage /></ProtectedRoute>} />
       <Route path="/clinics/patients/:patientId/history" element={<ProtectedRoute><PatientHistoryPage /></ProtectedRoute>} />
       <Route path="/clinics/invitations/:membershipId?" element={<ProtectedRoute><ClinicInvitationPage /></ProtectedRoute>} />
       <Route path="/batches" element={<ProtectedRoute><BatchProgressPage /></ProtectedRoute>} />
@@ -63,9 +79,7 @@ export default function ApplicationRoutes() {
       <Route path="*" element={<NotFoundPage />} />
       <Route path="/analyses/:analysisId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><NotificationInboxPage /></ProtectedRoute>}/>
-      <Route path="/consultations" element={<ProtectedRoute>
-        <Suspense fallback={<p role="status">Đang tải tư vấn…</p>}><ConsultationsPage /></Suspense>
-      </ProtectedRoute>} />
+      <Route path="/consultations" element={<ProtectedRoute><ConsultationsPage /></ProtectedRoute>} />
       <Route path="/billing/orders/:orderId" element={<ProtectedRoute><BillingOrderPage /></ProtectedRoute>}/>
       <Route path="/billing/packages" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
       <Route path="/billing/history" element={<ProtectedRoute><OwnerViewsPage /></ProtectedRoute>} />
@@ -79,6 +93,7 @@ export default function ApplicationRoutes() {
       <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute><AdminManagementPage /></ProtectedRoute>} />
     </Routes>
+    </Suspense>
     </>
   )
 }

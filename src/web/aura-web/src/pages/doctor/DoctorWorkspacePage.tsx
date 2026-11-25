@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBackendSession } from '../../auth/backendSession'
 import BackendSessionNotice from '../../auth/BackendSessionNotice'
@@ -11,6 +11,7 @@ import {
 } from '../../api/doctorReview'
 import InteractiveImageViewer, { layerLabels, type LayerKind } from './InteractiveImageViewer'
 import DoctorReviewForm from './DoctorReviewForm'
+import AppModal from '../../components/common/AppModal'
 import DoctorFeedbackForm from './DoctorFeedbackForm'
 import styles from './doctor.module.css'
 
@@ -49,6 +50,10 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
   const imageTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const imageUrls = useRef<string[]>([])
   const selection = useRef(0)
+  const refreshDetailButton = useRef<HTMLButtonElement>(null)
+  const focusDetailHeading = useCallback((heading: HTMLHeadingElement | null) => {
+    heading?.focus()
+  }, [])
 
   useEffect(() => () => {
     listAbort.current?.abort()
@@ -302,7 +307,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
       {detailError && <p role="alert" className={styles.error}>{detailError}</p>}
     </section>}
     {detail && <section className={styles.detail} aria-label="Chi tiết ca chụp">
-      <div className={styles.detailHeading}><div><h2>Chi tiết ca chụp</h2>
+      <div className={styles.detailHeading}><div><h2 tabIndex={-1} ref={focusDetailHeading}>Chi tiết ca chụp</h2>
         <p>Analysis ID: <code>{detail.analysisId}</code></p>
         <p>Patient ID: <code>{detail.patientId}</code></p>
         <p>Trạng thái: <strong>{reviewLabels[detail.reviewStatus]}</strong></p>
@@ -311,7 +316,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
         </Link>
         {detail.result?.isMock && <p className={styles.error}>Kết quả AI được backend đánh dấu là mô phỏng.</p>}
         {detail.result?.disclaimer && <p className={styles.hint}>{detail.result.disclaimer}</p>}
-        </div><button type="button" onClick={() => void loadDetail(detail.analysisId)}>Làm mới chi tiết</button></div>
+        </div><button type="button" ref={refreshDetailButton} onClick={() => void loadDetail(detail.analysisId)}>Làm mới chi tiết</button></div>
       {detail.result && <section className={styles.formPanel} aria-label="Nguồn kết quả AI">
         <div className={styles.sectionTitle}><h2>Nguồn kết quả AI</h2></div>
         <dl className={styles.provenance}>
@@ -344,19 +349,18 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
         disabled={stale || !detail.result.resultId || !detail.result.modelVersion}
         onSubmit={saveFeedback} />}
     </section>}
-    {conflictOpen && detail && <div className={styles.modalBackdrop}>
-      <div role="alertdialog" aria-modal="true" aria-labelledby="conflict-title" aria-describedby="conflict-text"
-        className={styles.modal}>
-        <h2 id="conflict-title">Xung đột phiên đánh giá</h2>
-        <p id="conflict-text">Ca chụp đã được cập nhật bởi một phiên khác (HTTP 409). {conflictOpen === 'feedback'
-          ? 'Phản hồi chưa được lưu. Hãy mở phiên bản hiện tại của ca trước khi gửi lại.'
-          : 'Đánh giá hiện tại không được lưu để tránh ghi đè dữ liệu của bác sĩ khác.'}</p>
-        <div className={styles.modalActions}>
-          <button type="button" onClick={() => setConflictOpen(null)}>Đóng</button>
-          <button type="button" className={styles.primary} onClick={() => void loadDetail(detail.analysisId)}>Tải phiên bản mới nhất</button>
-        </div>
-      </div>
-    </div>}
+    <AppModal isOpen={conflictOpen !== null && Boolean(detail)} role="alertdialog"
+      title="Xung đột phiên đánh giá" describedBy="conflict-text" className={styles.modal}
+      onClose={() => {
+        setConflictOpen(null)
+        refreshDetailButton.current?.focus()
+      }}
+      actions={detail && <button type="button" className={styles.primary}
+        onClick={() => void loadDetail(detail.analysisId)}>Tải phiên bản mới nhất</button>}>
+      <p id="conflict-text">Ca chụp đã được cập nhật bởi một phiên khác (HTTP 409). {conflictOpen === 'feedback'
+        ? 'Phản hồi chưa được lưu. Hãy mở phiên bản hiện tại của ca trước khi gửi lại.'
+        : 'Đánh giá hiện tại không được lưu để tránh ghi đè dữ liệu của bác sĩ khác.'}</p>
+    </AppModal>
   </main>
 }
 

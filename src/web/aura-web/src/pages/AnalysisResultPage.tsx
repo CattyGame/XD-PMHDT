@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import type { BackendContext } from '../api/backendContext'
 import { validBatchId } from '../api/batchProgress'
@@ -53,34 +53,59 @@ const terminalStatuses = new Set(['COMPLETED', 'FAILED', 'LOW_QUALITY', 'REJECTE
  * Mỗi file yêu cầu URL riêng tư từ backend. Không dùng public container,
  * không lưu URL ký vào storage và xóa URL khỏi state khi hết hạn.
  */
-function PrivateFilePreview({ analysisId, file, context }: {
+function PrivateFilePreview({ analysisId, file, context, defer }: {
   analysisId: string
   file: FileRef
   context: BackendContext
+  defer: boolean
 }) {
   const [view, setView] = useState<ImageView>({ phase: 'loading' })
   const [attempt, setAttempt] = useState(0)
+  const [nearViewport, setNearViewport] = useState(false)
+  const visible = !defer || nearViewport || typeof IntersectionObserver === 'undefined'
+  const previewRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
+    if (visible || !previewRef.current) return
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) setNearViewport(true)
+    }, { rootMargin: '200px' })
+    observer.observe(previewRef.current)
+    return () => observer.disconnect()
+  }, [visible])
+
+  useEffect(() => {
+    if (!visible) return
     const controller = new AbortController()
     let expiryTimer: ReturnType<typeof setTimeout> | undefined
     let objectUrl: string | undefined
+    function releaseUrl() {
+      if (!objectUrl) return
+      URL.revokeObjectURL(objectUrl)
+      objectUrl = undefined
+    }
 
     void getPrivateFileAccess(analysisId, file.fileId, context, controller.signal)
       .then(async (access) => {
         if (controller.signal.aborted) return
-        const remaining = Date.parse(access.expiresAt) - Date.now()
-        if (!Number.isFinite(remaining) || remaining <= 0) {
+        const expiresAt = Date.parse(access.expiresAt)
+        if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
           setView({ phase: 'expired' })
           return
         }
         const blob = await getProtectedContent(access.url, context, controller.signal)
         if (controller.signal.aborted) return
+        const remaining = expiresAt - Date.now()
+        if (remaining <= 0) {
+          setView({ phase: 'expired' })
+          return
+        }
         if (!['image/png', 'image/jpeg'].includes(blob.type.split(';')[0])) throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
         objectUrl = URL.createObjectURL(blob)
         setView({ phase: 'ready', url: objectUrl })
         expiryTimer = setTimeout(() => {
-          if (!controller.signal.aborted) setView({ phase: 'expired' })
+          releaseUrl()
+          setView({ phase: 'expired' })
         }, Math.min(remaining, 2_147_000_000))
       })
       .catch((cause: unknown) => {
@@ -92,19 +117,19 @@ function PrivateFilePreview({ analysisId, file, context }: {
     return () => {
       controller.abort()
       if (expiryTimer !== undefined) clearTimeout(expiryTimer)
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      releaseUrl()
     }
-  }, [analysisId, file.fileId, context, attempt])
+  }, [analysisId, file.fileId, context, attempt, visible])
 
   const retry = useCallback(() => {setView({ phase: 'loading' })
   setAttempt((value) => value + 1)
 }, [])
-  return <figure className="analysis-file-preview">
+  return <figure className="analysis-file-preview" ref={previewRef}>
     <figcaption><strong>{fileLabels[file.kind]}</strong> <code>{file.fileId}</code></figcaption>
-    {view.phase === 'loading' && <p role="status">Đang xin quyền truy cập ảnh riêng tư...</p>}
+    {visible && view.phase === 'loading' && <p role="status">Đang xin quyền truy cập ảnh riêng tư...</p>}
     {view.phase === 'ready' &&
       <img src={view.url} alt={fileLabels[file.kind]} referrerPolicy="no-referrer"
-        loading="lazy" onError={() => setView({ phase: 'broken' })} />}
+        loading={defer ? 'lazy' : 'eager'} decoding="async" onError={() => setView({ phase: 'broken' })} />}
     {view.phase === 'error' && <p role="alert">{analysisErrorMessage(view.error)}</p>}
     {view.phase === 'expired' && <p role="alert">Đường dẫn ảnh đã hết hạn. Yêu cầu quyền truy cập mới để xem ảnh.</p>}
     {view.phase === 'broken' && <p role="alert">Không tải được ảnh từ URL được cấp. Tệp có thể đã hết hạn hoặc không còn truy cập được.</p>}
@@ -260,8 +285,8 @@ function AnalysisViewer({ analysisId, context }: { analysisId: string; context: 
       <h2 id="analysis-files-heading">Ảnh và chú thích riêng tư</h2>
       <p>Từng ảnh được tải sau khi máy chủ kiểm tra quyền hiện hành.</p>
       {uniqueFiles.length > 0
-        ? <div className="analysis-files-grid">{uniqueFiles.map((file) =>
-          <PrivateFilePreview key={file.fileId} analysisId={analysisId} file={file} context={context} />)}</div>
+        ? <div className="analysis-files-grid">{uniqueFiles.map((file, index) =>
+          <PrivateFilePreview key={file.fileId} analysisId={analysisId} file={file} context={context} defer={index > 0} />)}</div>
         : <p>API chưa cung cấp tham chiếu ảnh có quyền truy cập.</p>}
     </section>
     {result && <ReportDownloadButton resource="analyses" resourceId={analysisId} format="pdf" context={context} />}
@@ -284,7 +309,7 @@ export default function AnalysisResultPage() {
     <h1>Kết quả phân tích võng mạc</h1>
     <p>Analysis ID: <code>{analysisId ?? 'Chưa có'}</code></p>
     {analysisId && validBatchId(analysisId)
-      ? <AnalysisViewer key={`${state.context.firebaseUid}:${state.context.accountId}:${analysisId}`}
+      ? <AnalysisViewer key={`${state.context.firebaseUid}:${state.context.accountId}:${state.context.profileVersion}:${clinicContextId ?? ''}:${analysisId}`}
         analysisId={analysisId} context={context!} />
       : <p role="alert">Analysis ID trong đường dẫn không hợp lệ.</p>}
   </main>

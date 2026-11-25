@@ -27,6 +27,9 @@ async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT'], research = fal
       roles, accountStatus: 'ACTIVE', profileProvisioningStatus: 'READY' } })
     if (path.endsWith('/profiles/me')) return route.fulfill({ json: { accountId: account, patientId: patient,
       personalTenantId: id(10), displayName: 'Synthetic M5', profileVersion: 1 } })
+    if (['/api/v1/admin/clinics', '/api/v1/admin/accounts', '/api/v1/admin/audit-events'].includes(path)) {
+      return route.fulfill({ json: { items: [], nextCursor: null } })
+    }
     if (path === '/api/v1/clinics') return route.fulfill({ json: { items: [{ clinicId: clinic, clinicName: 'Synthetic clinic', role: 'CLINIC_ADMIN', status: 'ACTIVE' }] } })
     const detail = { analysisId: analysis, batchId: id(7), patientId: patient, processingStatus: 'COMPLETED',
       reviewStatus: state.reviewStatus, reviewVersion: state.reviewVersion, createdAt: '2026-11-01T09:00:00Z',
@@ -164,10 +167,170 @@ test('MOCK: SCRUM-393 admin catalog binds the price version and reloads after co
   await expect(page.getByText(item.displayName, { exact: true })).toBeVisible()
 })
 
-for (const width of [1024, 1366, 1920]) {
+test('MOCK: small screens reflow and Admin tabs can be activated from the keyboard', async ({ page, context }) => {
+  const viewports = [{ width: 390, height: 844 }, { width: 768, height: 1024 }]
+  const assertReflow = (screen: Page) => expect.poll(() => screen.evaluate(() =>
+    document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport)
+    await page.goto('/login')
+    await expect(page.getByLabel('Email', { exact: true })).toBeVisible()
+    await assertReflow(page)
+  }
+  await page.keyboard.press('Tab')
+  const email = page.getByLabel('Email', { exact: true })
+  await expect(email).toBeFocused()
+  await expect(email).toHaveCSS('outline-style', 'solid')
+  await fixture(page, ['PATIENT'])
+  for (const [route, heading] of [
+    ['/upload', 'AURA — Upload ảnh võng mạc'],
+    ['/batches', 'Theo dõi batch ảnh võng mạc'],
+  ]) {
+    await page.goto(route)
+    await expect(page.getByRole('heading', { name: heading })).toBeVisible()
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport)
+      await assertReflow(page)
+    }
+  }
+  const admin = await context.newPage()
+  await fixture(admin, ['SYSTEM_ADMIN'])
+  await admin.goto('/admin')
+  await expect(admin.getByRole('heading', { name: 'Quản trị hệ thống (SuperAdmin)' })).toBeVisible()
+  for (const viewport of viewports) {
+    await admin.setViewportSize(viewport)
+    await assertReflow(admin)
+  }
+  const tabs = admin.getByRole('tablist', { name: 'Danh mục quản trị' })
+  const clinics = tabs.getByRole('tab', { name: 'Duyệt Cơ sở y tế' })
+  const accounts = tabs.getByRole('tab', { name: 'Quản lý Tài khoản' })
+  await clinics.press('ArrowRight')
+  await expect(accounts).toBeFocused()
+  await expect(clinics).toHaveAttribute('aria-selected', 'true')
+  await admin.keyboard.press('Enter')
+  await expect(accounts).toHaveAttribute('aria-selected', 'true')
+  await expect(admin.getByRole('tabpanel', { name: 'Quản lý Tài khoản' })).toBeVisible()
+  await admin.keyboard.press('Tab')
+  await expect(admin.getByRole('searchbox', { name: 'Tìm tài khoản' })).toBeFocused()
+})
+
+test('MOCK: clinician opens the result in three clicks after selecting a clinic patient', async ({ page }) => {
+  await fixture(page, ['DOCTOR'])
+  const record = { patientId: patient, clinicId: clinic, fullName: 'Synthetic selected patient', status: 'ACTIVE' }
+  const batchId = id(7), batchPath = '/api/v1/analysis-upload-batches'
+  let item: { itemId: string; patientId: string; fileName: string; eyeSide: string; uploadStatus: string }
+  let finalized = 0
+  let resultReady = false
+  let resultAllowed = true
+  let resultReads = 0
+  const inventory = () => ({
+    batchId, statusUrl: `/api/v1/batches/${batchId}`, createdAt: '2026-11-01T09:00:00Z', status: 'UPLOADING', items: [item],
+  })
+  await page.route('**/api/v1/**', async route => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname
+    expect(request.headers().authorization).toBe(`Bearer ${token}`)
+    if (path === '/api/v1/clinics') {
+      return route.fulfill({ json: { items: [{ clinicId: clinic, clinicName: 'Synthetic clinic', role: 'DOCTOR', status: 'ACTIVE' }] } })
+    }
+    if (path === `/api/v1/clinics/${clinic}/patients`) return route.fulfill({ json: { clinicId: clinic, items: [record] } })
+    if (path === `/api/v1/clinics/${clinic}/patients/${patient}`) return route.fulfill({ json: record })
+    if (path.startsWith(batchPath)) {
+      expect(url.searchParams.get('clinicContextId')).toBe(clinic)
+      if (path === batchPath && request.method() === 'POST') {
+        const entries = request.postDataJSON().items
+        expect(entries).toHaveLength(1)
+        expect(entries[0]).toMatchObject({ patientId: patient, fileName: 'synthetic.png' })
+        item = { ...entries[0], uploadStatus: 'DECLARED' }
+        return route.fulfill({ status: 201, json: inventory() })
+      }
+      if (request.method() === 'PUT' && path === `${batchPath}/${batchId}/items/${item.itemId}`) {
+        expect(request.postDataBuffer()?.includes(png)).toBe(true)
+        item = { ...item, uploadStatus: 'STAGED' }
+        return route.fulfill({ json: item })
+      }
+      if (request.method() === 'GET' && path === `${batchPath}/${batchId}`) {
+        return route.fulfill({ json: inventory() })
+      }
+      if (path === `${batchPath}/${batchId}/finalize`) {
+        expect(item.uploadStatus).toBe('STAGED')
+        finalized++
+        return route.fulfill({ status: 202, json: { ...inventory(),
+          items: [{ analysisId: item.itemId, fileName: item.fileName, processingStatus: 'QUEUED' }] } })
+      }
+    }
+    if (path === `/api/v1/analyses/${item?.itemId}`) {
+      expect(url.searchParams.get('clinicContextId')).toBe(clinic)
+      resultReads++
+      if (!resultAllowed) return route.fulfill({ status: 403, json: { error: { code: 'ERR_FORBIDDEN' } } })
+      return route.fulfill({ json: { analysisId: item.itemId, batchId, processingStatus: resultReady ? 'COMPLETED' : 'QUEUED',
+        reviewStatus: 'PENDING', updatedAt: '2026-11-01T09:00:00Z',
+        image: resultReady ? { fileId: file, kind: 'original' } : null,
+        result: resultReady ? { version: 1, isMock: true, riskAvailable: false, riskLevel: null, riskScore: null,
+          confidenceScore: null, modelVersion: 'synthetic', configVersion: 'fixture', thresholdVersion: 'fixture',
+          disclaimer: 'Synthetic TEST', limitations: 'Software fixture', metrics: { avRatio: null },
+          indicators: [], annotations: [], warnings: [{ code: 'AVR_UNAVAILABLE', message: 'Synthetic AVR unavailable reason' }] } : null,
+      } })
+    }
+    if (path.startsWith(`/api/v1/analyses/${item?.itemId}/files/${file}/`)) {
+      expect(url.searchParams.get('clinicContextId')).toBe(clinic)
+      if (path.endsWith('/access')) return route.fulfill({ json: {
+        url: `/api/v1/analyses/${item.itemId}/files/${file}/content?clinicContextId=${clinic}`,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      } })
+      if (path.endsWith('/content')) return route.fulfill({ contentType: 'image/png', body: png })
+    }
+    return route.fallback()
+  })
+  await page.goto('/clinics/patients')
+  await page.getByRole('button', { name: 'Chi tiết', exact: true }).click()
+  const selected = page.getByRole('region', { name: /Hồ Sơ Bệnh Án: Synthetic selected patient/ })
+  await expect(selected).toBeVisible()
+  const chooser = page.waitForEvent('filechooser')
+  await selected.getByRole('button', { name: /Chụp \/ Gửi ảnh phân tích/ }).click()
+  await (await chooser).setFiles({ name: 'synthetic.png', mimeType: 'image/png', buffer: png })
+  await expect(page.getByRole('combobox', { name: 'Bệnh nhân ảnh1' })).toHaveValue(patient)
+  await page.getByRole('button', { name: 'Gửi ảnh phòng khám' }).click()
+  await page.getByRole('link', { name: 'Xem kết quả phân tích' }).click()
+  await expect(page.getByRole('heading', { name: 'Kết quả phân tích võng mạc' })).toBeVisible()
+  await expect(page.getByText(/Chưa có kết quả AI hoàn tất/)).toBeVisible()
+  expect(finalized).toBe(1)
+
+  resultReady = true
+  await page.reload()
+  const avr = page.getByRole('region', { name: 'Tỷ số động/tĩnh mạch (AVR)' })
+  await expect(avr).toContainText('Synthetic AVR unavailable reason')
+  await expect(avr).not.toContainText(/AVR:\s*0/)
+  const image = page.getByRole('img', { name: 'Ảnh võng mạc gốc' })
+  await expect(image).toHaveAttribute('src', /^blob:/)
+  const blobUrl = (await image.getAttribute('src'))!
+  await expect.poll(() => image.evaluate(img => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+
+  await page.getByRole('link', { name: 'Trang chủ', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Trang chủ AURA' })).toBeVisible()
+  await expect.poll(() => page.evaluate(url => fetch(url).then(() => true, () => false), blobUrl)).toBe(false)
+
+  resultAllowed = false
+  await page.goBack()
+  await expect(page.getByRole('alert')).toContainText(/không được truy cập/i)
+  await expect(image).toHaveCount(0)
+  await expect(avr).toHaveCount(0)
+  await page.getByRole('link', { name: 'Trang chủ', exact: true }).click()
+  await page.getByRole('button', { name: 'Đăng xuất', exact: true }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  const readsAfterLogout = resultReads
+  await page.goBack()
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(image).toHaveCount(0)
+  expect(resultReads).toBe(readsAfterLogout)
+})
+
+for (const [width, height] of [[390, 844], [768, 1024], [1024, 900], [1366, 768], [1920, 1080]]) {
   test(`MOCK: Doctor approves through authenticated image bytes at ${width}px`, async ({ page }, info) => {
     const state = await fixture(page)
-    await page.setViewportSize({ width, height: 900 })
+    await page.setViewportSize({ width, height })
     await openDoctor(page)
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
     await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
@@ -187,11 +350,22 @@ test('MOCK: offline review preserves draft; 409 blocks overwrite; revoked access
   await expect(page.getByRole('alert').filter({ hasText: /Không/ })).toBeVisible()
   await expect(notes).toHaveValue('Synthetic in-memory draft')
   state.reviewHttp = 409
-  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
-  await expect(page.getByRole('alertdialog')).toBeVisible()
+  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).press('Enter')
+  const conflict = page.getByRole('alertdialog', { name: 'Xung đột phiên đánh giá' })
+  await expect(conflict).toBeVisible()
+  await expect(conflict).toHaveAccessibleDescription(/HTTP 409/)
+  await expect(conflict.getByRole('button', { name: 'Đóng' })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(conflict.getByRole('button', { name: 'Tải phiên bản mới nhất' })).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(conflict.getByRole('button', { name: 'Đóng' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(conflict).toHaveCount(0)
+  const refresh = page.getByRole('button', { name: 'Làm mới chi tiết' })
+  await expect(refresh).toBeFocused()
   expect(state.posts).toBe(2)
-  await page.getByRole('button', { name: 'Tải phiên bản mới nhất' }).click()
-  await expect(page.getByRole('alertdialog')).toHaveCount(0)
+  await refresh.press('Enter')
+  await expect(page.getByRole('heading', { name: 'Chi tiết ca chụp' })).toBeFocused()
   state.reviewHttp = 403
   await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
   await expect(page.getByRole('region', { name: 'Chi tiết ca chụp' })).toHaveCount(0)

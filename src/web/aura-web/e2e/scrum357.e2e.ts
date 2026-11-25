@@ -24,6 +24,7 @@ for (const width of [1024, 1366, 1920]) {
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/login')
     await expect(page.getByRole('heading', { name: /AURA — Đăng nhập/ })).toBeVisible()
+    await expect(page.locator('html')).toHaveAttribute('lang', 'vi')
     await page.screenshot({ path: testInfo.outputPath(`login-${width}.png`), fullPage: true })
     const dimensions = await page.evaluate(() => ({
       viewport: document.documentElement.clientWidth,

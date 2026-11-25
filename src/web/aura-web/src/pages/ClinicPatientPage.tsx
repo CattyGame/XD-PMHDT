@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
 import type { BackendContext } from '../api/backendContext'
+import type { ClinicUploadHandoff } from '../routes/ClinicUploadNavigation'
 import {
   getActorClinics,
   getClinicPatients,
@@ -21,6 +22,10 @@ const emptyRegistration: RegisterClinicPatientInput = {
 }
 
 function ClinicPatientContent({ context }: { context: BackendContext }) {
+  const navigate = useNavigate()
+  const uploadHandoff = useOutletContext<ClinicUploadHandoff | null>()
+  const uploadInput = useRef<HTMLInputElement>(null)
+  const setUploadDraft = uploadHandoff?.setDraft
   const [clinics, setClinics] = useState<readonly ClinicInfo[]>([])
   const [selectedClinicId, setSelectedClinicId] = useState<string>('')
   const [patients, setPatients] = useState<readonly ClinicPatient[]>([])
@@ -34,6 +39,8 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
   const [reloadTrigger, setReloadTrigger] = useState(0)
   const scope = useRef(new AbortController())
   const detailRequest = useRef<AbortController | null>(null)
+
+  useEffect(() => { setUploadDraft?.(null) }, [setUploadDraft])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -330,13 +337,21 @@ function ClinicPatientContent({ context }: { context: BackendContext }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <h3 id="patient-detail-title">Hồ Sơ Bệnh Án: {selectedPatient.fullName}</h3>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <Link
-                className="btn-primary"
-                to={`/clinic-upload?clinicContextId=${selectedPatient.clinicId}&patientId=${selectedPatient.patientId}`}
-                style={{ textDecoration: 'none', fontSize: '13px' }}
-              >
+              {uploadHandoff ? <>
+                <button type="button" className="btn-primary" disabled={selectedPatient.status !== 'ACTIVE'}
+                  onClick={() => uploadInput.current?.click()}>+ Chụp / Gửi ảnh phân tích</button>
+                <input hidden ref={uploadInput} type="file" accept="image/png,image/jpeg" multiple onChange={event => {
+                  const files = Array.from(event.currentTarget.files ?? [])
+                  event.currentTarget.value = ''
+                  if (files.length === 0) return
+                  const { clinicId, patientId } = selectedPatient
+                  uploadHandoff.setDraft({ clinicId, patientId, files })
+                  void navigate(`/clinic-upload?clinicContextId=${clinicId}&patientId=${patientId}`)
+                }} />
+              </> : <Link className="btn-primary"
+                to={`/clinic-upload?clinicContextId=${selectedPatient.clinicId}&patientId=${selectedPatient.patientId}`}>
                 + Chụp / Gửi ảnh phân tích
-              </Link>
+              </Link>}
               {currentClinic?.role !== 'STAFF' && <Link
                 className="btn-secondary"
                 to={`/clinics/patients/${selectedPatient.patientId}/history?clinicContextId=${selectedPatient.clinicId}`}

@@ -5,9 +5,10 @@ import type { AnalysisDetail } from '../api/analysisResult'
 import type { BackendContext } from '../api/backendContext'
 import { BackendSessionContext } from '../auth/backendSession'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn() }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), access: vi.fn(), content: vi.fn() }))
 vi.mock('../api/analysisResult', async (actual) => ({
   ...await actual<typeof import('../api/analysisResult')>(), getAnalysisResult: mocks.get,
+  getPrivateFileAccess: mocks.access, getProtectedContent: mocks.content,
 }))
 import AnalysisResultPage from './AnalysisResultPage'
 
@@ -41,7 +42,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   mocks.get.mockResolvedValue(completed)
 })
-afterEach(() => { cleanup(); vi.useRealTimers() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers() })
 async function settle() { await act(async () => { await Promise.resolve(); await Promise.resolve() }) }
 
 describe('Kết quả AVR chưa khả dụng', () => {
@@ -150,4 +151,41 @@ describe('Kết quả AVR chưa khả dụng', () => {
     expect(screen.queryByRole('region', { name: 'Đánh giá nguy cơ từ API' })).toBeNull()
     expect(screen.queryByRole('region', { name: 'Tỷ số động/tĩnh mạch (AVR)' })).toBeNull()
   })
+})
+
+it('defers secondary image bytes and releases each Blob URL at its authorization expiry', async () => {
+  const original = '50000000-0000-4000-8000-000000000006'
+  const overlay = '50000000-0000-4000-8000-000000000007'
+  mocks.get.mockResolvedValue({
+    ...completed, image: { fileId: original, kind: 'original' },
+    result: { ...completed.result!, annotations: [{ fileId: overlay, kind: 'overlay' }] },
+  })
+  const expiresAt = new Date(Date.now() + 1000).toISOString()
+  mocks.access.mockImplementation(async (_analysisId, fileId) => ({ url: fileId, expiresAt }))
+  mocks.content.mockImplementation((fileId) => fileId === original
+    ? new Promise(resolve => setTimeout(() => resolve(new Blob(['original'], { type: 'image/png' })), 600))
+    : Promise.resolve(new Blob(['overlay'], { type: 'image/png' })))
+  let onIntersect!: (entries: Array<{ isIntersecting: boolean }>) => void
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(callback: typeof onIntersect) { onIntersect = callback }
+    observe() {}
+    disconnect() {}
+  })
+  const release = vi.fn()
+  vi.stubGlobal('URL', class extends URL {
+    static createObjectURL = vi.fn().mockReturnValueOnce('blob:original').mockReturnValueOnce('blob:overlay')
+    static revokeObjectURL = release
+  })
+  show()
+  await settle()
+  expect(mocks.access.mock.calls.map(([, fileId]) => fileId)).toEqual([original])
+  await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+  expect(screen.getByRole('img', { name: 'Ảnh võng mạc gốc' }).getAttribute('src')).toBe('blob:original')
+  await act(async () => { onIntersect([{ isIntersecting: true }]) })
+  expect(mocks.content.mock.calls.map(([path]) => path)).toEqual([original, overlay])
+  expect(screen.getByRole('img', { name: 'Ảnh phủ overlay' }).getAttribute('src')).toBe('blob:overlay')
+  await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+  expect(release.mock.calls.map(([url]) => url).sort()).toEqual(['blob:original', 'blob:overlay'])
+  expect(screen.queryByRole('img')).toBeNull()
+  expect(screen.getAllByRole('alert')).toHaveLength(2)
 })
