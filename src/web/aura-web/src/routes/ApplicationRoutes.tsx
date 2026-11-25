@@ -6,6 +6,7 @@ import ForbiddenPage from '../pages/ForbiddenPage'
 import NotFoundPage from '../pages/NotFoundPage'
 import ServerErrorPage from '../pages/ServerErrorPage'
 import ProtectedRoute from './ProtectedRoute'
+import ClinicUploadNavigation from './ClinicUploadNavigation'
 import NotificationInboxPage from '../pages/NotificationInboxPage'
 import CampaignManagementPage from '../pages/CampaignManagementPage'
 import ClinicMemberPage from '../pages/ClinicMemberPage'
@@ -61,9 +62,11 @@ export default function ApplicationRoutes() {
       <Route path="/router-demo/*" element={<DemoScope><AppRouter /></DemoScope>} />
       <Route path="/demo/*" element={<ProtectedRoute><DemoScope><App /></DemoScope></ProtectedRoute>} />
       <Route path="/upload" element={<ProtectedRoute><UploadPage /></ProtectedRoute>} />
-      <Route path="/clinic-upload" element={<ProtectedRoute><ClinicUploadPage /></ProtectedRoute>} />
+      <Route element={<ProtectedRoute><ClinicUploadNavigation /></ProtectedRoute>}>
+        <Route path="/clinic-upload" element={<ClinicUploadPage />} />
+        <Route path="/clinics/patients" element={<ClinicPatientPage />} />
+      </Route>
       <Route path="/clinics/members" element={<ProtectedRoute><ClinicMemberPage /></ProtectedRoute>} />
-      <Route path="/clinics/patients" element={<ProtectedRoute><ClinicPatientPage /></ProtectedRoute>} />
       <Route path="/clinics/patients/:patientId/history" element={<ProtectedRoute><PatientHistoryPage /></ProtectedRoute>} />
       <Route path="/clinics/invitations/:membershipId?" element={<ProtectedRoute><ClinicInvitationPage /></ProtectedRoute>} />
       <Route path="/batches" element={<ProtectedRoute><BatchProgressPage /></ProtectedRoute>} />

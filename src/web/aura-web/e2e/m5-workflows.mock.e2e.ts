@@ -137,6 +137,71 @@ test('MOCK: small screens reflow and Admin tabs can be activated from the keyboa
   await expect(admin.getByRole('searchbox', { name: 'Tìm tài khoản' })).toBeFocused()
 })
 
+test('MOCK: clinician opens the result in three clicks after selecting a clinic patient', async ({ page }) => {
+  await fixture(page, ['DOCTOR'])
+  const record = { patientId: patient, clinicId: clinic, fullName: 'Synthetic selected patient', status: 'ACTIVE' }
+  const batchId = id(7), batchPath = '/api/v1/analysis-upload-batches'
+  let item: { itemId: string; patientId: string; fileName: string; eyeSide: string; uploadStatus: string }
+  let finalized = 0
+  const inventory = () => ({
+    batchId, statusUrl: `/api/v1/batches/${batchId}`, createdAt: '2026-11-01T09:00:00Z', status: 'UPLOADING', items: [item],
+  })
+  await page.route('**/api/v1/**', async route => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname
+    expect(request.headers().authorization).toBe(`Bearer ${token}`)
+    if (path === '/api/v1/clinics') {
+      return route.fulfill({ json: { items: [{ clinicId: clinic, clinicName: 'Synthetic clinic', role: 'DOCTOR', status: 'ACTIVE' }] } })
+    }
+    if (path === `/api/v1/clinics/${clinic}/patients`) return route.fulfill({ json: { clinicId: clinic, items: [record] } })
+    if (path === `/api/v1/clinics/${clinic}/patients/${patient}`) return route.fulfill({ json: record })
+    if (path.startsWith(batchPath)) {
+      expect(url.searchParams.get('clinicContextId')).toBe(clinic)
+      if (path === batchPath && request.method() === 'POST') {
+        const entries = request.postDataJSON().items
+        expect(entries).toHaveLength(1)
+        expect(entries[0]).toMatchObject({ patientId: patient, fileName: 'synthetic.png' })
+        item = { ...entries[0], uploadStatus: 'DECLARED' }
+        return route.fulfill({ status: 201, json: inventory() })
+      }
+      if (request.method() === 'PUT' && path === `${batchPath}/${batchId}/items/${item.itemId}`) {
+        expect(request.postDataBuffer()?.includes(png)).toBe(true)
+        item = { ...item, uploadStatus: 'STAGED' }
+        return route.fulfill({ json: item })
+      }
+      if (request.method() === 'GET' && path === `${batchPath}/${batchId}`) {
+        return route.fulfill({ json: inventory() })
+      }
+      if (path === `${batchPath}/${batchId}/finalize`) {
+        expect(item.uploadStatus).toBe('STAGED')
+        finalized++
+        return route.fulfill({ status: 202, json: { ...inventory(),
+          items: [{ analysisId: item.itemId, fileName: item.fileName, processingStatus: 'QUEUED' }] } })
+      }
+    }
+    if (path === `/api/v1/analyses/${item?.itemId}`) {
+      expect(url.searchParams.get('clinicContextId')).toBe(clinic)
+      return route.fulfill({ json: { analysisId: item.itemId, batchId, processingStatus: 'QUEUED',
+        reviewStatus: 'PENDING', updatedAt: '2026-11-01T09:00:00Z', image: null, result: null } })
+    }
+    return route.fallback()
+  })
+  await page.goto('/clinics/patients')
+  await page.getByRole('button', { name: 'Chi tiết', exact: true }).click()
+  const selected = page.getByRole('region', { name: /Hồ Sơ Bệnh Án: Synthetic selected patient/ })
+  await expect(selected).toBeVisible()
+  const chooser = page.waitForEvent('filechooser')
+  await selected.getByRole('button', { name: /Chụp \/ Gửi ảnh phân tích/ }).click()
+  await (await chooser).setFiles({ name: 'synthetic.png', mimeType: 'image/png', buffer: png })
+  await expect(page.getByRole('combobox', { name: 'Bệnh nhân ảnh1' })).toHaveValue(patient)
+  await page.getByRole('button', { name: 'Gửi ảnh phòng khám' }).click()
+  await page.getByRole('link', { name: 'Xem kết quả phân tích' }).click()
+  await expect(page.getByRole('heading', { name: 'Kết quả phân tích võng mạc' })).toBeVisible()
+  await expect(page.getByText(/Chưa có kết quả AI hoàn tất/)).toBeVisible()
+  expect(finalized).toBe(1)
+})
+
 for (const [width, height] of [[390, 844], [768, 1024], [1024, 900], [1366, 768], [1920, 1080]]) {
   test(`MOCK: Doctor approves through authenticated image bytes at ${width}px`, async ({ page }, info) => {
     const state = await fixture(page)
