@@ -24,7 +24,7 @@
 }
 
 /* Nội dung */
-.aura-modal-content {
+.aura-modal .aura-modal-content {
   margin-bottom: 24px;
   font-size: 15px;
   line-height: 1.6;

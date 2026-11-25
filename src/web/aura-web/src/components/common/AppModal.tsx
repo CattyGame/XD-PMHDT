@@ -7,6 +7,10 @@ type AppModalProps = {
   title: string
   children: ReactNode
   onClose: () => void
+  role?: 'alertdialog'
+  describedBy?: string
+  className?: string
+  actions?: ReactNode
 }
 
 export default function AppModal({
@@ -14,6 +18,10 @@ export default function AppModal({
   title,
   children,
   onClose,
+  role,
+  describedBy,
+  className,
+  actions,
 }: AppModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
 
@@ -34,9 +42,12 @@ export default function AppModal({
   return (
     <dialog
       ref={dialogRef}
-      onClose={onClose}
+      onClose={isOpen ? onClose : undefined}
+      role={role}
       aria-label={title}
-      className="aura-modal"
+      aria-describedby={describedBy}
+      aria-modal={isOpen || undefined}
+      className={className ?? 'aura-modal'}
     >
       <h2>{title}</h2>
 
@@ -44,12 +55,10 @@ export default function AppModal({
         {children}
       </div>
 
-      <button
-        type="button"
-        onClick={() => dialogRef.current?.close()}
-      >
-        Đóng
-      </button>
+      <div className="aura-modal-actions">
+        <button type="button" onClick={() => dialogRef.current?.close()}>Đóng</button>
+        {actions}
+      </div>
     </dialog>
   )
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useBackendSession } from '../auth/backendSession'
 import BackendSessionNotice from '../auth/BackendSessionNotice'
@@ -24,6 +24,28 @@ import {
 import './AdminManagementPage.css'
 
 type AdminTab = 'clinics' | 'accounts' | 'audit'
+
+const adminTabs: { id: AdminTab; label: string }[] = [
+  { id: 'clinics', label: 'Duyệt Cơ sở y tế' },
+  { id: 'accounts', label: 'Quản lý Tài khoản' },
+  { id: 'audit', label: 'Nhật ký kiểm toán' },
+]
+
+function focusAdminTab(event: KeyboardEvent<HTMLDivElement>) {
+  const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+  const current = tabs.findIndex(tab => tab === event.target)
+  if (current < 0) return
+  let next: number
+  switch (event.key) {
+    case 'ArrowLeft': next = (current - 1 + tabs.length) % tabs.length; break
+    case 'ArrowRight': next = (current + 1) % tabs.length; break
+    case 'Home': next = 0; break
+    case 'End': next = tabs.length - 1; break
+    default: return
+  }
+  event.preventDefault()
+  tabs[next]?.focus()
+}
 
 type PendingAction =
   | { kind: 'clinic-status'; clinic: AdminClinic; nextStatus: AdminClinicStatus }
@@ -86,6 +108,10 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
   const [actionReason, setActionReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const actionTrigger = useRef<HTMLElement | null>(null)
+  const focusActionHeading = useCallback((heading: HTMLHeadingElement | null) => {
+    heading?.focus()
+  }, [])
 
   const refreshAll = useCallback(() => {
     setError('')
@@ -254,10 +280,17 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
   }
 
   function openAction(action: PendingAction) {
+    actionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setPendingAction(action)
     setActionReason('')
     setError('')
     setSuccessMsg('')
+  }
+
+  function cancelAction() {
+    setPendingAction(null)
+    actionTrigger.current?.focus()
+    actionTrigger.current = null
   }
 
   async function submitPendingAction() {
@@ -324,6 +357,8 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
       }
       setPendingAction(null)
       setActionReason('')
+      actionTrigger.current = null
+      document.getElementById(`admin-tab-${activeTab}`)?.focus()
     } catch (err) {
       setError(mapAdminError(err, 'Thao tác quản trị thất bại.'))
     } finally {
@@ -348,34 +383,22 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
         </button>
       </header>
 
-      <div className="admin-tabs" role="tablist" aria-label="Danh mục quản trị">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'clinics'}
-          className={activeTab === 'clinics' ? 'active' : ''}
-          onClick={() => setActiveTab('clinics')}
-        >
-          Duyệt Cơ sở y tế
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'accounts'}
-          className={activeTab === 'accounts' ? 'active' : ''}
-          onClick={() => setActiveTab('accounts')}
-        >
-          Quản lý Tài khoản
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'audit'}
-          className={activeTab === 'audit' ? 'active' : ''}
-          onClick={() => setActiveTab('audit')}
-        >
-          Nhật ký kiểm toán
-        </button>
+      <div className="admin-tabs" role="tablist" aria-label="Danh mục quản trị" onKeyDown={focusAdminTab}>
+        {adminTabs.map(({ id, label }) => (
+          <button
+            key={id}
+            id={`admin-tab-${id}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === id}
+            aria-controls={`admin-panel-${id}`}
+            tabIndex={activeTab === id ? 0 : -1}
+            className={activeTab === id ? 'active' : ''}
+            onClick={() => setActiveTab(id)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {error && (
@@ -394,8 +417,10 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
       )}
 
       {pendingAction && (
-        <section className="admin-action-panel" aria-label="Xác nhận thao tác quản trị">
-          <h2>
+        <section className="admin-action-panel" aria-label="Xác nhận thao tác quản trị" onKeyDown={event => {
+          if (event.key === 'Escape' && !submitting) cancelAction()
+        }}>
+          <h2 tabIndex={-1} ref={focusActionHeading}>
             {pendingAction.kind === 'clinic-status' &&
               `Chuyển trạng thái cơ sở "${pendingAction.clinic.name}" → ${pendingAction.nextStatus} (v${pendingAction.clinic.version})`}
             {pendingAction.kind === 'account-status' &&
@@ -455,7 +480,7 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
               type="button"
               className="admin-btn-secondary"
               disabled={submitting}
-              onClick={() => setPendingAction(null)}
+              onClick={cancelAction}
             >
               Hủy
             </button>
@@ -463,6 +488,7 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
         </section>
       )}
 
+      <div id="admin-panel-clinics" role="tabpanel" aria-labelledby="admin-tab-clinics" hidden={activeTab !== 'clinics'}>
       {activeTab === 'clinics' && (
         <section aria-label="Danh sách cơ sở y tế">
           <div className="admin-toolbar">
@@ -572,7 +598,9 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
           )}
         </section>
       )}
+      </div>
 
+      <div id="admin-panel-accounts" role="tabpanel" aria-labelledby="admin-tab-accounts" hidden={activeTab !== 'accounts'}>
       {activeTab === 'accounts' && (
         <section aria-label="Danh sách tài khoản">
           <div className="admin-toolbar">
@@ -714,7 +742,9 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
           )}
         </section>
       )}
+      </div>
 
+      <div id="admin-panel-audit" role="tabpanel" aria-labelledby="admin-tab-audit" tabIndex={0} hidden={activeTab !== 'audit'}>
       {activeTab === 'audit' && (
         <section aria-label="Nhật ký kiểm toán hệ thống">
           {auditLoading && auditEvents.length === 0 ? (
@@ -768,6 +798,7 @@ function AdminManagementContent({ context }: { context: BackendContext }) {
           )}
         </section>
       )}
+      </div>
     </div>
   )
 }

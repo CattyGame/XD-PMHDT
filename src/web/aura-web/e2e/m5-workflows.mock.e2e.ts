@@ -26,6 +26,9 @@ async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT']) {
       roles, accountStatus: 'ACTIVE', profileProvisioningStatus: 'READY' } })
     if (path.endsWith('/profiles/me')) return route.fulfill({ json: { accountId: account, patientId: patient,
       personalTenantId: id(10), displayName: 'Synthetic M5', profileVersion: 1 } })
+    if (['/api/v1/admin/clinics', '/api/v1/admin/accounts', '/api/v1/admin/audit-events'].includes(path)) {
+      return route.fulfill({ json: { items: [], nextCursor: null } })
+    }
     if (path === '/api/v1/clinics') return route.fulfill({ json: { items: [{ clinicId: clinic, clinicName: 'Synthetic clinic', role: 'CLINIC_ADMIN', status: 'ACTIVE' }] } })
     const detail = { analysisId: analysis, batchId: id(7), patientId: patient, processingStatus: 'COMPLETED',
       reviewStatus: state.reviewStatus, reviewVersion: state.reviewVersion, createdAt: '2026-11-01T09:00:00Z',
@@ -86,10 +89,58 @@ async function openDoctor(page: Page) {
   await expect(page.getByRole('img', { name: 'Ảnh võng mạc gốc' }).first()).toHaveAttribute('src', /^blob:/)
 }
 
-for (const width of [1024, 1366, 1920]) {
+test('MOCK: small screens reflow and Admin tabs can be activated from the keyboard', async ({ page, context }) => {
+  const viewports = [{ width: 390, height: 844 }, { width: 768, height: 1024 }]
+  const assertReflow = (screen: Page) => expect.poll(() => screen.evaluate(() =>
+    document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport)
+    await page.goto('/login')
+    await expect(page.getByLabel('Email', { exact: true })).toBeVisible()
+    await assertReflow(page)
+  }
+  await page.keyboard.press('Tab')
+  const email = page.getByLabel('Email', { exact: true })
+  await expect(email).toBeFocused()
+  await expect(email).toHaveCSS('outline-style', 'solid')
+  await fixture(page, ['PATIENT'])
+  for (const [route, heading] of [
+    ['/upload', 'AURA — Upload ảnh võng mạc'],
+    ['/batches', 'Theo dõi batch ảnh võng mạc'],
+  ]) {
+    await page.goto(route)
+    await expect(page.getByRole('heading', { name: heading })).toBeVisible()
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport)
+      await assertReflow(page)
+    }
+  }
+  const admin = await context.newPage()
+  await fixture(admin, ['SYSTEM_ADMIN'])
+  await admin.goto('/admin')
+  await expect(admin.getByRole('heading', { name: 'Quản trị hệ thống (SuperAdmin)' })).toBeVisible()
+  for (const viewport of viewports) {
+    await admin.setViewportSize(viewport)
+    await assertReflow(admin)
+  }
+  const tabs = admin.getByRole('tablist', { name: 'Danh mục quản trị' })
+  const clinics = tabs.getByRole('tab', { name: 'Duyệt Cơ sở y tế' })
+  const accounts = tabs.getByRole('tab', { name: 'Quản lý Tài khoản' })
+  await clinics.press('ArrowRight')
+  await expect(accounts).toBeFocused()
+  await expect(clinics).toHaveAttribute('aria-selected', 'true')
+  await admin.keyboard.press('Enter')
+  await expect(accounts).toHaveAttribute('aria-selected', 'true')
+  await expect(admin.getByRole('tabpanel', { name: 'Quản lý Tài khoản' })).toBeVisible()
+  await admin.keyboard.press('Tab')
+  await expect(admin.getByRole('searchbox', { name: 'Tìm tài khoản' })).toBeFocused()
+})
+
+for (const [width, height] of [[390, 844], [768, 1024], [1024, 900], [1366, 768], [1920, 1080]]) {
   test(`MOCK: Doctor approves through authenticated image bytes at ${width}px`, async ({ page }, info) => {
     const state = await fixture(page)
-    await page.setViewportSize({ width, height: 900 })
+    await page.setViewportSize({ width, height })
     await openDoctor(page)
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
     await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
@@ -109,11 +160,22 @@ test('MOCK: offline review preserves draft; 409 blocks overwrite; revoked access
   await expect(page.getByRole('alert').filter({ hasText: /Không/ })).toBeVisible()
   await expect(notes).toHaveValue('Synthetic in-memory draft')
   state.reviewHttp = 409
-  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
-  await expect(page.getByRole('alertdialog')).toBeVisible()
+  await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).press('Enter')
+  const conflict = page.getByRole('alertdialog', { name: 'Xung đột phiên đánh giá' })
+  await expect(conflict).toBeVisible()
+  await expect(conflict).toHaveAccessibleDescription(/HTTP 409/)
+  await expect(conflict.getByRole('button', { name: 'Đóng' })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(conflict.getByRole('button', { name: 'Tải phiên bản mới nhất' })).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(conflict.getByRole('button', { name: 'Đóng' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(conflict).toHaveCount(0)
+  const refresh = page.getByRole('button', { name: 'Làm mới chi tiết' })
+  await expect(refresh).toBeFocused()
   expect(state.posts).toBe(2)
-  await page.getByRole('button', { name: 'Tải phiên bản mới nhất' }).click()
-  await expect(page.getByRole('alertdialog')).toHaveCount(0)
+  await refresh.press('Enter')
+  await expect(page.getByRole('heading', { name: 'Chi tiết ca chụp' })).toBeFocused()
   state.reviewHttp = 403
   await page.getByRole('button', { name: 'Xác nhận và lưu đánh giá' }).click()
   await expect(page.getByRole('region', { name: 'Chi tiết ca chụp' })).toHaveCount(0)
