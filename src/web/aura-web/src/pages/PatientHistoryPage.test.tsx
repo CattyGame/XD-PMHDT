@@ -50,3 +50,24 @@ it('rejects a history payload identifying a different patient',async()=>{
   show();await screen.findByRole('alert')
   expect(screen.queryByRole('link',{name:'Xem kết quả'})).toBeNull()
 })
+
+it('loads versioned measurements only from the scoped results and preserves unavailable AVR', async () => {
+  fetchMock.mockResolvedValueOnce(json({ patientId: patient, items: [row(analysis)], nextBeforeId: null }))
+    .mockResolvedValueOnce(json({ ...row(analysis), updatedAt: '2026-11-15T00:00:01Z', reviewVersion: 2, result: {
+      version: 3, modelVersion: 'frangi-fixture', configVersion: 'config-fixture', thresholdVersion: 'threshold-fixture',
+      isMock: false, riskAvailable: false, riskLevel: null, riskScore: null, confidenceScore: null,
+      disclaimer: '', limitations: '', metrics: { vesselDensity: 0.24, avRatio: null, tortuosityIndex: null },
+      indicators: [], annotations: [], warnings: [], research: {
+        avr: { measurement_available: false, avr: null, crae_px: null, crve_px: null,
+          unavailable_reason: 'LOW_QUALITY', model_version: 'avr-fixture', model_sha256: 'a'.repeat(64) },
+        dr: { probability_dr: 0.8, model_version: 'dr-fixture', checkpoint_sha256: 'b'.repeat(64),
+          gradcam_method: 'GRAD_CAM', gradcam_geometry: 'IMAGENET_CENTER_CROP_224' },
+      },
+    } }))
+  show()
+  fireEvent.click(await screen.findByRole('button', { name: 'Hiện chỉ số của trang này' }))
+  expect(await screen.findByText('Không đo được (LOW_QUALITY)')).toBeTruthy()
+  expect(screen.getByText('24.0%')).toBeTruthy()
+  expect(screen.getByText(/Kết quả 3 · Đánh giá 2/)).toBeTruthy()
+  expect(fetchMock).toHaveBeenLastCalledWith(`/api/v1/analyses/${analysis}?clinicContextId=${clinic}`, expect.anything())
+})

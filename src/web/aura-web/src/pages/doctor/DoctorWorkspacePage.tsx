@@ -6,15 +6,16 @@ import type { BackendContext } from '../../api/backendContext'
 import { AnalysisResultError, getProtectedContent } from '../../api/analysisResult'
 import {
   DoctorApiError, doctorErrorMessage, getDoctorAnalysis, getDoctorFileAccess,
-  getDoctorWorklist, isGuid, submitDoctorReview,
-  type DoctorAnalysis, type ReviewRequest, type RiskLevel,
+  getDoctorWorklist, isGuid, submitDoctorFeedback, submitDoctorReview,
+  type DoctorAnalysis, type FeedbackType, type ReviewRequest, type RiskLevel,
 } from '../../api/doctorReview'
-import InteractiveImageViewer from './InteractiveImageViewer'
+import InteractiveImageViewer, { layerLabels, type LayerKind } from './InteractiveImageViewer'
 import DoctorReviewForm from './DoctorReviewForm'
+import DoctorFeedbackForm from './DoctorFeedbackForm'
 import styles from './doctor.module.css'
 
-type Images = { original: string | null; vessel: string | null; kind: 'mask' | 'overlay' | null; loading: boolean; error: string }
-const emptyImages: Images = { original: null, vessel: null, kind: null, loading: false, error: '' }
+type Images = { original: string | null; layers: Partial<Record<LayerKind, string>>; loading: boolean; error: string }
+const emptyImages: Images = { original: null, layers: {}, loading: false, error: '' }
 const riskLabels: Record<RiskLevel, string> = { LOW: 'Thấp', MODERATE: 'Trung bình', HIGH: 'Cao' }
 const reviewLabels: Record<string, string> = {
   PENDING: 'Chờ đánh giá', IN_REVIEW: 'Đang đánh giá', REVIEWED: 'Đã đánh giá',
@@ -40,7 +41,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
   const [detailError, setDetailError] = useState('')
   const [saveError, setSaveError] = useState('')
   const [images, setImages] = useState<Images>(emptyImages)
-  const [conflictOpen, setConflictOpen] = useState(false)
+  const [conflictOpen, setConflictOpen] = useState<'review' | 'feedback' | null>(null)
   const [stale, setStale] = useState(false)
   const listAbort = useRef<AbortController | null>(null)
   const detailAbort = useRef<AbortController | null>(null)
@@ -77,7 +78,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
     detailAbort.current?.abort()
     clearImages()
     setDetail(null); setWorklist([]); setLoaded(false)
-    setStale(false); setConflictOpen(false); setDetailLoading(false); setListLoading(false)
+    setStale(false); setConflictOpen(null); setDetailLoading(false); setListLoading(false)
     setDetailError(doctorErrorMessage(error)); setSaveError('')
   }
 
@@ -88,7 +89,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
     detailAbort.current?.abort()
     selection.current += 1
     clearImages()
-    setDetail(null); setStale(false); setConflictOpen(false)
+    setDetail(null); setStale(false); setConflictOpen(null)
     setLoaded(false); setListLoading(true); setListError(''); setWorklist([])
     const controller = new AbortController()
     listAbort.current = controller
@@ -108,31 +109,47 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
     const controller = new AbortController()
     imageAbort.current = controller
     setImages({ ...emptyImages, loading: true })
-    const candidate = analysis.result?.annotations.find((file) => file.kind === 'overlay') ??
-      analysis.result?.annotations.find((file) => file.kind === 'mask')
-    try {
-      const [original, vessel] = await Promise.all([
-        getDoctorFileAccess(context, clinicId, analysis.analysisId, analysis.image.fileId, controller.signal),
-        candidate ? getDoctorFileAccess(context, clinicId, analysis.analysisId, candidate.fileId, controller.signal)
-          .catch(error => { if (accessDenied(error)) throw error; return null }) : Promise.resolve(null),
-      ])
-      if (controller.signal.aborted) return
-      const imageContext = { ...context, clinicContextId: clinicId }
-      const [originalBlob, vesselBlob] = await Promise.all([
-        getProtectedContent(original.url, imageContext, controller.signal),
-        vessel ? getProtectedContent(vessel.url, imageContext, controller.signal) : Promise.resolve(null),
-      ])
-      if (controller.signal.aborted) return
-      if ([originalBlob, vesselBlob].some(blob => blob && !['image/png', 'image/jpeg'].includes(blob.type.split(';')[0])))
+    const kinds = (Object.keys(layerLabels) as LayerKind[]).filter(kind =>
+      kind !== 'heatmap' || analysis.result?.research?.dr.gradcam_geometry === 'IMAGENET_CENTER_CROP_224')
+    const imageContext = { ...context, clinicContextId: clinicId }
+    async function download(fileId: string) {
+      const access = await getDoctorFileAccess(context, clinicId, analysis.analysisId, fileId, controller.signal)
+      const blob = await getProtectedContent(access.url, imageContext, controller.signal)
+      if (!['image/png', 'image/jpeg'].includes(blob.type.split(';')[0]))
         throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
-      const expiry = Math.min(Date.parse(original.expiresAt), vessel ? Date.parse(vessel.expiresAt) : Infinity)
-      if (imageExpiryDelay(expiry) === 0) throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
-      const originalUrl = URL.createObjectURL(originalBlob)
-      const vesselUrl = vesselBlob ? URL.createObjectURL(vesselBlob) : null
-      imageUrls.current = vesselUrl ? [originalUrl, vesselUrl] : [originalUrl]
-      setImages({ original: originalUrl, vessel: vesselUrl,
-        kind: vessel ? candidate?.kind as 'mask' | 'overlay' : null, loading: false,
-        error: candidate && !vessel ? 'Không có quyền xem ảnh mạch máu hoặc ảnh chưa sẵn sàng.' : '' })
+      return { blob, expiry: Date.parse(access.expiresAt) }
+    }
+    try {
+      const [original, ...layers] = await Promise.all([
+        download(analysis.image.fileId),
+        ...kinds.map(async kind => {
+          const candidates = analysis.result?.annotations.filter(file => file.kind === kind)
+          if (candidates?.length !== 1) return null
+          try {
+            return { image: await download(candidates[0].fileId), kind }
+          } catch (error) {
+            if (accessDenied(error)) throw error
+            return { image: null, kind }
+          }
+        }),
+      ])
+      if (controller.signal.aborted) return
+      const expiry = Math.min(original.expiry, ...layers.flatMap(layer => layer?.image ? [layer.image.expiry] : []))
+      if (!Number.isFinite(expiry) || imageExpiryDelay(expiry) === 0)
+        throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
+      function imageUrl(blob: Blob) {
+        const url = URL.createObjectURL(blob)
+        imageUrls.current.push(url)
+        return url
+      }
+      const originalUrl = imageUrl(original.blob)
+      const layerUrls: Images['layers'] = {}
+      for (const layer of layers) {
+        if (layer?.image) layerUrls[layer.kind] = imageUrl(layer.image.blob)
+      }
+      const unavailable = layers.flatMap(layer => layer && !layer.image ? [layerLabels[layer.kind]] : [])
+      setImages({ original: originalUrl, layers: layerUrls, loading: false,
+        error: unavailable.length ? `Chưa tải được lớp ảnh: ${unavailable.join(', ')}.` : '' })
       imageTimer.current = setTimeout(() => {
         if (!controller.signal.aborted) {
           clearImages()
@@ -142,7 +159,10 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
     } catch (error) {
       if (controller.signal.aborted) return
       if (accessDenied(error)) clearDeniedAccess(error)
-      else setImages({ ...emptyImages, error: doctorErrorMessage(error) })
+      else {
+        clearImages()
+        setImages({ ...emptyImages, error: doctorErrorMessage(error) })
+      }
     }
   }
 
@@ -156,7 +176,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
     try {
       const fresh = await getDoctorAnalysis(context, clinicId, analysisId, controller.signal)
       if (controller.signal.aborted) return
-      setDetail(fresh); setStale(false); setConflictOpen(false)
+      setDetail(fresh); setStale(false); setConflictOpen(null)
       void loadImages(fresh)
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -183,10 +203,38 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
       if (requestSelection !== selection.current) return
       if (accessDenied(error)) { clearDeniedAccess(error); return }
       if (error instanceof DoctorApiError && error.status === 409) {
-        setStale(true); setConflictOpen(true)
+        setStale(true); setConflictOpen('review')
       } else {
         setSaveError(doctorErrorMessage(error))
       }
+    }
+  }
+
+  async function saveFeedback(type: FeedbackType, comment: string, signal: AbortSignal) {
+    if (!detail || stale) return false
+    const requestSelection = selection.current
+    try {
+      await submitDoctorFeedback(context, clinicId, detail, type, comment, signal)
+      return requestSelection === selection.current && !signal.aborted
+    } catch (error) {
+      if (requestSelection !== selection.current || signal.aborted) return false
+      if (error instanceof DoctorApiError && error.status === 404 && error.code === 'ERR_REQUEST_FAILED') {
+        // Distinguish an undeployed route from a missing/revoked case by rechecking current authority.
+        try {
+          await getDoctorAnalysis(context, clinicId, detail.analysisId, signal)
+        } catch (cause) {
+          if (requestSelection !== selection.current || signal.aborted) return false
+          if (accessDenied(cause)) { clearDeniedAccess(cause); return false }
+          throw cause
+        }
+        throw new DoctorApiError(404, 'ERR_FEEDBACK_UNAVAILABLE')
+      }
+      if (accessDenied(error)) { clearDeniedAccess(error); return false }
+      if (error instanceof DoctorApiError && error.status === 409) {
+        setStale(true); setConflictOpen('feedback')
+        return false
+      }
+      throw error
     }
   }
 
@@ -258,10 +306,29 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
         <p>Analysis ID: <code>{detail.analysisId}</code></p>
         <p>Patient ID: <code>{detail.patientId}</code></p>
         <p>Trạng thái: <strong>{reviewLabels[detail.reviewStatus]}</strong></p>
+        <Link className={styles.back} to={`/clinics/patients/${detail.patientId}/history?clinicContextId=${clinicId}`}>
+          Lịch sử và xu hướng của bệnh nhân
+        </Link>
         {detail.result?.isMock && <p className={styles.error}>Kết quả AI được backend đánh dấu là mô phỏng.</p>}
         {detail.result?.disclaimer && <p className={styles.hint}>{detail.result.disclaimer}</p>}
         </div><button type="button" onClick={() => void loadDetail(detail.analysisId)}>Làm mới chi tiết</button></div>
-      <InteractiveImageViewer originalUrl={images.original} vesselUrl={images.vessel} vesselKind={images.kind} />
+      {detail.result && <section className={styles.formPanel} aria-label="Nguồn kết quả AI">
+        <div className={styles.sectionTitle}><h2>Nguồn kết quả AI</h2></div>
+        <dl className={styles.provenance}>
+          <div><dt>Phiên bản kết quả</dt><dd>{detail.result.version ?? 'Chưa có'}</dd></div>
+          <div><dt>Mô hình</dt><dd>{detail.result.modelVersion ?? 'Chưa có'}</dd></div>
+          <div><dt>Cấu hình</dt><dd>{detail.result.configVersion ?? 'Chưa có'}</dd></div>
+          <div><dt>Ngưỡng</dt><dd>{detail.result.thresholdVersion ?? 'Chưa có'}</dd></div>
+          <div><dt>Phiên bản đánh giá</dt><dd>{detail.reviewVersion}</dd></div>
+          {detail.result.research && <>
+            <div><dt>AVR nghiên cứu</dt><dd>{detail.result.research.avr.avr?.toFixed(3) ??
+              `Không đo được (${detail.result.research.avr.unavailable_reason})`}</dd></div>
+            <div><dt>Mô hình AVR</dt><dd>{detail.result.research.avr.model_version}</dd></div>
+            <div><dt>Mô hình DR nhị phân</dt><dd>{detail.result.research.dr.model_version}</dd></div>
+          </>}
+        </dl>
+      </section>}
+      <InteractiveImageViewer key={detail.analysisId} originalUrl={images.original} layers={images.layers} />
       {images.loading && <p role="status">Đang xin URL ảnh riêng tư...</p>}
       {images.error && <p role="alert" className={styles.error}>{images.error}</p>}
       {!images.loading && (images.error || !images.original) && <button type="button"
@@ -272,14 +339,20 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
         aiRisk={detail.result?.riskAvailable ? detail.result.riskLevel : null}
         reviewed={detail.reviewStatus === 'REVIEWED'} disabled={stale || detail.processingStatus !== 'COMPLETED'}
         onSubmit={saveReview} />
+      {detail.result && <DoctorFeedbackForm
+        key={`${detail.analysisId}:${detail.result.resultId}:${detail.reviewVersion}`}
+        disabled={stale || !detail.result.resultId || !detail.result.modelVersion}
+        onSubmit={saveFeedback} />}
     </section>}
     {conflictOpen && detail && <div className={styles.modalBackdrop}>
       <div role="alertdialog" aria-modal="true" aria-labelledby="conflict-title" aria-describedby="conflict-text"
         className={styles.modal}>
         <h2 id="conflict-title">Xung đột phiên đánh giá</h2>
-        <p id="conflict-text">Ca chụp đã được cập nhật bởi một phiên khác (HTTP 409). Đánh giá hiện tại không được lưu để tránh ghi đè dữ liệu của bác sĩ khác.</p>
+        <p id="conflict-text">Ca chụp đã được cập nhật bởi một phiên khác (HTTP 409). {conflictOpen === 'feedback'
+          ? 'Phản hồi chưa được lưu. Hãy mở phiên bản hiện tại của ca trước khi gửi lại.'
+          : 'Đánh giá hiện tại không được lưu để tránh ghi đè dữ liệu của bác sĩ khác.'}</p>
         <div className={styles.modalActions}>
-          <button type="button" onClick={() => setConflictOpen(false)}>Đóng</button>
+          <button type="button" onClick={() => setConflictOpen(null)}>Đóng</button>
           <button type="button" className={styles.primary} onClick={() => void loadDetail(detail.analysisId)}>Tải phiên bản mới nhất</button>
         </div>
       </div>

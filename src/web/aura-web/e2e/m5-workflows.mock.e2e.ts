@@ -9,8 +9,9 @@ const token = `${encoded({ alg: 'none' })}.${encoded({ sub: uid, iat: Math.floor
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
 
 // Hermetic UI contract checks: every Firebase/API response is synthetic and intercepted.
-async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT']) {
-  const state = { reviewStatus: 'PENDING', reviewVersion: 1, reviewHttp: 201, posts: 0, paid: false, paymentPosts: 0 }
+async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT'], research = false) {
+  const state = { reviewStatus: 'PENDING', reviewVersion: 1, reviewHttp: 201, posts: 0, paid: false, paymentPosts: 0,
+    feedbackStatus: 201, feedbackPosts: 0 }
   await page.route('https://identitytoolkit.googleapis.com/**', route => {
     const headers = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' }
     if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers })
@@ -29,8 +30,25 @@ async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT']) {
     if (path === '/api/v1/clinics') return route.fulfill({ json: { items: [{ clinicId: clinic, clinicName: 'Synthetic clinic', role: 'CLINIC_ADMIN', status: 'ACTIVE' }] } })
     const detail = { analysisId: analysis, batchId: id(7), patientId: patient, processingStatus: 'COMPLETED',
       reviewStatus: state.reviewStatus, reviewVersion: state.reviewVersion, createdAt: '2026-11-01T09:00:00Z',
-      image: { fileId: file, kind: 'original' }, result: { riskAvailable: false, riskLevel: null, isMock: true,
-        annotations: [], disclaimer: 'Synthetic software test; no clinical result' } }
+      image: { fileId: file, kind: 'original' }, result: { riskAvailable: false, riskLevel: null, isMock: !research,
+        annotations: research ? ['overlay', 'mask', 'annotated', 'heatmap'].map((kind, i) => ({ kind, fileId: id(21 + i) })) : [],
+        disclaimer: 'Synthetic software test; no clinical result',
+        ...(research ? { resultId: id(20), version: 3, modelVersion: 'frangi-fixture', configVersion: 'config-fixture',
+          thresholdVersion: 'threshold-fixture', research: {
+            avr: { measurement_available: false, avr: null, crae_px: null, crve_px: null, unavailable_reason: 'LOW_QUALITY',
+              model_version: 'avr-fixture', model_sha256: 'a'.repeat(64) },
+            dr: { probability_dr: 0.8, model_version: 'dr-fixture', checkpoint_sha256: 'b'.repeat(64),
+              gradcam_method: 'GRAD_CAM', gradcam_geometry: 'IMAGENET_CENTER_CROP_224' },
+          } } : {}) } }
+    if (path === `/api/v1/analyses/${analysis}/feedback`) {
+      expect(url.searchParams.get('clinicContextId')).toBe(clinic)
+      expect(request.postDataJSON()).toEqual({ resultId: id(20), modelVersion: 'frangi-fixture',
+        reviewVersion: state.reviewVersion, feedbackType: 'VESSEL_TYPE', comment: 'Synthetic feedback' })
+      state.feedbackPosts++
+      if (state.feedbackStatus !== 201) return route.fulfill({ status: state.feedbackStatus,
+        json: { error: { code: state.feedbackStatus === 409 ? 'ERR_CONCURRENT_REVIEW' : 'ERR_FORBIDDEN' } } })
+      return route.fulfill({ status: 201, json: { feedbackId: id(25), status: 'ACCEPTED', version: state.reviewVersion } })
+    }
     if (path.startsWith('/api/v1/doctor/') || path.includes('/files/')) {
       expect(url.searchParams.get('clinicContextId')).toBe(clinic)
       if (path.endsWith('/worklist')) return route.fulfill({ json: { items: [detail] } })
@@ -43,7 +61,7 @@ async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT']) {
         return route.fulfill({ status: 201, json: { reviewId: id(8), analysisId: analysis, version: 2, isApproved: true } })
       }
       if (path.endsWith('/access')) return route.fulfill({ json: {
-        url: `/api/v1/analyses/${analysis}/files/${file}/content?clinicContextId=${clinic}`,
+        url: path.replace(/access$/, 'content') + `?clinicContextId=${clinic}`,
         expiresAt: new Date(Date.now() + 60_000).toISOString() } })
       if (path.endsWith('/content')) return route.fulfill({ contentType: 'image/png', body: png })
       return route.fulfill({ json: detail })
@@ -76,6 +94,37 @@ async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT']) {
   await expect(page).toHaveURL(/\/$/)
   return state
 }
+
+test('MOCK: SCRUM-389 shows provenance, isolated crop and versioned feedback on mobile', async ({ page }, info) => {
+  const state = await fixture(page, ['DOCTOR'], true)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openDoctor(page)
+  await expect(page.getByText('Không đo được (LOW_QUALITY)')).toBeVisible()
+  await page.getByLabel('Lớp ảnh').selectOption('annotated')
+  await expect(page.getByRole('img', { name: 'A/V · động mạch và tĩnh mạch' })).toHaveAttribute('src', /^blob:/)
+  await page.getByLabel('Lớp ảnh').selectOption('heatmap')
+  await expect(page.getByRole('img', { name: 'Grad-CAM · ảnh cắt 224 × 224' })).toHaveAttribute('src', /^blob:/)
+  await expect(page.getByLabel('Lớp phủ mạch máu')).toBeDisabled()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
+  await page.screenshot({ path: info.outputPath('doctor-research-mobile.png'), fullPage: true })
+  async function feedback() {
+    await page.getByLabel('Loại phản hồi').selectOption('VESSEL_TYPE')
+    await page.getByLabel('Nhận xét về kết quả AI').fill('Synthetic feedback')
+    await page.getByRole('button', { name: 'Gửi phản hồi AI' }).click()
+  }
+  await feedback()
+  await expect(page.getByText('Đã lưu phản hồi cho phiên bản đang xem.')).toBeVisible()
+  state.feedbackStatus = 409
+  await feedback()
+  await expect(page.getByRole('alertdialog')).toContainText('Phản hồi chưa được lưu')
+  state.reviewVersion = 2
+  await page.getByRole('button', { name: 'Tải phiên bản mới nhất' }).click()
+  await expect(page.getByRole('alertdialog')).toHaveCount(0)
+  state.feedbackStatus = 403
+  await feedback()
+  await expect(page.getByRole('region', { name: 'Chi tiết ca chụp' })).toHaveCount(0)
+  expect(state.feedbackPosts).toBe(3)
+})
 
 async function openDoctor(page: Page) {
   await page.goto('/doctor/workspace')

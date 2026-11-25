@@ -139,3 +139,14 @@ it('keeps the current in-memory draft after a transient save failure', async () 
   expect((notes as HTMLTextAreaElement).value).toBe('Synthetic draft')
   expect(screen.getByRole('region', { name: 'Chi tiết ca chụp' })).toBeTruthy()
 })
+
+
+it('keeps the mock label visible while allowing feedback for a versioned synthetic result', async () => {
+  mocks.detail.mockResolvedValue({ ...data, result: { ...data.result, isMock: true,
+    resultId: '50000000-0000-4000-8000-000000000005', modelVersion: 'synthetic-fixture-v1' } })
+  start(); await openDetail()
+  expect(screen.getByText('Kết quả AI được backend đánh dấu là mô phỏng.')).toBeTruthy()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Nhận xét về kết quả AI' }),
+    { target: { value: 'Synthetic fixture only' } })
+  expect((screen.getByRole('button', { name: 'Gửi phản hồi AI' }) as HTMLButtonElement).disabled).toBe(false)
+})
