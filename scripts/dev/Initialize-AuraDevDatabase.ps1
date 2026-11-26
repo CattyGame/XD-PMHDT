@@ -52,7 +52,8 @@ $migrations = @(
     "infra/postgres/migrations/020_notification_consultations.sql",
     "infra/postgres/migrations/019_shared_audit.sql",
     "infra/postgres/migrations/020_camera_clinic_binding.sql",
-    "infra/postgres/migrations/021_versioned_catalog_and_push_templates.sql"
+    "infra/postgres/migrations/021_versioned_catalog_and_push_templates.sql",
+    "infra/postgres/migrations/022_release_runtime_audit_hardening.sql"
 )
 
 foreach ($migration in $migrations) {
