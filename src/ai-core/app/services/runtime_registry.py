@@ -402,9 +402,7 @@ class RuntimeManifestRegistry:
                 and self._current.version == 1
                 and (os.getenv("AURA_BOOTSTRAP_MANIFEST_ID", "").strip() or os.getenv("AURA_FRANGI_CONFIG_PATH", "").strip())
             ):
-                bootstrap = self._bootstrap_initial_snapshot()
-                if bootstrap.artifact_manifest_id != self._current.artifact_manifest_id:
-                    self._current = bootstrap
+                return self._bootstrap_initial_snapshot()
             return self._current
 
     def get_view(self) -> Dict[str, Any]:

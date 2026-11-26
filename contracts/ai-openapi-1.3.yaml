@@ -186,7 +186,7 @@ paths:
         '401': { description: Missing/invalid RS256 service JWT }
         '403': { description: Wrong scope/client }
         '404': { description: Unknown artifactManifestId }
-        '409': { description: Stale expectedVersion, SHA-256 mismatch, or Idempotency-Key conflict }
+        '409': { description: "Stale expectedVersion, SHA-256 mismatch, or Idempotency-Key conflict" }
         '503': { description: Candidate smoke check or atomic persistence failed; active config unchanged }
   /internal/v1/ai/config/rollback:
     post:
