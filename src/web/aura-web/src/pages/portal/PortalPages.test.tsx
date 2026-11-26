@@ -45,10 +45,15 @@ describe('SCRUM-393 protected portal', () => {
     expect(request).not.toHaveBeenCalled()
   })
 
-  it('posts the active price version and discards a stale catalog after 409', async () => {
+  it('reloads the active price version and restores the draft for confirmation after 409', async () => {
+    const current = { ...price, version: 8, priceVersionId: id(15), amountMinor: 28000 }
+    let conflicted = false
     request.mockImplementation(async (_path, _context, _signal, method) => {
-      if (method === 'POST') throw new AnalysisResultError(409, 'ERR_CONCURRENT_UPDATE')
-      return json({ nextCursor: null, items: [price] })
+      if (method === 'POST') {
+        conflicted = true
+        throw new AnalysisResultError(409, 'ERR_CONCURRENT_UPDATE')
+      }
+      return json({ nextCursor: null, items: [conflicted ? current : price] })
     })
     open('/admin/catalog')
     fireEvent.click(await screen.findByText('Quản lý giá'))
@@ -65,7 +70,16 @@ describe('SCRUM-393 protected portal', () => {
     expect(screen.queryByRole('button', { name: 'Thử gửi lại' })).toBeNull()
     expect(screen.queryByText('Gói kiểm thử')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Tải lại' }))
-    expect(await screen.findByText('Gói kiểm thử')).toBeTruthy()
+    await screen.findByText(current.priceVersionId)
+    const restored = screen.getByRole('group', { name: 'Tạo phiên bản giá' })
+    expect((within(restored).getByLabelText('Giá theo đơn vị nhỏ nhất') as HTMLInputElement).value).toBe('30000')
+    expect((within(restored).getByLabelText('Lý do') as HTMLInputElement).value).toBe('Cập nhật giá thử nghiệm')
+    expect(request.mock.calls.filter(([, , , method]) => method === 'POST')).toHaveLength(1)
+    fireEvent.click(within(restored).getByRole('button', { name: 'Lưu thay đổi' }))
+    await screen.findByRole('alert')
+    const next = request.mock.calls.filter(([, , , method]) => method === 'POST')[1]
+    expect(JSON.parse(next[4])).toEqual({ ...JSON.parse(call[4]), expectedVersion: current.version })
+    expect(next[6]['Idempotency-Key']).not.toBe(call[6]['Idempotency-Key'])
   })
 
   it('retries the exact persisted price intent after a lost acknowledgement', async () => {

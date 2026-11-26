@@ -20,8 +20,9 @@ type Section = keyof typeof sections
 const nextPage = (result: { nextCursor: string | null }) => result.nextCursor
 const value = (data: FormData, key: string) => String(data.get(key) ?? '').trim()
 
-function Editor({ title, busy, onSubmit, children, reasonMaxLength = 1000 }: {
+function Editor({ title, busy, onSubmit, children, reasonMaxLength = 1000, initialReason }: {
   title: string; busy: boolean; onSubmit: (data: FormData) => void; children: ReactNode; reasonMaxLength?: number
+  initialReason?: string
 }) {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -31,7 +32,7 @@ function Editor({ title, busy, onSubmit, children, reasonMaxLength = 1000 }: {
   return <form onSubmit={submit}><fieldset className={portal.editor} disabled={busy}>
     <legend>{title}</legend>
     {children}
-    <label>Lý do <input name="reason" required maxLength={reasonMaxLength} pattern=".*\S.*" /></label>
+    <label>Lý do <input name="reason" defaultValue={initialReason} required maxLength={reasonMaxLength} pattern=".*\S.*" /></label>
     <button type="submit">Lưu thay đổi</button>
   </fieldset></form>
 }
@@ -106,20 +107,23 @@ function Clinics({ context }: { context: BackendContext }) {
 }
 
 type Package = Awaited<ReturnType<typeof adminPackages>>['items'][number]
-function PriceEditor({ current, busy, save }: { current?: Package; busy: boolean; save: (price: PriceInput) => void }) {
-  return <Editor title={current ? 'Tạo phiên bản giá' : 'Tạo gói và giá ban đầu'} busy={busy} reasonMaxLength={250} onSubmit={data => {
+function PriceEditor({ current, draft, busy, save }: {
+  current?: Package; draft?: PriceInput; busy: boolean; save: (price: PriceInput) => void
+}) {
+  return <Editor title={current ? 'Tạo phiên bản giá' : 'Tạo gói và giá ban đầu'} busy={busy}
+    reasonMaxLength={250} initialReason={draft?.reason} onSubmit={data => {
     const amountMinor = Number(value(data, 'amount')), credits = Number(value(data, 'credits'))
     const displayName = value(data, 'name')
     if (displayName && Number.isSafeInteger(amountMinor) && Number.isSafeInteger(credits))
       save({ displayName, amountMinor, credits, currency: value(data, 'currency'), reason: value(data, 'reason') })
   }}>
     <div className={portal.editorRow}>
-      <label>Tên gói <input name="name" defaultValue={current?.name} required maxLength={100} pattern=".*\S.*" /></label>
+      <label>Tên gói <input name="name" defaultValue={draft?.displayName ?? current?.name} required maxLength={100} pattern=".*\S.*" /></label>
       <label>Giá theo đơn vị nhỏ nhất <input name="amount" type="number" step="1" min="0"
-        max={Number.MAX_SAFE_INTEGER} defaultValue={current?.amount} required /></label>
-      <label>Mã tiền tệ <input name="currency" defaultValue={current?.currency ?? 'VND'} required pattern="[A-Z]{3}" /></label>
+        max={Number.MAX_SAFE_INTEGER} defaultValue={draft?.amountMinor ?? current?.amount} required /></label>
+      <label>Mã tiền tệ <input name="currency" defaultValue={draft?.currency ?? current?.currency ?? 'VND'} required pattern="[A-Z]{3}" /></label>
       <label>Credit <input name="credits" type="number" step="1" min="1" max={Number.MAX_SAFE_INTEGER}
-        defaultValue={current?.credits} required /></label>
+        defaultValue={draft?.credits ?? current?.credits} required /></label>
     </div>
   </Editor>
 }
@@ -130,6 +134,7 @@ function canRetryPrice(cause: unknown) {
 }
 
 function Catalog({ context }: { context: BackendContext }) {
+  const [conflictDraft, setConflictDraft] = useState<{ packageId: number | null; input: PriceInput } | null>(null)
   const priceIntent = useRef<{ payload: string; key: string } | null>(null)
   function writePrice(input: PriceInput, current?: Package) {
     const target = current ? { id: current.id, version: current.version } : undefined
@@ -141,8 +146,11 @@ function Catalog({ context }: { context: BackendContext }) {
       try {
         await savePrice(context, input, signal, target, priceIntent.current.key)
         priceIntent.current = null
+        if (!signal.aborted) setConflictDraft(null)
       } catch (cause) {
         if (!canRetryPrice(cause)) priceIntent.current = null
+        if (!signal.aborted && cause instanceof AnalysisResultError && cause.status === 409)
+          setConflictDraft({ packageId: target?.id ?? null, input })
         throw cause
       }
     }
@@ -150,14 +158,16 @@ function Catalog({ context }: { context: BackendContext }) {
   return <PortalSection title="Danh mục gói và phiên bản giá" cursor={nextPage}
     read={(signal, cursor) => adminPackages(context, cursor, signal)}>
     {(data, mutate, busy) => <>
-      <details><summary>Tạo gói khám</summary><PriceEditor busy={busy}
+      <details open={conflictDraft?.packageId === null || undefined}><summary>Tạo gói khám</summary><PriceEditor busy={busy}
+        draft={conflictDraft?.packageId === null ? conflictDraft.input : undefined}
         save={price => void mutate(writePrice(price), canRetryPrice)} /></details>
       <PortalTable columns={['Gói khám', 'Giá (đơn vị nhỏ nhất)', 'Credit', 'Trạng thái', 'Phiên bản', 'Thao tác']}>
         {data.items.map(row => <tr key={row.priceVersionId}>
           <td>{row.name}</td><td>{formatCount(row.amount)} {row.currency}</td><td>{formatCount(row.credits)}</td>
           <td>{row.status}</td><td>{row.version}<br /><small>{row.priceVersionId}</small></td>
-          <td>{row.status === 'ACTIVE' && <details><summary>Quản lý giá</summary>
-            <PriceEditor current={row} busy={busy} save={price => void mutate(writePrice(price, row), canRetryPrice)} />
+          <td>{row.status === 'ACTIVE' && <details open={conflictDraft?.packageId === row.id || undefined}><summary>Quản lý giá</summary>
+            <PriceEditor current={row} busy={busy} draft={conflictDraft?.packageId === row.id ? conflictDraft.input : undefined}
+              save={price => void mutate(writePrice(price, row), canRetryPrice)} />
             <Editor title="Ngừng bán gói" busy={busy} reasonMaxLength={250} onSubmit={data => void mutate(signal => retirePackage(context,
               row.id, { expectedVersion: row.version, reason: value(data, 'reason') }, signal))}>
               <p>Ngừng tạo đơn mới cho gói này.</p>
