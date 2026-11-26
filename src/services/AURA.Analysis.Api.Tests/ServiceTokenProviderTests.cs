@@ -153,4 +153,15 @@ public class ServiceTokenProviderTests
         while (handler is DelegatingHandler d) handler = d.InnerHandler!;
         Assert.False(Assert.IsType<HttpClientHandler>(handler).AllowAutoRedirect);
     }
+
+    [Fact]
+    public async Task Allows_ai_config_scope_and_rejects_worker_ai_analyze_scope()
+    {
+        var (provider, handler, _) = Make();
+        Assert.Equal("issued-service-token", await provider.GetAsync("aura-ai", "ai:config", default));
+        Assert.Equal(1, handler.Calls);
+        Assert.Equal(503, (await Assert.ThrowsAsync<UploadFailure>(() =>
+            provider.GetAsync("aura-ai", "ai:analyze", default))).Status);
+        Assert.Equal(1, handler.Calls);
+    }
 }

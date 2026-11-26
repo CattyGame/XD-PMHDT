@@ -27,6 +27,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .auth.service_jwt import (
     ServiceAuthConfigError,
     ServiceAuthError,
+    load_config_verifier_from_env,
     load_verifier_from_env,
 )
 from .schemas.analysis import (
@@ -54,7 +55,7 @@ from .services.mock_service import (
     process_mock_analysis,
 )
 from .services.integrated_inference import IntegratedModelUnavailable, configured_artifacts, process_integrated_analysis
-from .services.runtime_registry import RUNTIME_REGISTRY
+from .services.runtime_registry import RUNTIME_REGISTRY, RuntimeManifestError
 
 _ORIGINAL_LOAD_FRANGI_CONFIG = load_frangi_config
 
@@ -132,10 +133,56 @@ async def correlation_id_middleware(request: Request, call_next):
 
 
 def resolve_active_frangi_config() -> FrangiRuntimeConfig:
-    """Return an immutable snapshot of active config; honors explicit test overrides."""
-    if load_frangi_config is not _ORIGINAL_LOAD_FRANGI_CONFIG or os.getenv("AURA_FRANGI_CONFIG_PATH"):
+    """Return an immutable snapshot of active config; honors explicit unit-test monkeypatches only."""
+    if load_frangi_config is not _ORIGINAL_LOAD_FRANGI_CONFIG:
         return load_frangi_config()
     return RUNTIME_REGISTRY.get_active_snapshot().config
+
+
+def _verify_service_bearer(
+    request: Request,
+    verifier_loader,
+    credentials: Optional[HTTPAuthorizationCredentials],
+    authorization: Optional[str],
+) -> None:
+    try:
+        verifier = verifier_loader()
+    except ServiceAuthConfigError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "SERVICE_NOT_READY",
+                "message": str(error),
+                "details": None,
+            },
+        ) from error
+
+    raw_auth_header = authorization or request.headers.get("Authorization")
+    if not raw_auth_header and credentials is not None:
+        raw_auth_header = f"{credentials.scheme} {credentials.credentials}"
+
+    try:
+        verifier.verify_authorization_header(raw_auth_header)
+    except ServiceAuthError as error:
+        headers = {"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={
+                "error_code": error.error_code,
+                "message": error.message,
+                "details": error.details,
+            },
+            headers=headers,
+        ) from error
+
+
+def verify_config_auth(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(service_bearer_scheme),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+) -> None:
+    """Fail-closed RS256 Service JWT dependency for /internal/v1/ai/config (scope ai:config, client analysis-api)."""
+    _verify_service_bearer(request, load_config_verifier_from_env, credentials, authorization)
 
 
 def is_explicit_mock_mode() -> bool:
@@ -177,6 +224,15 @@ def verify_runtime_and_auth(
 
     try:
         frangi_config = resolve_active_frangi_config()
+    except RuntimeManifestError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={
+                "error_code": error.error_code,
+                "message": error.message,
+                "details": None,
+            },
+        ) from error
     except FrangiConfigError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -187,35 +243,7 @@ def verify_runtime_and_auth(
             },
         ) from error
 
-    try:
-        verifier = load_verifier_from_env()
-    except ServiceAuthConfigError as error:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "SERVICE_NOT_READY",
-                "message": str(error),
-                "details": None,
-            },
-        ) from error
-
-    raw_auth_header = authorization or request.headers.get("Authorization")
-    if not raw_auth_header and credentials is not None:
-        raw_auth_header = f"{credentials.scheme} {credentials.credentials}"
-
-    try:
-        verifier.verify_authorization_header(raw_auth_header)
-    except ServiceAuthError as error:
-        headers = {"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None
-        raise HTTPException(
-            status_code=error.status_code,
-            detail={
-                "error_code": error.error_code,
-                "message": error.message,
-                "details": error.details,
-            },
-            headers=headers,
-        ) from error
+    _verify_service_bearer(request, load_verifier_from_env, credentials, authorization)
 
     return frangi_config
 
@@ -356,6 +384,15 @@ def ready():
 
     try:
         frangi_config = resolve_active_frangi_config()
+    except RuntimeManifestError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={
+                "error_code": error.error_code,
+                "message": error.message,
+                "details": None,
+            },
+        ) from error
     except FrangiConfigError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -738,3 +775,91 @@ def research_avr(request: AnalysisRequest,
                                        generate_visualization=request.include_overlay, include_masks=request.include_mask)
     return run_research_inference(request, config, os.getenv("AURA_AVR_MODEL_PATH"),
                                   os.getenv("AURA_AVR_MODEL_SHA256"), infer)
+
+
+def _raise_manifest_http_error(error: RuntimeManifestError) -> None:
+    raise HTTPException(
+        status_code=error.status_code,
+        detail={
+            "error_code": error.error_code,
+            "message": error.message,
+            "details": None,
+        },
+    ) from error
+
+
+async def _parse_json_object(request: Request) -> dict:
+    try:
+        payload = await request.json()
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "ERR_VALIDATION",
+                "message": "Request body must be valid JSON.",
+                "details": None,
+            },
+        ) from error
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "ERR_VALIDATION",
+                "message": "Request body must be a JSON object.",
+                "details": None,
+            },
+        )
+    return payload
+
+
+@app.get("/internal/v1/ai/config", tags=["InternalConfig"], include_in_schema=False)
+def get_internal_ai_config(_: None = Depends(verify_config_auth)):
+    """Return active AI runtime manifest pointer managed by RUNTIME_REGISTRY."""
+    try:
+        return RUNTIME_REGISTRY.get_view()
+    except RuntimeManifestError as error:
+        _raise_manifest_http_error(error)
+
+
+@app.put("/internal/v1/ai/config", tags=["InternalConfig"], include_in_schema=False)
+async def put_internal_ai_config(
+    request: Request,
+    _: None = Depends(verify_config_auth),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+):
+    """Validate candidate manifest, run real smoke check, and atomically switch active config."""
+    payload = await _parse_json_object(request)
+    try:
+        RUNTIME_REGISTRY.activate_manifest(payload, idempotency_key=idempotency_key)
+        return RUNTIME_REGISTRY.get_view()
+    except RuntimeManifestError as error:
+        _raise_manifest_http_error(error)
+
+
+@app.post("/internal/v1/ai/config/rollback", tags=["InternalConfig"], include_in_schema=False)
+async def rollback_internal_ai_config(
+    request: Request,
+    _: None = Depends(verify_config_auth),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+):
+    """Smoke-verify and atomically restore the previous verified runtime manifest."""
+    payload = await _parse_json_object(request)
+    allowed = {"expectedVersion", "reason"}
+    if not allowed.issuperset(payload.keys()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "ERR_VALIDATION",
+                "message": "Rollback payload contains unsupported fields.",
+                "details": None,
+            },
+        )
+    try:
+        RUNTIME_REGISTRY.rollback_manifest(
+            expected_version=payload.get("expectedVersion"),
+            reason=str(payload.get("reason", "")),
+            idempotency_key=idempotency_key,
+        )
+        return RUNTIME_REGISTRY.get_view()
+    except RuntimeManifestError as error:
+        _raise_manifest_http_error(error)

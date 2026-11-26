@@ -30,10 +30,12 @@ MIN_RSA_BITS = 2048
 DEFAULT_ISSUER = "aura-identity-s3-v1"
 DEFAULT_AUDIENCE = "aura-ai"
 DEFAULT_REQUIRED_SCOPE = "ai:analyze"
+DEFAULT_CONFIG_SCOPE = "ai:config"
 DEFAULT_MAX_LIFETIME_SECONDS = 300
 DEFAULT_CLOCK_SKEW_SECONDS = 30
 DEFAULT_PUBLIC_KEY_PATH = "/run/aura-service-auth/public/signing-public.pem"
 DEFAULT_ALLOWED_CLIENTS = frozenset({"analysis-worker"})
+DEFAULT_CONFIG_ALLOWED_CLIENTS = frozenset({"analysis-api"})
 
 SCOPE_PATTERN = re.compile(r"^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$")
 CLIENT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
@@ -519,39 +521,37 @@ class ServiceJwtVerifier:
         )
 
 
-def load_verifier_from_env() -> ServiceJwtVerifier:
-    """Load ServiceJwtVerifier from environment variables following AURA conventions."""
-    issuer = (
-        os.getenv("ServiceAuth__Issuer")
-        or os.getenv("AURA_SERVICE_AUTH_ISSUER")
-        or DEFAULT_ISSUER
-    )
-    audience = (
-        os.getenv("ServiceAuth__Audience")
-        or os.getenv("AURA_SERVICE_AUTH_AUDIENCE")
-        or DEFAULT_AUDIENCE
-    )
-    required_scope = (
-        os.getenv("ServiceAuth__RequiredScope")
-        or os.getenv("AURA_SERVICE_AUTH_SCOPE")
-        or DEFAULT_REQUIRED_SCOPE
-    )
+def _first_non_empty_env(*keys: str) -> Optional[str]:
+    for key in keys:
+        val = os.getenv(key)
+        if val and val.strip():
+            return val
+    return None
 
-    raw_path = os.getenv("ServiceAuth__PublicKeyPath") or os.getenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH")
-    raw_pem = os.getenv("ServiceAuth__PublicKeyPem") or os.getenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM")
 
-    public_key_path: Optional[str] = raw_path if (raw_path and raw_path.strip()) else None
-    public_key_pem: Optional[str] = raw_pem if (raw_pem and raw_pem.strip()) else None
+def _build_verifier_from_env(
+    *,
+    default_scope: str,
+    scope_env_keys: Tuple[str, ...],
+    default_clients: FrozenSet[str],
+    clients_env_keys: Tuple[str, ...],
+) -> ServiceJwtVerifier:
+    issuer = _first_non_empty_env("ServiceAuth__Issuer", "AURA_SERVICE_AUTH_ISSUER") or DEFAULT_ISSUER
+    audience = _first_non_empty_env("ServiceAuth__Audience", "AURA_SERVICE_AUTH_AUDIENCE") or DEFAULT_AUDIENCE
+    required_scope = _first_non_empty_env(*scope_env_keys) or default_scope
+
+    public_key_path = _first_non_empty_env("ServiceAuth__PublicKeyPath", "AURA_SERVICE_AUTH_PUBLIC_KEY_PATH")
+    public_key_pem = _first_non_empty_env("ServiceAuth__PublicKeyPem", "AURA_SERVICE_AUTH_PUBLIC_KEY_PEM")
 
     if public_key_path is None and public_key_pem is None:
         if os.path.isfile(DEFAULT_PUBLIC_KEY_PATH):
             public_key_path = DEFAULT_PUBLIC_KEY_PATH
 
-    raw_clients = os.getenv("ServiceAuth__AllowedClientIds") or os.getenv("AURA_SERVICE_AUTH_ALLOWED_CLIENTS")
-    if raw_clients and raw_clients.strip():
+    raw_clients = _first_non_empty_env(*clients_env_keys)
+    if raw_clients:
         allowed_clients = frozenset(c.strip() for c in raw_clients.split(",") if c.strip())
     else:
-        allowed_clients = DEFAULT_ALLOWED_CLIENTS
+        allowed_clients = default_clients
 
     return ServiceJwtVerifier(
         issuer=issuer,
@@ -560,4 +560,24 @@ def load_verifier_from_env() -> ServiceJwtVerifier:
         public_key_pem=public_key_pem,
         public_key_path=public_key_path,
         allowed_clients=allowed_clients,
+    )
+
+
+def load_verifier_from_env() -> ServiceJwtVerifier:
+    """Load ServiceJwtVerifier for inference (`ai:analyze`) following AURA conventions."""
+    return _build_verifier_from_env(
+        default_scope=DEFAULT_REQUIRED_SCOPE,
+        scope_env_keys=("ServiceAuth__RequiredScope", "AURA_SERVICE_AUTH_SCOPE"),
+        default_clients=DEFAULT_ALLOWED_CLIENTS,
+        clients_env_keys=("ServiceAuth__AllowedClientIds", "AURA_SERVICE_AUTH_ALLOWED_CLIENTS"),
+    )
+
+
+def load_config_verifier_from_env() -> ServiceJwtVerifier:
+    """Load ServiceJwtVerifier for internal runtime config mutations (`ai:config`)."""
+    return _build_verifier_from_env(
+        default_scope=DEFAULT_CONFIG_SCOPE,
+        scope_env_keys=("ServiceAuth__ConfigRequiredScope", "AURA_SERVICE_AUTH_CONFIG_SCOPE"),
+        default_clients=DEFAULT_CONFIG_ALLOWED_CLIENTS,
+        clients_env_keys=("ServiceAuth__ConfigAllowedClientIds", "AURA_SERVICE_AUTH_CONFIG_ALLOWED_CLIENTS"),
     )

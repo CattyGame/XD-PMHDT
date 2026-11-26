@@ -129,6 +129,10 @@ services:
     cpus: 4.0
     mem_limit: 2g
     pids_limit: 128
+    environment:
+      AURA_RUNTIME_STATE_PATH: "/var/lib/aura-ai-state/runtime-config-state.json"
+    volumes:
+      - ai_core_state:/var/lib/aura-ai-state
     ports:
       - "127.0.0.1:8000:8000"
     networks:
@@ -269,6 +273,7 @@ volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
+  ai_core_state:
   azurite_data:
     external: true
     name: aura_azurite_data
