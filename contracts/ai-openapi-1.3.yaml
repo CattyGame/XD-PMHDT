@@ -134,6 +134,90 @@ paths:
             application/json:
               schema:
                 $ref: ai-error.schema.json
+  /internal/v1/ai/config:
+    get:
+      operationId: getInternalAiConfig
+      summary: Read authoritative persistent AI runtime manifest view (internal serviceBearer ai:config, analysis-api only)
+      security:
+      - serviceBearer: []
+      parameters:
+      - $ref: '#/components/parameters/XCorrelationIdParam'
+      responses:
+        '200':
+          description: Active persisted AI runtime manifest state
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/XCorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalAiConfigView'
+        '401': { description: Missing/invalid RS256 service JWT }
+        '403': { description: Wrong scope/client (requires ai:config for analysis-api) }
+        '503': { description: Runtime config authority corrupted or service auth not ready }
+    put:
+      operationId: putInternalAiConfig
+      summary: Smoke-verify candidate manifest, atomically persist state, and switch active runtime config (idempotent replay on lost ACK)
+      security:
+      - serviceBearer: []
+      parameters:
+      - $ref: '#/components/parameters/XCorrelationIdParam'
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema: { type: string, minLength: 1, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InternalAiConfigChange'
+      responses:
+        '200':
+          description: Activated AI runtime manifest view
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/XCorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalAiConfigView'
+        '400': { description: Validation error or forbidden path/URL field }
+        '401': { description: Missing/invalid RS256 service JWT }
+        '403': { description: Wrong scope/client }
+        '404': { description: Unknown artifactManifestId }
+        '409': { description: Stale expectedVersion, SHA-256 mismatch, or Idempotency-Key conflict }
+        '503': { description: Candidate smoke check or atomic persistence failed; active config unchanged }
+  /internal/v1/ai/config/rollback:
+    post:
+      operationId: rollbackInternalAiConfig
+      summary: Smoke-verify and atomically restore immediately preceding verified manifest state
+      security:
+      - serviceBearer: []
+      parameters:
+      - $ref: '#/components/parameters/XCorrelationIdParam'
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema: { type: string, minLength: 1, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InternalAiConfigRollback'
+      responses:
+        '200':
+          description: Rolled back AI runtime manifest view
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalAiConfigView'
+        '400': { description: Invalid rollback payload }
+        '401': { description: Missing/invalid RS256 service JWT }
+        '403': { description: Wrong scope/client }
+        '409': { description: Stale expectedVersion or no previous version }
+        '503': { description: Rollback smoke check or atomic persistence failed }
 components:
   securitySchemes:
     serviceBearer:
@@ -160,3 +244,29 @@ components:
       schema:
         type: string
         minLength: 1
+  schemas:
+    InternalAiConfigView:
+      type: object
+      additionalProperties: true
+      required: [artifactManifestId, thresholdConfigSha256, version, activatedAt]
+      properties:
+        artifactManifestId: { type: string, format: uuid }
+        thresholdConfigSha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        version: { type: integer, minimum: 1 }
+        activatedAt: { type: string, format: date-time }
+    InternalAiConfigChange:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, artifactManifestId, thresholdConfigSha256, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        artifactManifestId: { type: string, format: uuid }
+        thresholdConfigSha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+    InternalAiConfigRollback:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }

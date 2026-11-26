@@ -175,7 +175,7 @@ public static class AnalysisEndpoints
         app.MapGet("/api/v1/admin/ai/config",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
         {
             await AdminUser(c);
-            return Results.Json(await c.RequestServices.GetRequiredService<AiConfigService>().GetActiveAsync(c.RequestAborted),UploadJson.Options);
+            return Results.Json(await c.RequestServices.GetRequiredService<AiConfigService>().GetActiveAsync(Correlation(c),c.RequestAborted),UploadJson.Options);
         })));
         app.MapPut("/api/v1/admin/ai/config",(Func<HttpContext,Task<IResult>>)((HttpContext c)=>Handle(c,async()=>
         {
@@ -183,7 +183,8 @@ public static class AnalysisEndpoints
             Limit(c,16384);
             using var body=await System.Text.Json.JsonDocument.ParseAsync(c.Request.Body,cancellationToken:c.RequestAborted);
             var change=AiConfigService.ParseStrictChange(body.RootElement);
-            var view=await c.RequestServices.GetRequiredService<AiConfigService>().ActivateAsync(admin.AccountId,change,c.RequestAborted);
+            var idempotencyKey=c.Request.Headers["Idempotency-Key"].Count==1?c.Request.Headers["Idempotency-Key"][0]:null;
+            var view=await c.RequestServices.GetRequiredService<AiConfigService>().ActivateAsync(admin.AccountId,change,idempotencyKey,Correlation(c),c.RequestAborted);
             return Results.Json(view,UploadJson.Options);
         })));
     }

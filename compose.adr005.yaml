@@ -9,6 +9,7 @@ services:
       ServiceAuth__Issuer: "aura-identity-local"
       ServiceAuth__Audience: "aura-analysis"
       ServiceAuth__PublicKeyPath: /run/aura-service-auth/public/signing-public.pem
+      Services__Ai__BaseUrl: "http://ai-core:8000"
     volumes:
       - type: bind
         source: "${AURA_SERVICE_AUTH_HOME:?Set AURA_SERVICE_AUTH_HOME}/public"
@@ -23,11 +24,14 @@ services:
       AURA_AI_ENGINE: frangi
       AURA_ALLOW_MOCK: "false"
       AURA_RUNTIME_MODE: LIVE
-      AURA_FRANGI_CONFIG_PATH: /app/config/ai-frangi.yaml
+      AURA_BOOTSTRAP_MANIFEST_ID: "11111111-1111-4111-8111-111111110301"
+      AURA_RUNTIME_STATE_PATH: /var/lib/aura-ai-state/runtime-config-state.json
       AURA_SERVICE_AUTH_ISSUER: aura-identity-local
       AURA_SERVICE_AUTH_AUDIENCE: aura-ai
       AURA_SERVICE_AUTH_SCOPE: ai:analyze
       AURA_SERVICE_AUTH_ALLOWED_CLIENTS: analysis-worker
+      AURA_SERVICE_AUTH_CONFIG_SCOPE: ai:config
+      AURA_SERVICE_AUTH_CONFIG_ALLOWED_CLIENTS: analysis-api
       AURA_SERVICE_AUTH_PUBLIC_KEY_PATH: /run/aura-service-auth/public/signing-public.pem
     volumes:
       - type: bind

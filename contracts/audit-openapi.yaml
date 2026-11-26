@@ -93,8 +93,8 @@ components:
   schemas:
     Sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
     AuditSource: {type: string, enum: [Identity, Profile, Analysis, Billing, Notification]}
-    AuditAction: {type: string, enum: [ImageRead, ReportDownload, RoleChanged, PriceChanged, ClinicStatusChanged, NotificationRead, MembershipInvited, MembershipGranted, MembershipRevoked, NotificationTemplateChanged]}
-    AuditResource: {type: string, enum: [Image, Report, Account, Package, Clinic, Membership, NotificationTemplate]}
+    AuditAction: {type: string, enum: [ImageRead, ReportDownload, RoleChanged, PriceChanged, ClinicStatusChanged, NotificationRead, MembershipInvited, MembershipGranted, MembershipRevoked, NotificationTemplateChanged, AiConfigChanged]}
+    AuditResource: {type: string, enum: [Image, Report, Account, Package, Clinic, Membership, NotificationTemplate, AiConfig]}
     OwnerAuditEvent:
       type: object
       additionalProperties: false
