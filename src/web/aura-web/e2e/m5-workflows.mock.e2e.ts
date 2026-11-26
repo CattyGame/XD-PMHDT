@@ -397,9 +397,9 @@ test('MOCK: SCRUM-394 resends the same message, catches up through pages, and cl
     messageId: id(100 + index), clientMessageId: id(200 + index), conversationId,
     senderAccountId, text, sentAt: new Date(start + index * 1000).toISOString(), deliveryState: 'PERSISTED',
   })
-  const messages = [knownMessage(0, 'Tin đã lưu từ bác sĩ')]
+  const messages: ReturnType<typeof knownMessage>[] = []
   const postIds: string[] = []
-  let unread = 1, revoked = false, joins = 0, nextPageReads = 0
+  let unread = 0, revoked = false, joins = 0, nextPageReads = 0
   let socket: WebSocketRoute | undefined
   const frame = (value: object) => JSON.stringify(value) + '\u001e'
   function broadcast(target: string, argument: object) {
@@ -447,7 +447,7 @@ test('MOCK: SCRUM-394 resends the same message, catches up through pages, and cl
         return route.abort('failed')
       }
       expect(body.clientMessageId).toBe(postIds[0])
-      const saved = messages[1]
+      const saved = messages.find(message => message.clientMessageId === body.clientMessageId)!
       broadcast('MessagePersisted', { ...saved, type: 'MessagePersisted' })
       broadcast('MessagePersisted', { ...saved, type: 'MessagePersisted' })
       return route.fulfill({ json: saved })
@@ -461,9 +461,17 @@ test('MOCK: SCRUM-394 resends the same message, catches up through pages, and cl
       nextBeforeId: offset + rows.length < sorted.length ? rows.at(-1)?.messageId : null } })
   })
   await page.goto('/consultations')
-  await page.getByRole('button', { name: /Ca .*1 chưa đọc/ }).click()
+  await page.getByRole('button', { name: /Ca / }).click()
   await expect(page.getByText('Đang nhận tin trực tiếp')).toBeVisible()
+  await expect(page.getByText('Chưa có tin nhắn.')).toBeVisible()
+  for (let index = -22; index < 0; index++) messages.push(knownMessage(index, 'Tin đầu tiên ' + index))
+  messages.push(knownMessage(0, 'Tin đã lưu từ bác sĩ'))
+  unread = 1
+  await socket?.close({ code: 1011 })
+  await expect.poll(() => joins).toBe(2)
+  await expect(page.getByText('Tin đầu tiên -22', { exact: true })).toBeAttached()
   await expect(page.getByText('Tin đã lưu từ bác sĩ')).toBeVisible()
+  await expect(page.getByText('1 chưa đọc')).toBeVisible()
   await page.getByRole('button', { name: 'Đánh dấu đã đọc' }).click()
   await expect(page.getByText('1 chưa đọc')).toHaveCount(0)
   const synthetic = '<img src=x onerror=alert(1)> Nội dung thử'
@@ -476,10 +484,10 @@ test('MOCK: SCRUM-394 resends the same message, catches up through pages, and cl
   await expect(page.getByRole('list', { name: 'Tin nhắn đã lưu' }).locator('img')).toHaveCount(0)
   for (let index = 2; index <= 24; index++) messages.push(knownMessage(index, 'Tin phục hồi ' + index))
   await socket?.close({ code: 1011 })
-  await expect.poll(() => joins).toBe(2)
+  await expect.poll(() => joins).toBe(3)
   await expect(page.getByText('Tin phục hồi 2', { exact: true })).toBeAttached()
   await expect(page.getByText('Tin phục hồi 24', { exact: true })).toBeAttached()
-  expect(nextPageReads).toBeGreaterThan(0)
+  expect(nextPageReads).toBeGreaterThanOrEqual(2)
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
   await composer.fill('Bản nháp riêng tư')
   await page.evaluate(() => window.dispatchEvent(new Event('offline')))

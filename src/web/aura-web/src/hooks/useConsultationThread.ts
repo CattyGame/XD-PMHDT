@@ -119,9 +119,9 @@ export default function useConsultationThread(context: BackendContext, conversat
           let cursor = latest.nextBeforeId
           let found = latest.items.some(message => message.messageId === boundary)
           merge(latest.items)
-          // The REST cursor points backwards. Walk the gap before advancing the remembered boundary.
+          // After the first load, recover back to the last known message, or to the start of a previously empty thread.
           const visited = new Set<string>()
-          while (boundary && !found && cursor) {
+          while (hydrated && !found && cursor) {
             if (visited.has(cursor)) throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
             visited.add(cursor)
             const page = await messageHistory(context, conversationId, cursor, signal)
