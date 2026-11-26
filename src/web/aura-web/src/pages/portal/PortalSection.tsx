@@ -5,7 +5,9 @@ import portal from './portal.module.css'
 import { formatCount, formatDate, formatRange } from './display'
 
 type State<T> = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; value: T }
-type Mutate = (write: (signal: AbortSignal) => Promise<unknown>) => Promise<void>
+type Write = (signal: AbortSignal) => Promise<unknown>
+type Retryable = (cause: unknown) => boolean
+type Mutate = (write: Write, retryable?: Retryable) => Promise<void>
 type Props<T> = {
   title: string
   read: (signal: AbortSignal, cursor: string | null) => Promise<T>
@@ -18,6 +20,7 @@ export default function PortalSection<T>({ title, read, cursor, children }: Prop
   const [request, setRequest] = useState({ cursor: null as string | null, sequence: 0 })
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [retry, setRetry] = useState<{ write: Write; retryable: Retryable } | null>(null)
   const pending = useRef<AbortController | null>(null)
   const load = useEffectEvent(read)
 
@@ -39,12 +42,12 @@ export default function PortalSection<T>({ title, read, cursor, children }: Prop
   }, [request])
   useEffect(() => () => pending.current?.abort(), [])
 
-  const ready = state.kind === 'ready'
-  const mutate = useCallback<Mutate>(async write => {
-    if (pending.current || !ready) return
+  const mutate = useCallback<Mutate>(async (write, retryable) => {
+    if (pending.current) return
     const controller = new AbortController()
     pending.current = controller
     setSaved(false)
+    setRetry(null)
     setBusy(true)
     try {
       await write(controller.signal)
@@ -53,22 +56,27 @@ export default function PortalSection<T>({ title, read, cursor, children }: Prop
         reload(null)
       }
     } catch (cause) {
-      if (!controller.signal.aborted) setState({ kind: 'error', message: portalError(cause) })
+      if (!controller.signal.aborted) {
+        if (retryable?.(cause)) setRetry({ write, retryable })
+        setState({ kind: 'error', message: portalError(cause) })
+      }
     } finally {
       pending.current = null
       if (!controller.signal.aborted) setBusy(false)
     }
-  }, [ready, reload])
+  }, [reload])
 
   const next = state.kind === 'ready' ? cursor?.(state.value) : null
   return <section className={styles.panel} aria-label={title} aria-busy={busy || state.kind === 'loading'}>
     <div className={portal.sectionHeading}>
       <h2>{title}</h2>
       <button className={styles.secondary} type="button" disabled={busy || state.kind === 'loading'}
-        onClick={() => { setSaved(false); reload(null) }}>Tải lại</button>
+        onClick={() => { setSaved(false); setRetry(null); reload(null) }}>Tải lại</button>
     </div>
     {state.kind === 'loading' && <p role="status">Đang tải dữ liệu…</p>}
     {state.kind === 'error' && <p role="alert" className={styles.error}>{state.message}</p>}
+    {retry && <button type="button" className={styles.secondary} disabled={busy}
+      onClick={() => void mutate(retry.write, retry.retryable)}>Thử gửi lại</button>}
     {saved && state.kind !== 'error' && <p role="status">Đã lưu thay đổi.</p>}
     {state.kind === 'ready' && children(state.value, mutate, busy)}
     {next && next !== request.cursor && <button type="button" className={styles.secondary} disabled={busy}

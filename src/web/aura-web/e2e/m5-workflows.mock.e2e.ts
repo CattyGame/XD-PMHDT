@@ -149,6 +149,7 @@ test('MOCK: SCRUM-393 admin catalog binds the price version and reloads after co
     return route.fulfill({ json: { items: [item], nextCursor: null } })
   })
   await page.route(packageRoot + '/42/price-versions', route => {
+    expect(route.request().headers()['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/i)
     expect(route.request().postDataJSON()).toEqual({ expectedVersion: 7, displayName: item.displayName, amountMinor: 30000,
       currency: 'VND', credits: 4, reason: 'Giá kiểm thử' })
     return route.fulfill({ status: 409, json: { error: { code: 'ERR_CONCURRENT_UPDATE' } } })

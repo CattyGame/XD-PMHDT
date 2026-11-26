@@ -1,14 +1,15 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, useParams } from 'react-router-dom'
 import type { BackendContext } from '../../api/backendContext'
+import { AnalysisResultError } from '../../api/analysisResult'
 import { accounts, accountRoles, adminPackages, aiConfig, analytics, audit, changeAccount, changeClinicStatus,
   changeDoctorCapability, clinics, clinicStatuses, financial, retirePackage, saveAiConfig, savePrice, saveTemplate,
-  templates, type DateRange, type PriceInput } from '../../api/sprint6Portal'
+  templates, pushTemplateTitles, pushTemplateBodies, type DateRange, type PriceInput } from '../../api/sprint6Portal'
 import { useBackendSession } from '../../auth/backendSession'
 import BackendSessionNotice from '../../auth/BackendSessionNotice'
 import styles from '../billing/billing.module.css'
 import PortalSection, { AnalyticsCards, DateRangeForm, PortalTable } from './PortalSection'
-import { defaultRange, formatCount, formatDate, formatRange } from './display'
+import { defaultRange, formatCount, formatDate, formatMoney, formatRange } from './display'
 import portal from './portal.module.css'
 
 const sections = {
@@ -19,8 +20,8 @@ type Section = keyof typeof sections
 const nextPage = (result: { nextCursor: string | null }) => result.nextCursor
 const value = (data: FormData, key: string) => String(data.get(key) ?? '').trim()
 
-function Editor({ title, busy, onSubmit, children }: {
-  title: string; busy: boolean; onSubmit: (data: FormData) => void; children: ReactNode
+function Editor({ title, busy, onSubmit, children, reasonMaxLength = 1000 }: {
+  title: string; busy: boolean; onSubmit: (data: FormData) => void; children: ReactNode; reasonMaxLength?: number
 }) {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -30,7 +31,7 @@ function Editor({ title, busy, onSubmit, children }: {
   return <form onSubmit={submit}><fieldset className={portal.editor} disabled={busy}>
     <legend>{title}</legend>
     {children}
-    <label>Lý do <input name="reason" required maxLength={1000} pattern=".*\S.*" /></label>
+    <label>Lý do <input name="reason" required maxLength={reasonMaxLength} pattern=".*\S.*" /></label>
     <button type="submit">Lưu thay đổi</button>
   </fieldset></form>
 }
@@ -41,11 +42,11 @@ function Dashboard({ context, range }: { context: BackendContext; range: DateRan
       {data => <AnalyticsCards data={data} />}
     </PortalSection>
     <PortalSection title="Tổng hợp thanh toán" read={signal => financial(context, range, signal)}>
-      {data => <><p className={styles.muted}>{formatRange(data)} · Số tiền ở đơn vị nhỏ nhất của từng tiền tệ</p>
-        <PortalTable columns={['Tiền tệ', 'Môi trường', 'Đơn thành công', 'Tổng tiền', 'Hoàn tiền', 'Thực thu']}>
+      {data => <><p className={styles.muted}>{formatRange(data)}</p>
+        <PortalTable columns={['Tiền tệ', 'Môi trường', 'Đơn đã thanh toán', 'Số tiền đã thanh toán']}>
           {data.groups.map(row => <tr key={row.currency + row.environment}>
-            <td>{row.currency}</td><td>{row.environment}</td><td>{formatCount(row.orders)}</td>
-            <td>{formatCount(row.gross)}</td><td>{formatCount(row.refunds)}</td><td>{formatCount(row.net)}</td>
+            <td>{row.currency}</td><td>{row.environment}</td><td>{formatCount(row.paidOrders)}</td>
+            <td>{formatMoney(row.paidAmount, row.currency)}</td>
           </tr>)}</PortalTable></>}
     </PortalSection>
   </>
@@ -106,14 +107,14 @@ function Clinics({ context }: { context: BackendContext }) {
 
 type Package = Awaited<ReturnType<typeof adminPackages>>['items'][number]
 function PriceEditor({ current, busy, save }: { current?: Package; busy: boolean; save: (price: PriceInput) => void }) {
-  return <Editor title={current ? 'Tạo phiên bản giá' : 'Tạo gói và giá ban đầu'} busy={busy} onSubmit={data => {
+  return <Editor title={current ? 'Tạo phiên bản giá' : 'Tạo gói và giá ban đầu'} busy={busy} reasonMaxLength={250} onSubmit={data => {
     const amountMinor = Number(value(data, 'amount')), credits = Number(value(data, 'credits'))
     const displayName = value(data, 'name')
     if (displayName && Number.isSafeInteger(amountMinor) && Number.isSafeInteger(credits))
       save({ displayName, amountMinor, credits, currency: value(data, 'currency'), reason: value(data, 'reason') })
   }}>
     <div className={portal.editorRow}>
-      <label>Tên gói <input name="name" defaultValue={current?.name} required maxLength={160} pattern=".*\S.*" /></label>
+      <label>Tên gói <input name="name" defaultValue={current?.name} required maxLength={100} pattern=".*\S.*" /></label>
       <label>Giá theo đơn vị nhỏ nhất <input name="amount" type="number" step="1" min="0"
         max={Number.MAX_SAFE_INTEGER} defaultValue={current?.amount} required /></label>
       <label>Mã tiền tệ <input name="currency" defaultValue={current?.currency ?? 'VND'} required pattern="[A-Z]{3}" /></label>
@@ -123,18 +124,41 @@ function PriceEditor({ current, busy, save }: { current?: Package; busy: boolean
   </Editor>
 }
 
+function canRetryPrice(cause: unknown) {
+  return cause instanceof AnalysisResultError &&
+    (cause.retryable || cause.status === 429 || cause.code === 'ERR_INVALID_RESPONSE')
+}
+
 function Catalog({ context }: { context: BackendContext }) {
+  const priceIntent = useRef<{ payload: string; key: string } | null>(null)
+  function writePrice(input: PriceInput, current?: Package) {
+    const target = current ? { id: current.id, version: current.version } : undefined
+    const payload = JSON.stringify({ target, input })
+    return async (signal: AbortSignal) => {
+      if (priceIntent.current?.payload !== payload) {
+        priceIntent.current = { payload, key: crypto.randomUUID() }
+      }
+      try {
+        await savePrice(context, input, signal, target, priceIntent.current.key)
+        priceIntent.current = null
+      } catch (cause) {
+        if (!canRetryPrice(cause)) priceIntent.current = null
+        throw cause
+      }
+    }
+  }
   return <PortalSection title="Danh mục gói và phiên bản giá" cursor={nextPage}
     read={(signal, cursor) => adminPackages(context, cursor, signal)}>
     {(data, mutate, busy) => <>
-      <details><summary>Tạo gói khám</summary><PriceEditor busy={busy} save={price => void mutate(signal => savePrice(context, price, signal))} /></details>
+      <details><summary>Tạo gói khám</summary><PriceEditor busy={busy}
+        save={price => void mutate(writePrice(price), canRetryPrice)} /></details>
       <PortalTable columns={['Gói khám', 'Giá (đơn vị nhỏ nhất)', 'Credit', 'Trạng thái', 'Phiên bản', 'Thao tác']}>
         {data.items.map(row => <tr key={row.priceVersionId}>
           <td>{row.name}</td><td>{formatCount(row.amount)} {row.currency}</td><td>{formatCount(row.credits)}</td>
           <td>{row.status}</td><td>{row.version}<br /><small>{row.priceVersionId}</small></td>
           <td>{row.status === 'ACTIVE' && <details><summary>Quản lý giá</summary>
-            <PriceEditor current={row} busy={busy} save={price => void mutate(signal => savePrice(context, price, signal, row))} />
-            <Editor title="Ngừng bán gói" busy={busy} onSubmit={data => void mutate(signal => retirePackage(context,
+            <PriceEditor current={row} busy={busy} save={price => void mutate(writePrice(price, row), canRetryPrice)} />
+            <Editor title="Ngừng bán gói" busy={busy} reasonMaxLength={250} onSubmit={data => void mutate(signal => retirePackage(context,
               row.id, { expectedVersion: row.version, reason: value(data, 'reason') }, signal))}>
               <p>Ngừng tạo đơn mới cho gói này.</p>
             </Editor>
@@ -163,22 +187,16 @@ function Ai({ context }: { context: BackendContext }) {
 
 function TemplateEditor({ item, busy, save }: { item: Awaited<ReturnType<typeof templates>>[number]; busy: boolean;
   save: (data: { title: string; body: string; enabled: boolean; reason: string }) => void }) {
-  const [error, setError] = useState('')
-  return <Editor title={item.event} busy={busy} onSubmit={data => {
-    const title = value(data, 'title'), body = value(data, 'body')
-    const generic = (text: string) => !/[{}<>]|https?:\/\/|www\./i.test(text.replace(/\{\{(?:app_name|event_label)\}\}/g, ''))
-    if (!title || !body || !generic(title) || !generic(body)) {
-      setError('Chỉ dùng văn bản chung và biến {{app_name}}, {{event_label}}.')
-      return
-    }
-    setError('')
-    save({ title, body, enabled: data.has('enabled'), reason: value(data, 'reason') })
-  }}>
+  return <Editor title={item.event} busy={busy} reasonMaxLength={250} onSubmit={data =>
+    save({ title: value(data, 'title'), body: value(data, 'body'), enabled: data.has('enabled'), reason: value(data, 'reason') })}>
     <p className={styles.muted}>Phiên bản {item.version} · Biến hỗ trợ {'{{app_name}}'} và {'{{event_label}}'}</p>
-    <label>Tiêu đề <input name="title" required maxLength={100} defaultValue={item.title} /></label>
-    <label>Nội dung <textarea name="body" required maxLength={250} defaultValue={item.body} rows={3} /></label>
+    <label>Tiêu đề <select name="title" defaultValue={item.title}>
+      {pushTemplateTitles.map(title => <option key={title}>{title}</option>)}
+    </select></label>
+    <label>Nội dung <select name="body" defaultValue={item.body}>
+      {pushTemplateBodies.map(body => <option key={body}>{body}</option>)}
+    </select></label>
     <label><input type="checkbox" name="enabled" defaultChecked={item.enabled} /> Bật mẫu thông báo</label>
-    {error && <p className={styles.error} role="alert">{error}</p>}
   </Editor>
 }
 
