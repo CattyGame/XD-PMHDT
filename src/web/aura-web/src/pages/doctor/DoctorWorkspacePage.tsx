@@ -95,6 +95,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
     selection.current += 1
     clearImages()
     setDetail(null); setStale(false); setConflictOpen(null)
+    setDetailLoading(false); setDetailError(''); setSaveError('')
     setLoaded(false); setListLoading(true); setListError(''); setWorklist([])
     const controller = new AbortController()
     listAbort.current = controller

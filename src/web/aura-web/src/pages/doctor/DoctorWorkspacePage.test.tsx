@@ -143,6 +143,21 @@ it('fetches protected bytes and revokes object URLs when the selected case chang
   expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
 })
 
+it('clears the detail loading state when a new worklist aborts the detail request', async () => {
+  mocks.detail.mockImplementationOnce(() => new Promise(() => {}))
+  start()
+  fireEvent.click(await screen.findByRole('button', { name: 'Mở chi tiết' }))
+  expect(screen.getByText('Đang tải chi tiết ca...')).toBeTruthy()
+  const signal: AbortSignal = mocks.detail.mock.calls[0][3]
+
+  fireEvent.click(screen.getByRole('button', { name: 'Tải worklist' }))
+  await screen.findByRole('button', { name: 'Mở chi tiết' })
+
+  expect(signal.aborted).toBe(true)
+  expect(screen.queryByText('Đang tải chi tiết ca...')).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Chi tiết ca chụp' })).toBeNull()
+})
+
 it('keeps the current in-memory draft after a transient save failure', async () => {
   const { DoctorApiError } = await import('../../api/doctorReview')
   mocks.save.mockRejectedValue(new DoctorApiError(503, 'ERR_UNAVAILABLE'))
