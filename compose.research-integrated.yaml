@@ -6,7 +6,7 @@ services:
     mem_limit: 2048M
     environment:
       AURA_INTEGRATED_RESEARCH_ENABLED: "true"
-      AURA_FRANGI_CONFIG_PATH: /app/config/ai-frangi-v1.3.yaml
+      AURA_BOOTSTRAP_MANIFEST_ID: "11111111-1111-4111-8111-111111110405"
       AURA_DR_CNN_CHECKPOINT: /run/aura-dr/model.pt
       AURA_DR_CNN_SHA256: "${AURA_DR_CHECKPOINT_SHA256:?Set the verified DR checkpoint SHA-256}"
       OMP_NUM_THREADS: "1"

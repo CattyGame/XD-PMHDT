@@ -193,15 +193,16 @@ export async function savePrice(context: BackendContext, input: PriceInput, sign
   const packageId = integer(saved.packageId, 1)
   identifier(saved.priceVersionId)
   majorAmount(saved.price)
-  if (saved.status !== undefined) oneOf(saved.status, packageStatuses)
-  if ((current && packageId !== current.id) || integer(saved.version, 1) <= expectedVersion ||
+  if (saved.status !== 'ACTIVE' || (current && packageId !== current.id) || integer(saved.version, 1) <= expectedVersion ||
     saved.displayName !== input.displayName.trim() || saved.amountMinor !== input.amountMinor ||
     saved.currency !== input.currency || saved.credits !== input.credits) invalid()
 }
-export async function retirePackage(context: BackendContext, id: number, change: VersionChange, signal: AbortSignal) {
-  const row = object(await admin(context, '/billing/packages/' + integer(id, 1) + '/status', signal, 'PATCH',
-    { ...change, status: 'RETIRED' }))
-  if (row.packageId !== id || row.status !== 'RETIRED' || integer(row.version, 1) < change.expectedVersion) invalid()
+export async function retirePackage(context: BackendContext, current: { id: number; version: number; priceVersionId: string },
+  reason: string, signal: AbortSignal, commandId: string) {
+  const row = object(await admin(context, '/billing/packages/' + integer(current.id, 1) + '/status', signal, 'PATCH',
+    { expectedVersion: integer(current.version, 1), reason, status: 'RETIRED' }, { 'Idempotency-Key': identifier(commandId) }))
+  if (row.packageId !== current.id || row.status !== 'RETIRED' || integer(row.version, 1) !== current.version ||
+    identifier(row.priceVersionId) !== identifier(current.priceVersionId)) invalid()
 }
 function config(value: unknown) {
   const row = object(value)

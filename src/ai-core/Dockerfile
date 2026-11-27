@@ -7,7 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     OMP_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1 \
-    MKL_NUM_THREADS=1
+    MKL_NUM_THREADS=1 \
+    AURA_RUNTIME_STATE_PATH=/var/lib/aura-ai-state/runtime-config-state.json
 
 WORKDIR /app
 
@@ -37,8 +38,8 @@ COPY ./app /app/app
 COPY ./config /app/config
 COPY ./scripts /app/scripts
 
-# Set ownership
-RUN chown -R appuser:appuser /app
+# Set ownership and writable persistent runtime state directory
+RUN mkdir -p /var/lib/aura-ai-state && chown -R appuser:appuser /app /var/lib/aura-ai-state
 USER appuser
 
 # Expose service port

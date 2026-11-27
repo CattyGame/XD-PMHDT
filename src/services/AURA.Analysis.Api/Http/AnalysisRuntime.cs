@@ -83,9 +83,7 @@ public static class AnalysisRuntime
         services.AddTransient<AlertService>();
         services.AddTransient<IExportRepository,PostgresExportRepository>();
         services.AddTransient<ExportService>();
-        services.TryAddSingleton<IAiManifestCatalog, VerifiedServerAiManifestCatalog>();
-        services.TryAddSingleton<IAiCandidateSmokeVerifier, MetadataAiCandidateSmokeVerifier>();
-        services.TryAddSingleton<AiConfigService>();
+        services.TryAddTransient<AiConfigService>();
         services.AddTransient<AURA.Analysis.Api.Campaign.ICampaignRepository, AURA.Analysis.Api.Campaign.CampaignRepository>();
         services.AddTransient<AURA.Analysis.Api.Campaign.CampaignRepository>();
         return services;

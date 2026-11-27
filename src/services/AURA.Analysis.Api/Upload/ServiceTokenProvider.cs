@@ -26,6 +26,7 @@ public sealed class ServiceTokenProvider(IHttpClientFactory clients, IConfigurat
             ("aura-identity", "identity:context") => true,
             ("aura-profile", "profile:resolve") => true,
             ("aura-billing", "billing:reserve" or "billing:read" or "billing:release" or "billing:refund") => true,
+            ("aura-ai", "ai:config") => true,
             _ => false
         };
         var clientId = configuration["ServiceAuth:ClientId"];

@@ -128,9 +128,9 @@ function PriceEditor({ current, draft, busy, save }: {
   </Editor>
 }
 
-function canRetryPrice(cause: unknown) {
+function canRetryCatalogChange(cause: unknown) {
   return cause instanceof AnalysisResultError &&
-    (cause.retryable || cause.status === 429 || cause.code === 'ERR_INVALID_RESPONSE')
+    (cause.retryable || cause.status === 429 || cause.status >= 500 || cause.code === 'ERR_INVALID_RESPONSE')
 }
 
 function Catalog({ context }: { context: BackendContext }) {
@@ -148,7 +148,7 @@ function Catalog({ context }: { context: BackendContext }) {
         priceIntent.current = null
         if (!signal.aborted) setConflictDraft(null)
       } catch (cause) {
-        if (!canRetryPrice(cause)) priceIntent.current = null
+        if (!canRetryCatalogChange(cause)) priceIntent.current = null
         if (!signal.aborted && cause instanceof AnalysisResultError && cause.status === 409)
           setConflictDraft({ packageId: target?.id ?? null, input })
         throw cause
@@ -160,16 +160,19 @@ function Catalog({ context }: { context: BackendContext }) {
     {(data, mutate, busy) => <>
       <details open={conflictDraft?.packageId === null || undefined}><summary>Tạo gói khám</summary><PriceEditor busy={busy}
         draft={conflictDraft?.packageId === null ? conflictDraft.input : undefined}
-        save={price => void mutate(writePrice(price), canRetryPrice)} /></details>
+        save={price => void mutate(writePrice(price), canRetryCatalogChange)} /></details>
       <PortalTable columns={['Gói khám', 'Giá (đơn vị nhỏ nhất)', 'Credit', 'Trạng thái', 'Phiên bản', 'Thao tác']}>
         {data.items.map(row => <tr key={row.priceVersionId}>
           <td>{row.name}</td><td>{formatCount(row.amount)} {row.currency}</td><td>{formatCount(row.credits)}</td>
           <td>{row.status}</td><td>{row.version}<br /><small>{row.priceVersionId}</small></td>
           <td>{row.status === 'ACTIVE' && <details open={conflictDraft?.packageId === row.id || undefined}><summary>Quản lý giá</summary>
             <PriceEditor current={row} busy={busy} draft={conflictDraft?.packageId === row.id ? conflictDraft.input : undefined}
-              save={price => void mutate(writePrice(price, row), canRetryPrice)} />
-            <Editor title="Ngừng bán gói" busy={busy} reasonMaxLength={250} onSubmit={data => void mutate(signal => retirePackage(context,
-              row.id, { expectedVersion: row.version, reason: value(data, 'reason') }, signal))}>
+              save={price => void mutate(writePrice(price, row), canRetryCatalogChange)} />
+            <Editor title="Ngừng bán gói" busy={busy} reasonMaxLength={250} onSubmit={data => {
+              const commandId = crypto.randomUUID()
+              const reason = value(data, 'reason')
+              void mutate(signal => retirePackage(context, row, reason, signal, commandId), canRetryCatalogChange)
+            }}>
               <p>Ngừng tạo đơn mới cho gói này.</p>
             </Editor>
           </details>}</td>

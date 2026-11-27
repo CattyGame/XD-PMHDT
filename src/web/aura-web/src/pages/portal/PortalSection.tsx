@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { portalError, type analytics } from '../../api/sprint6Portal'
+import { AnalysisResultError } from '../../api/analysisResult'
 import styles from '../billing/billing.module.css'
 import portal from './portal.module.css'
 import { formatCount, formatDate, formatRange } from './display'
@@ -20,11 +21,13 @@ export default function PortalSection<T>({ title, read, cursor, children }: Prop
   const [request, setRequest] = useState({ cursor: null as string | null, sequence: 0 })
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [writeError, setWriteError] = useState('')
   const [retry, setRetry] = useState<{ write: Write; retryable: Retryable } | null>(null)
   const pending = useRef<AbortController | null>(null)
   const load = useEffectEvent(read)
 
   const reload = useCallback((next: string | null) => {
+    setWriteError('')
     setState({ kind: 'loading' })
     setRequest(current => ({ cursor: next, sequence: current.sequence + 1 }))
   }, [])
@@ -47,6 +50,7 @@ export default function PortalSection<T>({ title, read, cursor, children }: Prop
     const controller = new AbortController()
     pending.current = controller
     setSaved(false)
+    setWriteError('')
     setRetry(null)
     setBusy(true)
     try {
@@ -57,8 +61,11 @@ export default function PortalSection<T>({ title, read, cursor, children }: Prop
       }
     } catch (cause) {
       if (!controller.signal.aborted) {
+        const message = portalError(cause)
         if (retryable?.(cause)) setRetry({ write, retryable })
-        setState({ kind: 'error', message: portalError(cause) })
+        if (!retryable && cause instanceof AnalysisResultError && cause.code !== 'ERR_INVALID_RESPONSE' &&
+          (cause.status === 0 || cause.status === 429 || cause.status >= 500)) setWriteError(message)
+        else setState({ kind: 'error', message })
       }
     } finally {
       pending.current = null
@@ -75,6 +82,7 @@ export default function PortalSection<T>({ title, read, cursor, children }: Prop
     </div>
     {state.kind === 'loading' && <p role="status">Đang tải dữ liệu…</p>}
     {state.kind === 'error' && <p role="alert" className={styles.error}>{state.message}</p>}
+    {writeError && <p role="alert" className={styles.error}>{writeError}</p>}
     {retry && <button type="button" className={styles.secondary} disabled={busy}
       onClick={() => void mutate(retry.write, retry.retryable)}>Thử gửi lại</button>}
     {saved && state.kind !== 'error' && <p role="status">Đã lưu thay đổi.</p>}

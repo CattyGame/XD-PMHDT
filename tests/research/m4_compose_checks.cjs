@@ -47,6 +47,21 @@ assert.ok(!serializedRoutes.includes('ai-core') && !serializedRoutes.includes('/
 assert.ok(!JSON.stringify(compose.services['ai-core'] || {}).includes('reload'), 'Compose AI Core profile must stay internal without public reload.');
 console.log('PASS: API Gateway and Compose keep AI Core internal without public reload exposure.');
 
+const composeDev = yaml.load(fs.readFileSync(path.join(root, 'compose.dev.yaml'), 'utf8'));
+const composeAdr005 = yaml.load(fs.readFileSync(path.join(root, 'compose.adr005.yaml'), 'utf8'));
+const composeIntegrated = yaml.load(fs.readFileSync(path.join(root, 'compose.research-integrated.yaml'), 'utf8'));
+assert.equal(composeDev.services['analysis-api'].environment.Services__Ai__BaseUrl, 'http://ai-core:8000', 'compose.dev.yaml must wire Services__Ai__BaseUrl.');
+assert.equal(composeAdr005.services['analysis-api'].environment.Services__Ai__BaseUrl, 'http://ai-core:8000', 'compose.adr005.yaml must wire Services__Ai__BaseUrl.');
+assert.ok(!('AURA_FRANGI_CONFIG_PATH' in (composeAdr005.services['ai-core']?.environment || {})), 'compose.adr005.yaml must use AURA_BOOTSTRAP_MANIFEST_ID instead of AURA_FRANGI_CONFIG_PATH.');
+assert.ok(!('AURA_FRANGI_CONFIG_PATH' in (composeIntegrated.services['ai-core']?.environment || {})), 'compose.research-integrated.yaml must use AURA_BOOTSTRAP_MANIFEST_ID instead of AURA_FRANGI_CONFIG_PATH.');
+assert.ok(String(compose.services['ai-core']?.environment?.AURA_RUNTIME_STATE_PATH || '').startsWith('/var/lib/aura-ai-state/'), 'compose.yaml ai-core must configure persistent AURA_RUNTIME_STATE_PATH.');
+assert.ok((compose.services['ai-core']?.volumes || []).some(v => String(v).includes('ai_core_state:/var/lib/aura-ai-state')), 'compose.yaml ai-core must mount ai_core_state volume.');
+assert.ok('ai_core_state' in (compose.volumes || {}), 'compose.yaml must declare ai_core_state volume.');
+const serviceClients = JSON.parse(fs.readFileSync(path.join(root, 'infra/service-auth/clients.example.json'), 'utf8'));
+const analysisApiClient = (serviceClients.clients || []).find(c => c.clientId === 'analysis-api');
+assert.deepEqual(analysisApiClient?.allowedTargets?.['aura-ai'], ['ai:config'], 'clients.example.json must grant analysis-api ai:config scope on aura-ai.');
+console.log('PASS: Compose AI state persistence, bootstrap policy, and analysis-api ai:config scope verified.');
+
 const aiCore = compose.services['ai-core'] || {};
 const aiCoreCmd = Array.isArray(aiCore.command) ? aiCore.command.join(' ') : String(aiCore.command || '');
 assert.ok(Number(aiCore.cpus) > 0, 'ai-core must pin CPU limit in compose.yaml');

@@ -94,8 +94,7 @@ describe('SCRUM-393 protected portal', () => {
       }
       if (posted[1].key !== posted[0].key || posted[1].body !== posted[0].body)
         throw new AnalysisResultError(409, 'ERR_VERSION_CONFLICT')
-      const { status: _status, ...saved } = current
-      return json({ ...saved, price: 30000 })
+      return json({ ...current, price: 30000 })
     })
     open('/admin/catalog')
     fireEvent.click(await screen.findByText('Quản lý giá'))
@@ -108,6 +107,35 @@ describe('SCRUM-393 protected portal', () => {
     expect(posted).toHaveLength(2)
     expect(posted[0].key).toMatch(/^[0-9a-f-]{36}$/i)
     expect(posted[1]).toEqual(posted[0])
+  })
+
+  it('replays the same retirement command after the backend commits but the response is lost', async () => {
+    const writes: { body: string; key: string }[] = []
+    let current = price
+    request.mockImplementation(async (_path, _context, _signal, method, body, _timeout, headers) => {
+      if (method !== 'PATCH') return json({ items: [current], nextCursor: null })
+      writes.push({ body, key: headers['Idempotency-Key'] })
+      if (writes.length === 1) {
+        current = { ...price, status: 'RETIRED' }
+        throw new AnalysisResultError(503, 'ERR_DEPENDENCY_UNAVAILABLE')
+      }
+      if (writes[0].key !== writes[1].key || writes[0].body !== writes[1].body)
+        throw new AnalysisResultError(409, 'ERR_VERSION_CONFLICT')
+      const { packageId, priceVersionId, version, status } = current
+      return json({ packageId, priceVersionId, version, status })
+    })
+    open('/admin/catalog')
+    fireEvent.click(await screen.findByText('Quản lý giá'))
+    const editor = screen.getByRole('group', { name: 'Ngừng bán gói' })
+    fireEvent.change(within(editor).getByLabelText('Lý do'), { target: { value: 'Ngừng bán thử nghiệm' } })
+    fireEvent.click(within(editor).getByRole('button', { name: 'Lưu thay đổi' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Thử gửi lại' }))
+    await screen.findByText('RETIRED')
+    expect(writes).toHaveLength(2)
+    expect(writes[0].key).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(writes[1]).toEqual(writes[0])
+    expect(screen.getByText(price.priceVersionId)).toBeTruthy()
+    expect(screen.queryByText('Quản lý giá')).toBeNull()
   })
 
   it('activates an AI manifest with its current version and reloads after a valid response', async () => {

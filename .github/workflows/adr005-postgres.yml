@@ -141,6 +141,7 @@ jobs:
         shell: bash
         env:
           AURA_M2_ARTIFACTS: ${{ runner.temp }}/adr005/m2-responses
+          AURA_M1_ARTIFACTS: ${{ runner.temp }}/adr005/m1-responses
         run: |
           status=0
           for component in analysis billing worker m1; do
@@ -166,6 +167,7 @@ jobs:
         run: |
           node scripts/validate_analysis_responses.cjs --self-test 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
           node scripts/validate_analysis_responses.cjs "${{ runner.temp }}/adr005/m2-responses/analysis-responses.json" 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
+          node scripts/validate_billing_responses.cjs "${{ runner.temp }}/adr005/m1-responses" 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
 
       - name: Reapply migrations against the populated candidate database
         id: upgrade

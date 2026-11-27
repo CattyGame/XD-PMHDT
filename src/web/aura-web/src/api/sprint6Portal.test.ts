@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendContext } from './backendContext'
-import { financial, ownerOrders, ownerUsage, savePrice, saveTemplate, templates } from './sprint6Portal'
+import { financial, ownerOrders, ownerUsage, retirePackage, savePrice, saveTemplate, templates } from './sprint6Portal'
 
 const authorized = vi.hoisted(() => vi.fn())
 vi.mock('./analysisResult', async load => ({
@@ -97,14 +97,26 @@ describe('SCRUM-393 backend response contracts', () => {
     expect(authorized.mock.calls[1][0]).toBe(`/api/v1/admin/notification-templates/${template.id}`)
   })
 
-  it('publishes with expectedVersion zero and the explicit key and accepts a canonical receipt without status', async () => {
+  it('publishes with expectedVersion zero and the explicit key and validates the canonical ACTIVE receipt', async () => {
     authorized.mockResolvedValueOnce(response({
       packageId: 42, priceVersionId: uuid(6), version: 1, displayName: price.displayName,
-      price: 12.50, amountMinor: 1250, currency: 'USD', credits: 3,
+      price: 12.50, amountMinor: 1250, currency: 'USD', credits: 3, status: 'ACTIVE',
     }))
     await savePrice(context, price, signal, undefined, uuid(10))
     expect(authorized).toHaveBeenCalledWith('/api/v1/admin/billing/packages', context, signal, 'POST',
       expect.any(String), undefined, { 'Idempotency-Key': uuid(10) })
     expect(JSON.parse(authorized.mock.calls[0][4])).toEqual({ ...price, expectedVersion: 0 })
+  })
+
+  it('pins retirement to the selected immutable price snapshot', async () => {
+    const current = { id: 42, priceVersionId: uuid(6), version: 7 }
+    const receipt = { packageId: current.id, priceVersionId: current.priceVersionId, version: 7, status: 'RETIRED' }
+    authorized.mockResolvedValueOnce(response(receipt))
+      .mockResolvedValueOnce(response({ ...receipt, priceVersionId: uuid(11), version: 8 }))
+    await retirePackage(context, current, 'Kiểm thử', signal, uuid(10))
+    expect(authorized).toHaveBeenCalledWith('/api/v1/admin/billing/packages/42/status', context, signal, 'PATCH',
+      expect.any(String), undefined, { 'Idempotency-Key': uuid(10) })
+    expect(JSON.parse(authorized.mock.calls[0][4])).toEqual({ expectedVersion: 7, reason: 'Kiểm thử', status: 'RETIRED' })
+    await expect(retirePackage(context, current, 'Kiểm thử', signal, uuid(12))).rejects.toHaveProperty('code', 'ERR_INVALID_RESPONSE')
   })
 })
