@@ -77,15 +77,21 @@ def _default_smoke_image_b64() -> str:
 
 
 def default_smoke_runner(candidate: FrangiRuntimeConfig) -> None:
-    """Execute real end-to-end segmentation (+ integrated artifact check when enabled) against candidate."""
+    """Execute real end-to-end segmentation (and integrated AVR+DR load/infer when enabled) against candidate."""
+    smoke_b64 = _default_smoke_image_b64()
     if os.getenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false").strip().lower() == "true":
-        from .integrated_inference import configured_artifacts
+        from .integrated_inference import verify_integrated_runtime
 
-        configured_artifacts()
+        response = verify_integrated_runtime(candidate, smoke_b64)
+        expected_cfg = f"{candidate.config_version}-integrated-research-v1"
+        if response.model_version != candidate.model_version or response.config_version != expected_cfg:
+            raise ValueError("Integrated candidate smoke response drifted from manifest metadata.")
+        return
+
     request = AnalysisRequest(
         request_id=str(uuid.uuid4()),
         patient_id=None,
-        image_base64=_default_smoke_image_b64(),
+        image_base64=smoke_b64,
     )
     response = process_frangi_analysis(request, config=candidate)
     if response.model_version != candidate.model_version or response.config_version != candidate.config_version:
@@ -405,9 +411,9 @@ class RuntimeManifestRegistry:
                 return self._bootstrap_initial_snapshot()
             return self._current
 
-    def get_view(self) -> Dict[str, Any]:
+    def snapshot_to_view(self, snap: ActiveRuntimeSnapshot) -> Dict[str, Any]:
         with self._lock:
-            snap = self.get_active_snapshot()
+            self._ensure_ready_locked()
             entry = self._entries[snap.artifact_manifest_id]
             return {
                 "artifactManifestId": snap.artifact_manifest_id,
@@ -421,6 +427,19 @@ class RuntimeManifestRegistry:
                 "canRollback": len(self._history) > 0,
                 "historyDepth": len(self._history),
             }
+
+    def get_view(self) -> Dict[str, Any]:
+        with self._lock:
+            return self.snapshot_to_view(self.get_active_snapshot())
+
+    def get_idempotent_receipt(self, idempotency_key: str) -> Optional[ActiveRuntimeSnapshot]:
+        clean = idempotency_key.strip() if idempotency_key else ""
+        if not clean:
+            return None
+        with self._lock:
+            self._ensure_ready_locked()
+            item = self._idempotency.get(clean)
+            return item[1] if item is not None else None
 
     def list_manifests(self) -> List[ManifestEntry]:
         with self._lock:

@@ -218,6 +218,29 @@ paths:
         '403': { description: Wrong scope/client }
         '409': { description: Stale expectedVersion or no previous version }
         '503': { description: Rollback smoke check or atomic persistence failed }
+  /internal/v1/ai/config/commands/{idempotencyKey}:
+    get:
+      operationId: getInternalAiConfigCommandReceipt
+      summary: Look up committed receipt by Idempotency-Key for Analysis API reconciliation
+      security:
+      - serviceBearer: []
+      parameters:
+      - $ref: '#/components/parameters/XCorrelationIdParam'
+      - name: idempotencyKey
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: Original committed receipt for the idempotent config command
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalAiConfigView'
+        '401': { description: Missing/invalid RS256 service JWT }
+        '403': { description: Wrong scope/client }
+        '404': { description: Command key not committed on AI Core }
+        '503': { description: Runtime config authority corrupted or unavailable }
 components:
   securitySchemes:
     serviceBearer:

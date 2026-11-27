@@ -54,7 +54,12 @@ from .services.mock_service import (
     MockLowQualityImageError,
     process_mock_analysis,
 )
-from .services.integrated_inference import IntegratedModelUnavailable, configured_artifacts, process_integrated_analysis
+from .services.integrated_inference import (
+    IntegratedModelUnavailable,
+    configured_artifacts,
+    process_integrated_analysis,
+    verify_integrated_runtime,
+)
 from .services.runtime_registry import RUNTIME_REGISTRY, RuntimeManifestError
 
 _ORIGINAL_LOAD_FRANGI_CONFIG = load_frangi_config
@@ -417,7 +422,7 @@ def ready():
 
     if os.getenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false").strip().lower() == "true":
         try:
-            configured_artifacts()
+            verify_integrated_runtime(frangi_config)
         except IntegratedModelUnavailable as error:
             raise HTTPException(status_code=503, detail={"error_code": "SERVICE_NOT_READY",
                 "message": str(error), "details": None}) from error
@@ -830,8 +835,8 @@ async def put_internal_ai_config(
     """Validate candidate manifest, run real smoke check, and atomically switch active config."""
     payload = await _parse_json_object(request)
     try:
-        RUNTIME_REGISTRY.activate_manifest(payload, idempotency_key=idempotency_key)
-        return RUNTIME_REGISTRY.get_view()
+        snapshot = RUNTIME_REGISTRY.activate_manifest(payload, idempotency_key=idempotency_key)
+        return RUNTIME_REGISTRY.snapshot_to_view(snapshot)
     except RuntimeManifestError as error:
         _raise_manifest_http_error(error)
 
@@ -855,11 +860,33 @@ async def rollback_internal_ai_config(
             },
         )
     try:
-        RUNTIME_REGISTRY.rollback_manifest(
+        snapshot = RUNTIME_REGISTRY.rollback_manifest(
             expected_version=payload.get("expectedVersion"),
             reason=str(payload.get("reason", "")),
             idempotency_key=idempotency_key,
         )
-        return RUNTIME_REGISTRY.get_view()
+        return RUNTIME_REGISTRY.snapshot_to_view(snapshot)
+    except RuntimeManifestError as error:
+        _raise_manifest_http_error(error)
+
+
+@app.get("/internal/v1/ai/config/commands/{idempotency_key}", tags=["InternalConfig"], include_in_schema=False)
+def get_internal_ai_config_command(
+    idempotency_key: str,
+    _: None = Depends(verify_config_auth),
+):
+    """Query committed receipt for a previously submitted idempotent config command."""
+    try:
+        snapshot = RUNTIME_REGISTRY.get_idempotent_receipt(idempotency_key)
+        if snapshot is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error_code": "ERR_COMMAND_NOT_FOUND",
+                    "message": "Idempotent AI config command receipt not found.",
+                    "details": None,
+                },
+            )
+        return RUNTIME_REGISTRY.snapshot_to_view(snapshot)
     except RuntimeManifestError as error:
         _raise_manifest_http_error(error)

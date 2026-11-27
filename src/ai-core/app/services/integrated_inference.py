@@ -1,12 +1,18 @@
 """Opt-in application pipeline; research measurements never become clinical risk."""
-import os
+import base64
 import hashlib
+import io
+import os
+import pickle
 import re
 import time
+import uuid
 from pathlib import Path
 from dataclasses import replace
 
-from ..schemas.analysis import AnalysisResponse
+from PIL import Image, ImageDraw
+
+from ..schemas.analysis import AnalysisRequest, AnalysisResponse
 from .frangi_service import process_frangi_analysis, decode_and_validate_fundus_image
 
 
@@ -71,5 +77,46 @@ def process_integrated_analysis(request, config):
         payload["limitations"] += " Native-pixel AVR V8 and binary HRF DR/Grad-CAM research; no clinical validation or ICDR grading."
         payload["processing_time_ms"] = round((time.perf_counter() - started) * 1000, 2)
         return AnalysisResponse.model_validate(payload)
-    except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError, IndexError) as error:
+    except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError, IndexError, EOFError, pickle.UnpicklingError) as error:
         raise IntegratedModelUnavailable("Verified integrated research inference is unavailable.") from error
+
+
+def _default_integrated_smoke_b64() -> str:
+    image = Image.new("RGB", (128, 128), color=(0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((14, 14, 114, 114), fill=(150, 95, 75))
+    draw.line((32, 64, 96, 64), fill=(40, 22, 18), width=3)
+    draw.line((64, 30, 64, 98), fill=(35, 20, 16), width=3)
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def verify_integrated_runtime(config, smoke_image_b64: str | None = None) -> AnalysisResponse:
+    """Verify AVR/DR artifacts deserialize, validate architecture, and infer end-to-end."""
+    configured_artifacts()
+    request = AnalysisRequest(
+        request_id=str(uuid.uuid4()),
+        patient_id=None,
+        image_base64=smoke_image_b64 or _default_integrated_smoke_b64(),
+    )
+    try:
+        response = process_integrated_analysis(request, config)
+    except IntegratedModelUnavailable:
+        raise
+    except Exception as error:
+        raise IntegratedModelUnavailable(f"Integrated research smoke inference failed: {error}") from error
+
+    if (
+        response.research is None
+        or response.research.avr is None
+        or response.research.dr is None
+        or response.risk_available is not False
+        or response.risk_assessment is not None
+        or response.segmentation is None
+        or not response.segmentation.mask_base64
+        or not response.segmentation.overlay_base64
+        or not response.segmentation.gradcam_base64
+    ):
+        raise IntegratedModelUnavailable("Integrated smoke output is incomplete or violates clinical risk boundaries.")
+    return response
