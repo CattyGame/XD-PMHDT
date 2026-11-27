@@ -1,5 +1,18 @@
 # Sprint 6 M5 · Kiểm thử tích hợp hợp đồng
 
+## Cập nhật ngày 27/11/2026
+
+- **Candidate M5** `456734d164f686f97d0238a99da1ec8fa4f486d7`, tree `ce50963905aad8ca92ba1244894cf1400583ece3`. Ứng dụng được build và chạy Vitest ở `8476057`. Hai commit có cùng tree mã ứng dụng `c4aafffaa72b2bb04491d97fbd425b2105071904`. Commit sau thay fixture Playwright và tăng assertion giải mã ảnh. [Draft PR #115](https://github.com/CattyGame/XD-PMHDT/pull/115) · [CI candidate](https://github.com/CattyGame/XD-PMHDT/commit/456734d164f686f97d0238a99da1ec8fa4f486d7/checks).
+- **SCRUM-393 · PASS frontend.** Đã cập nhật từ `develop@4fcc312` và giải quyết xung đột portal trong `e6baafe`. Giá công bố xác nhận receipt `ACTIVE`. Lệnh ngừng bán gửi UUID, kiểm đúng ID và số phiên bản của giá hiện tại và thử lại cùng key/body sau mất phản hồi. 29 Vitest Billing/Admin mục tiêu qua. Hai endpoint catalog đã có trong mã sau khi merge [PR #117 của M1](https://github.com/CattyGame/XD-PMHDT/pull/117).
+- **SCRUM-389 · PASS frontend.** `8476057` giải mã ảnh PNG/JPEG có xác thực trước khi tạo BlobURL, đóng bitmap tạm và kiểm lại abort. Ca lớp PNG hỏng xác nhận chỉ ảnh hợp lệ được cấp BlobURL. 31 Vitest Doctor/lịch sử mục tiêu qua. Lượt Playwright đầu phát hiện fixture PNG cũ sai CRC ở chunk IDAT. `456734d` thay bằng PNG tổng hợp hợp lệ và kiểm `naturalWidth > 0`. Sau sửa, 8 ca liên quan qua ở Chromium. Bộ mục tiêu cho Doctor, Billing và Chat qua đủ 33/33 ở Chrome, Edge và Firefox với production preview loopback.
+- **SCRUM-394 · PASS mock ở bản ghép tạm.** Kiểm trực tiếp 3/3 ca Chat/FCM trên source tree `11a8b5a520f94f26457a85ae015645d7ef3515c2`, ghép candidate M5 với nhánh M6 `d1616a96` trong thư mục tạm. Luồng mở hội thoại từ thông báo kiểm quyền hiện tại và chặn quyền đã bị thu hồi. API/Firebase được mô phỏng. Bản ghép phục vụ kiểm thử, PR #115 giữ lịch sử riêng.
+- **Gate nội bộ.** 566/566 Vitest, lint và production build qua. Chạy lại `Run-Checks.ps1` đạt 65/65 bài kiểm cấu hình, gồm kiểm plan đủ 43 migration. CI .NET, React lint/test/build và M5 protected UI contract journeys trên candidate qua. Bốn bài kiểm công cụ entry gate qua. Mốc lỗi migration ở lượt 26/11 thuộc lịch sử.
+- **REUSED · M1 và M4.** Báo cáo M1 xác nhận Billing trên DB fixture và HTTP TestServer, gồm checkout snapshot và validation schema phản hồi. M4 đã công bố smoke Uvicorn với promotion, lượt inference thực và rollback tại `d0c8a95`, nay có trong develop. Hai bằng chứng này có phạm vi dịch vụ và môi trường của từng tác giả. [M1](./m1_sprint6_completion_20261127.md) · [M4](https://nguyentruonghau2202.atlassian.net/browse/SCRUM-392?focusedCommentId=10228).
+- **REUSED · M6.** Trên nhánh M6 `d1616a96`, báo cáo kết quả 17/17 ca cross-service với DB fixture. Socket đóng sau 428 ms khi thu hồi assignment, 846 ms khi thu hồi membership và 836 ms khi vô hiệu account. FCM upstream dùng test double. [Kết quả SCRUM-396](https://nguyentruonghau2202.atlassian.net/browse/SCRUM-396?focusedCommentId=10235).
+- **BLOCKED · nghiệm thu trên TEST tích hợp.** Chưa có URL và manifest deployment SCRUM-397 cho các ca M5. Cần kiểm doctor research và revoke, frontend catalog/history/usage/config, và Chat/FCM trên cùng candidate. FCM nhận và mở thông báo trên thiết bị thật còn cần xác minh. [SCRUM-397](https://nguyentruonghau2202.atlassian.net/browse/SCRUM-397).
+
+## Lượt ngày 26/11/2026
+
 26/11/2026 (UTC+7) · Nhánh `fix/m5-sprint6-contract-integration` · [Draft PR #115](https://github.com/CattyGame/XD-PMHDT/pull/115)
 
 - Baseline triển khai `develop@223646866601fe487c9c93bf802b163ad85753f3`. Đã cập nhật nhánh từ `develop@c70113a6917be44093816334f978707c320910b8` trước lượt Playwright cuối.
