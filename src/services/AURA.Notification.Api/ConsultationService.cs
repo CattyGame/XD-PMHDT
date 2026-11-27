@@ -147,8 +147,14 @@ public sealed class ConsultationService(
         await ResolveAccountAsync(firebaseUid, ct);
 
     public async Task<bool> HasCurrentAccessAsync(ConsultationConversation conversation, Guid accountId, CancellationToken ct)
+        => await HasCurrentAccessAsync(conversation, accountId, "CONSULTATION_JOIN", ct);
+
+    public async Task<bool> HasCurrentAccessAsync(ConsultationConversation conversation, Guid accountId,
+        string action, CancellationToken ct)
     {
-        var decision = await ResolveForConversationAsync(conversation, accountId, "CONSULTATION_JOIN", ct);
+        if (accountId != conversation.PatientAccountId && accountId != conversation.DoctorAccountId)
+            return false;
+        var decision = await ResolveForConversationAsync(conversation, accountId, action, ct);
         return decision.Allowed;
     }
 

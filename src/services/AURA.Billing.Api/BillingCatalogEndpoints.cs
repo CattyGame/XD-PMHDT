@@ -19,6 +19,27 @@ public static class BillingCatalogEndpoints
             return Results.Ok(new PackageCatalogResponse(prices, "postgres", false, 0, repo.ReadCount));
         }).WithName("GetPackageCatalog").WithTags("Package Catalog").Produces<PackageCatalogResponse>();
 
+        // Public user-token route. Billing itself resolves current BILLING_READ authority for this exact clinic.
+        app.MapGet("/api/v1/billing/summary", async Task<IResult> (HttpContext context, string ownerType,
+            Guid ownerId, DateTimeOffset from, DateTimeOffset to, BillingOwnerAuthorizer auth,
+            BillingHistoryRepository repo, CancellationToken ct) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            ownerType = ownerType.ToUpperInvariant();
+            if (ownerType != "CLINIC" || ownerId == Guid.Empty || from.Offset != TimeSpan.Zero
+                || to.Offset != TimeSpan.Zero || !ValidRange(from, to)) return Invalid(context);
+            var rights = await auth.AuthorizeAsync(context.Request, ownerType, ownerId, false, ct);
+            if (!rights.Allowed)
+                return Error(context, rights.StatusCode, rights.Code, "Billing owner access denied.", rights.StatusCode == 503);
+            return Results.Ok(new
+            {
+                from,
+                to,
+                groups = await repo.OwnerSummaryAsync(ownerType, ownerId, rights.TenantId,
+                    from.UtcDateTime, to.UtcDateTime, ct)
+            });
+        }).WithName("GetClinicBillingSummary").WithTags("Billing Summary");
+
         var admin = app.MapGroup("/api/v1/admin/billing");
         admin.AddEndpointFilter(async (context, next) =>
         {

@@ -44,12 +44,20 @@ public sealed record AnalyticsTrendRow(
 public interface IAnalyticsRepository
 {
     Task<AnalyticsSummaryRow> ReadSummaryAsync(AnalyticsDataScope scope, AnalyticsWindow window, CancellationToken ct);
+    Task<string> ReadDataRevisionAsync(CancellationToken ct);
     Task<IReadOnlyList<AnalyticsTrendRow>> ReadPatientTrendsAsync(
         Guid tenantId, Guid clinicId, Guid patientId, AnalyticsWindow window, int limit, CancellationToken ct);
 }
 
 public sealed class PostgresAnalyticsRepository(NpgsqlDataSource dataSource) : IAnalyticsRepository
 {
+    public async Task<string> ReadDataRevisionAsync(CancellationToken ct)
+    {
+        await using var command = dataSource.CreateCommand("SELECT pg_current_wal_lsn()::text;");
+        return await command.ExecuteScalarAsync(ct) as string
+            ?? throw new InvalidOperationException("PostgreSQL did not return an analytics data revision.");
+    }
+
     private const string ScopeSql = """
         FROM analysis.images i
         JOIN analysis.analysis_requests r ON r.tenant_id=i.tenant_id AND r.id=i.analysis_request_id

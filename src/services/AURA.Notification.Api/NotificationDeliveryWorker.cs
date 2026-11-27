@@ -4,6 +4,8 @@ public sealed class NotificationDeliveryWorker(
     NotificationDeliveryJobRepository jobs,
     DeviceRegistrationRepository devices,
     IAccountResolver accounts,
+    IConsultationDeliveryAuthorizer consultationAuthorization,
+    ConsultationPushDispatcher consultationPush,
     IFcmClient fcm,
     PushTemplates templates,
     IConfiguration configuration,
@@ -43,6 +45,22 @@ public sealed class NotificationDeliveryWorker(
         timeout.CancelAfter(TimeSpan.FromSeconds(20));
         try
         {
+            Guid consultationId = Guid.Empty;
+            if (job.Type == "CONSULTATION_MESSAGE")
+            {
+                if (!ConsultationDeliveryGuard.TryGetConversationId(job.Metadata, out consultationId))
+                {
+                    await FailAsync("CONSULTATION_CONTEXT_INVALID", false);
+                    return;
+                }
+                if (!await consultationAuthorization.HasCurrentReadAccessAsync(
+                    consultationId, job.AccountId, job.TenantId, timeout.Token))
+                {
+                    await FailAsync("CONSULTATION_ACCESS_REVOKED", false);
+                    return;
+                }
+            }
+
             var template = await templates.ForEventAsync(job.Type, timeout.Token);
             if (template is { Enabled: false }) { await FailAsync("TEMPLATE_DISABLED", false); return; }
             var (title, body) = PushTemplates.Render(template);
@@ -78,7 +96,22 @@ public sealed class NotificationDeliveryWorker(
                     FcmOptions = new() { Link = target.AbsoluteUri }
                 }
             };
-            var result = await fcm.SendMulticastAsync([new ActiveDeviceToken(job.DeviceId, token)], message, timeout.Token);
+            FcmMulticastResult result;
+            if (job.Type == "CONSULTATION_MESSAGE")
+            {
+                var providerResult = await consultationPush.SendIfAuthorizedAsync(
+                    consultationId, job.AccountId, job.TenantId, job.DeviceId, token, message, timeout.Token);
+                if (providerResult is null)
+                {
+                    await FailAsync("CONSULTATION_ACCESS_REVOKED", false);
+                    return;
+                }
+                result = providerResult;
+            }
+            else
+            {
+                result = await fcm.SendMulticastAsync([new ActiveDeviceToken(job.DeviceId, token)], message, timeout.Token);
+            }
             if (result.SuccessCount == 1 && result.FailureCount == 0)
                 await jobs.CompleteJobAsync(job.Id, job.LeaseToken, ct);
             else

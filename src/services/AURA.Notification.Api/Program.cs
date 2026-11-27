@@ -91,6 +91,7 @@ builder.Services.AddHttpClient("ProfileAuthority", client=>{client.BaseAddress=n
 builder.Services.AddSingleton<NotificationAuthorityClient>();
 builder.Services.AddSingleton<ConsultationAuthorityClient>();
 builder.Services.AddSingleton<ConsultationService>();
+builder.Services.AddSingleton<IConsultationDeliveryAuthorizer,ConsultationDeliveryAuthorizer>();
 builder.Services.AddSingleton<ConsultationConnectionRegistry>();
 builder.Services.AddSingleton<IConsultationRealtimePublisher, ConsultationRealtimePublisher>();
 builder.Services.AddHostedService<ConsultationConnectionMonitor>();
@@ -101,6 +102,7 @@ builder.Services.AddSignalR().AddStackExchangeRedis(RequiredConfiguration("Conne
 builder.Services.AddSingleton<INotificationContextResolver,NotificationContextResolver>();
 builder.Services.AddSingleton<IAccountResolver, AccountResolver>();
 builder.Services.AddSingleton<IFcmClient, FirebaseAdminFcmClient>();
+builder.Services.AddSingleton<ConsultationPushDispatcher>();
 builder.Services.Configure<RabbitMqConsumerOptions>(builder.Configuration.GetSection(RabbitMqConsumerOptions.SectionName));
 builder.Services.AddHostedService<NotificationEventConsumer>();
 builder.Services.AddHostedService<NotificationDeliveryWorker>();

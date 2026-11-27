@@ -59,6 +59,7 @@ public sealed class AnalyticsHttpTests
     {
         public int SummaryReads;
         public int TrendReads;
+        public Task<string> ReadDataRevisionAsync(CancellationToken ct) => Task.FromResult("0/1");
         public Task<AnalyticsSummaryRow> ReadSummaryAsync(AnalyticsDataScope scope, AnalyticsWindow window, CancellationToken ct)
         {
             SummaryReads++;

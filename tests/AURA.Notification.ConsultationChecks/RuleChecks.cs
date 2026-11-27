@@ -7,7 +7,7 @@ namespace AURA.Notification.ConsultationChecks;
 
 internal static class RuleChecks
 {
-    public static void Run()
+    public static async Task RunAsync()
     {
         Require(!ConsultationMessageRules.IsValidText(null), "null message must be rejected");
         Require(!ConsultationMessageRules.IsValidText("   "), "whitespace-only message must be rejected");
@@ -18,6 +18,37 @@ internal static class RuleChecks
         Require(System.Text.Encoding.UTF8.GetByteCount(fourByteText) == 16000,
             "the largest valid 4000-scalar four-byte payload is 16000 UTF-8 bytes");
         Require(!ConsultationMessageRules.IsValidText(fourByteText + "😀"), "more than 4000 Unicode scalars must be rejected");
+        var providerCalls = 0;
+        var revokedSent = await ConsultationDeliveryGuard.SendIfAuthorizedAsync(
+            _ => Task.FromResult(false),
+            _ => { providerCalls++; return Task.CompletedTask; }, CancellationToken.None);
+        Require(!revokedSent && providerCalls == 0,
+            "a revoked consultation assignment must stop before the FCM provider is called");
+        var testFcm = new FakeFcmClient();
+        var dispatcher = new ConsultationPushDispatcher(new FixedDeliveryAuthorization(false), testFcm);
+        var dispatchResult = await dispatcher.SendIfAuthorizedAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+            Guid.NewGuid(), "synthetic-token", new FirebaseAdmin.Messaging.MulticastMessage(), CancellationToken.None);
+        Require(dispatchResult is null && testFcm.Calls == 0,
+            "production consultation push dispatcher must not call a test FCM provider after revoke");
+        try
+        {
+            await ConsultationDeliveryGuard.SendIfAuthorizedAsync(
+                _ => Task.FromException<bool>(new HttpRequestException("authority unavailable")),
+                _ => { providerCalls++; return Task.CompletedTask; }, CancellationToken.None);
+            throw new InvalidOperationException("authority outage must propagate for bounded retry");
+        }
+        catch (HttpRequestException) { }
+        Require(providerCalls == 0, "authority outage must never be converted into an FCM send");
+        Require(ConsultationDeliveryGuard.TryGetConversationId("{\"conversationId\":\"" + Guid.NewGuid() + "\"}", out _),
+            "conversation identity must be read from persisted server metadata");
+        Require(!ConsultationDeliveryGuard.TryGetConversationId("{\"conversationId\":\"bad\"}", out _),
+            "malformed persisted conversation identity must fail closed");
+        var deliveryWorker = File.ReadAllText("src/services/AURA.Notification.Api/NotificationDeliveryWorker.cs");
+        Require(deliveryWorker.Contains("job.Type == \"CONSULTATION_MESSAGE\"", StringComparison.Ordinal)
+                && deliveryWorker.Contains("HasCurrentReadAccessAsync", StringComparison.Ordinal)
+                && deliveryWorker.Contains("consultationPush.SendIfAuthorizedAsync", StringComparison.Ordinal),
+            "production delivery worker must check consultation authority after claim and immediately before FCM");
+        Console.WriteLine("PASS: Consultation push checks current authority immediately before FCM; revoke and timeout never send.");
         Require(typeof(FirebaseToken).GetProperty(nameof(FirebaseToken.ExpirationTimeSeconds)) is not null,
             "hub expiry must use FirebaseAdmin's normalized exp property, not the custom-claims dictionary");
         Require(File.ReadAllText("src/services/AURA.Notification.Api/Program.cs")
@@ -92,5 +123,23 @@ internal static class RuleChecks
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
+    }
+
+    private sealed class FixedDeliveryAuthorization(bool allowed) : IConsultationDeliveryAuthorizer
+    {
+        public Task<bool> HasCurrentReadAccessAsync(Guid conversationId, Guid recipientAccountId, Guid tenantId,
+            CancellationToken ct) => Task.FromResult(allowed);
+    }
+
+    private sealed class FakeFcmClient : IFcmClient
+    {
+        public int Calls;
+        public Task<FcmMulticastResult> SendMulticastAsync(IReadOnlyList<ActiveDeviceToken> devices,
+            FirebaseAdmin.Messaging.MulticastMessage message, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult(new FcmMulticastResult(1, 0,
+                [new FcmSendOutcome(devices[0].Token, devices[0].DeviceId, true, "synthetic-message", null, null)]));
+        }
     }
 }

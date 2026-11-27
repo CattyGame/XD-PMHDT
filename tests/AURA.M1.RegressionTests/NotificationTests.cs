@@ -205,7 +205,9 @@ public class NotificationTests
             Worker=NewWorker();
         }
         public static async Task<Fixture> CreateAsync()=>new(await Database.CreateAsync());
-        public NotificationDeliveryWorker NewWorker()=>new(Jobs,Devices,Accounts,Provider,new PushTemplates(Db.Notification),_config,NullLogger<NotificationDeliveryWorker>.Instance);
+        public NotificationDeliveryWorker NewWorker()=>new(Jobs,Devices,Accounts,new DeliveryAuthorization(),
+            new ConsultationPushDispatcher(new DeliveryAuthorization(),Provider),Provider,new PushTemplates(Db.Notification),
+            _config,NullLogger<NotificationDeliveryWorker>.Instance);
         public async Task<Guid> DeviceAsync(string token) {var id=Guid.NewGuid();await Devices.RegisterAsync("m1-tests",Accounts.Uid,id,token,default);return id;}
         public string Event(string type)=>JsonSerializer.Serialize(new{eventId=Guid.NewGuid(),schemaVersion="1.0",eventType=type,analysisId=Guid.NewGuid(),orderId=Order,tenantId=Tenant});
         public Task<string> StatusAsync(Guid device)=>Db.ScalarAsync<string>("SELECT status FROM notification.delivery_jobs WHERE device_id=$1",device);
@@ -222,6 +224,10 @@ public class NotificationTests
         public Task<NotificationContext> ResolveAsync(Guid e,Guid a,Guid t,CancellationToken ct)=>Task.FromResult(new NotificationContext(e,a,t,true,[recipient],"COMPLETED",1,ClinicId));
         public Task<PaymentNotificationContext> ResolvePaymentAsync(Guid e,Guid o,Guid t,CancellationToken ct)=>Task.FromResult(new PaymentNotificationContext(
             Mismatch=="event"?Guid.NewGuid():e,Mismatch=="order"?Guid.NewGuid():o,Mismatch=="tenant"?Guid.NewGuid():t,recipient,Mismatch=="status"?"PENDING":"COMPLETED"));
+    }
+    sealed class DeliveryAuthorization:IConsultationDeliveryAuthorizer {
+        public Task<bool> HasCurrentReadAccessAsync(Guid conversationId,Guid recipientAccountId,Guid tenantId,CancellationToken ct)
+            =>Task.FromResult(true);
     }
     sealed class Provider:IFcmClient {
         public int Calls;public bool Recovered;public Func<Task>? DuringSend;public List<MulticastMessage> Messages {get;}=[];

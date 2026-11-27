@@ -149,6 +149,42 @@ paths:
         '401': {$ref: '#/components/responses/ErrorResponse'}
         '403': {$ref: '#/components/responses/ErrorResponse'}
         '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/billing/summary:
+    get:
+      operationId: getClinicBillingSummary
+      summary: Aggregate paid orders for the authorized clinic
+      description: Requires the caller's Firebase bearer and current Profile BILLING_READ authority for the requested clinic. UTC range is inclusive from and exclusive to, up to 366 days; results stay separated by currency and environment.
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - {in: query, name: ownerType, required: true, schema: {type: string, enum: [CLINIC]}}
+      - {in: query, name: ownerId, required: true, schema: {type: string, format: uuid}}
+      - {in: query, name: from, required: true, schema: {type: string, format: date-time}}
+      - {in: query, name: to, required: true, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: Payment totals for the authorized clinic without patient identifiers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [from, to, groups]
+                properties:
+                  from: {type: string, format: date-time}
+                  to: {type: string, format: date-time}
+                  groups:
+                    type: array
+                    items:
+                      type: object
+                      required: [environment, currency, paidOrders, paidAmount]
+                      properties:
+                        environment: *billingEnvironment
+                        currency: {type: string, minLength: 3, maxLength: 3}
+                        paidOrders: {type: integer, format: int64, minimum: 0}
+                        paidAmount: {type: number, minimum: 0}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
   /api/v1/admin/billing/summary:
     get:
       operationId: getAdminBillingSummary

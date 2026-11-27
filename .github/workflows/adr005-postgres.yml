@@ -157,6 +157,14 @@ jobs:
           done
           exit "$status"
 
+      - name: Required Consultation PostgreSQL and delivery checks
+        id: consultation
+        shell: bash
+        run: >-
+          dotnet run --project tests/AURA.Notification.ConsultationChecks/AURA.Notification.ConsultationChecks.csproj
+          --configuration Release --no-launch-profile -- --require-postgres
+          2>&1 | tee "$RUNNER_TEMP/adr005/consultation-tests.log"
+
       - name: Reject skipped or missing required TRX results
         run: python3 scripts/release/create_candidate_manifest.py --verify-trx "${{ runner.temp }}/adr005/results"
 
@@ -212,6 +220,7 @@ jobs:
           CONTRACT_RESPONSE_RESULT: ${{ steps.response_contracts.outcome }}
           PROFILE_RESULT: ${{ steps.profile.outcome }}
           NOTIFICATION_RESULT: ${{ steps.notification.outcome }}
+          CONSULTATION_RESULT: ${{ steps.consultation.outcome }}
         run: |
           check_status() { if [ "$1" = success ]; then printf PASS; else printf BLOCKED; fi; }
           if [ "$CONTRACT_RESPONSE_RESULT" != success ]; then CONTRACT_RESULT=failure; fi
@@ -227,7 +236,8 @@ jobs:
             --check "migrations-upgrade=$(check_status "$UPGRADE_RESULT")" --evidence "migrations-upgrade=$RUNNER_TEMP/adr005/migrations-upgrade.log" \
             --check "contract-tests=$(check_status "$CONTRACT_RESULT")" --evidence "contract-tests=$RUNNER_TEMP/adr005/contracts.log" \
             --check "profile-security=$(check_status "$PROFILE_RESULT")" --evidence "profile-security=$RUNNER_TEMP/adr005/profile-security.log" \
-            --check "notification-tests=$(check_status "$NOTIFICATION_RESULT")" --evidence "notification-tests=$RUNNER_TEMP/adr005/notification-tests.log"
+            --check "notification-tests=$(check_status "$NOTIFICATION_RESULT")" --evidence "notification-tests=$RUNNER_TEMP/adr005/notification-tests.log" \
+            --check "consultation-tests=$(check_status "$CONSULTATION_RESULT")" --evidence "consultation-tests=$RUNNER_TEMP/adr005/consultation-tests.log"
 
       - name: Upload TRX, migration logs and candidate JSON
         if: always()

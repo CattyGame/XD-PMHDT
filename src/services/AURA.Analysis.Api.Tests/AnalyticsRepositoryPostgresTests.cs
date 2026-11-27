@@ -20,6 +20,8 @@ public sealed class AnalyticsRepositoryPostgresTests
         var patient = Guid.NewGuid();
         var start = new DateTimeOffset(2026, 11, 16, 0, 0, 0, TimeSpan.Zero);
         var end = start.AddDays(1);
+        var repository = new PostgresAnalyticsRepository(db);
+        var revisionBefore = await repository.ReadDataRevisionAsync(default);
 
         async Task Sql(string statement, params object[] values)
         {
@@ -98,7 +100,10 @@ public sealed class AnalyticsRepositoryPostgresTests
             VALUES($1,$2,$3,$4,$5,2,1,false,'MODERATE','latest correction')
             """, Guid.NewGuid(), tenant, completed, result, Guid.NewGuid());
 
-        var summary = await new PostgresAnalyticsRepository(db).ReadSummaryAsync(
+        var revisionAfter = await repository.ReadDataRevisionAsync(default);
+        Assert.NotEqual(revisionBefore, revisionAfter);
+
+        var summary = await repository.ReadSummaryAsync(
             new(tenant, clinic, patient), AnalyticsWindow.Create(start, end), default);
 
         using var fixture = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(

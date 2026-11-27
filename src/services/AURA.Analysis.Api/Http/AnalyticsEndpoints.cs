@@ -16,7 +16,7 @@ public static class AnalyticsEndpoints
                 var user = await User(c);
                 var window = Window(from, to);
                 var result = await Service(c).GetClinicSummaryAsync(user.AccountId, ResourceId(clinicId),
-                    window, Correlation(c), c.RequestAborted);
+                    window, Correlation(c), c.RequestAborted, UserBearer(c));
                 return Results.Json(result, UploadJson.Options);
             }));
 
@@ -25,7 +25,7 @@ public static class AnalyticsEndpoints
             {
                 var user = await User(c);
                 var result = await Service(c).GetAdminSummaryAsync(user.AccountId, Window(from, to),
-                    Correlation(c), c.RequestAborted);
+                    Correlation(c), c.RequestAborted, UserBearer(c));
                 return Results.Json(result, UploadJson.Options);
             }));
 
@@ -35,7 +35,7 @@ public static class AnalyticsEndpoints
                 var user = await User(c);
                 var clinic = Clinic(c) ?? throw UploadFailure.Validation(new ErrorDetail("clinicContextId", "required"));
                 var result = await Service(c).GetDoctorSummaryAsync(user.AccountId, clinic, Window(from, to),
-                    Correlation(c), c.RequestAborted);
+                    Correlation(c), c.RequestAborted, UserBearer(c));
                 return Results.Json(result, UploadJson.Options);
             }));
 
@@ -78,6 +78,13 @@ public static class AnalyticsEndpoints
             DateTimeStyles.RoundtripKind, out parsed);
 
     private static string Correlation(HttpContext c) => (string)c.Items["CorrelationId"]!;
+    private static string? UserBearer(HttpContext c)
+    {
+        var values = c.Request.Headers.Authorization;
+        if (values.Count != 1 || !System.Net.Http.Headers.AuthenticationHeaderValue.TryParse(values[0], out var bearer)
+            || !string.Equals(bearer.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase)) return null;
+        return bearer.Parameter;
+    }
 
     private static async Task<IResult> Handle(HttpContext c, Func<Task<IResult>> action)
     {

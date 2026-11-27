@@ -53,7 +53,7 @@ public sealed record AnalyticsSummary(
     DateTimeOffset AsOf,
     AnalyticsRevenueSummary Revenue);
 
-public sealed record AnalyticsRevenueGroup(string Currency, string Environment, decimal Amount);
+public sealed record AnalyticsRevenueGroup(string Currency, string Environment, long PaidOrders, decimal Amount);
 
 public sealed record AnalyticsRevenueSummary(
     string Status,

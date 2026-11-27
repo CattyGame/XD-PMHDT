@@ -1593,17 +1593,18 @@ components:
     AnalyticsRevenueGroup:
       type: object
       additionalProperties: false
-      required: [currency, environment, amount]
+      required: [currency, environment, paidOrders, amount]
       properties:
         currency: { type: string, minLength: 3, maxLength: 3 }
         environment: { type: string, enum: [TEST, LIVE] }
+        paidOrders: { type: integer, format: int64, minimum: 0 }
         amount: { type: number }
     AnalyticsRevenueSummary:
       type: object
       additionalProperties: false
       required: [status, groups, unavailableReason]
       properties:
-        status: { type: string, enum: [AVAILABLE, UNAVAILABLE] }
+        status: { type: string, enum: [AVAILABLE, UNAVAILABLE], description: AVAILABLE with an empty groups array means a successful summary with no paid orders in the selected window; UNAVAILABLE means the Billing source or caller scope could not be verified. }
         groups:
           type: array
           items: { $ref: '#/components/schemas/AnalyticsRevenueGroup' }

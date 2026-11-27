@@ -154,11 +154,41 @@ public sealed class PostgresBillingInvariantsTests
         var next=await f.Credits.GetStaleReservationsAsync(30,1,default);Assert.Single(next);Assert.NotEqual(claim[0].ReservationId,next[0].ReservationId);
     }
 
+    [BillingPostgresFact]
+    public async Task Clinic_revenue_summary_requires_successful_payment_and_exact_tenant_owner_and_time_window()
+    {
+        await using var f=await Fixture.CreateAsync();
+        var clinicOrder=await f.NewOrderAsync("CLINIC");
+        Assert.True((await f.Orders.ProcessCallbackInTransactionAsync(f.Payload(clinicOrder,"SUCCESS"),"SANDBOX_MOCK",default)).Success);
+
+        var accountOrder=await f.NewOrderAsync("ACCOUNT");
+        Assert.True((await f.Orders.ProcessCallbackInTransactionAsync(f.Payload(accountOrder,"SUCCESS"),"SANDBOX_MOCK",default)).Success);
+
+        var otherClinicOrder=await f.NewOrderAsync("CLINIC",Guid.NewGuid());
+        Assert.True((await f.Orders.ProcessCallbackInTransactionAsync(f.Payload(otherClinicOrder,"SUCCESS"),"SANDBOX_MOCK",default)).Success);
+
+        var failedClinicOrder=await f.NewOrderAsync("CLINIC");
+        Assert.Equal("CANCELLED",(await f.Orders.ProcessCallbackInTransactionAsync(f.Payload(failedClinicOrder,"FAILED"),"SANDBOX_MOCK",default)).Status);
+
+        var from=DateTime.UtcNow.AddMinutes(-5);
+        var to=DateTime.UtcNow.AddMinutes(5);
+        var totals=await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",f.Owner,f.Tenant,from,to,default);
+        var total=Assert.Single(totals);
+        Assert.Equal("TEST",total.Environment);
+        Assert.Equal("VND",total.Currency);
+        Assert.Equal(1,total.PaidOrders);
+        Assert.Equal(100000m,total.PaidAmount);
+        Assert.Empty(await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",f.Owner,Guid.NewGuid(),from,to,default));
+        Assert.Empty(await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",Guid.NewGuid(),f.Tenant,from,to,default));
+        Assert.Empty(await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",f.Owner,f.Tenant,to.AddMinutes(1),to.AddMinutes(2),default));
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         public SettlementInboxRepository Inbox=>new(_runtime);
         public Guid Tenant {get;}=Guid.NewGuid();public Guid Owner {get;}=Guid.NewGuid();public Guid Wallet {get;}=Guid.NewGuid();
         private readonly NpgsqlDataSource _admin;private readonly NpgsqlDataSource _runtime;private readonly PackagePriceVersionRecord _price;
+        public NpgsqlDataSource Runtime=>_runtime;
         public OrderRepository Orders {get;}public CreditReservationRepository Credits {get;}
         private Fixture(NpgsqlDataSource admin,NpgsqlDataSource runtime,PackagePriceVersionRecord price)
         {_admin=admin;_runtime=runtime;_price=price;Orders=new(runtime,NullLogger<OrderRepository>.Instance);Credits=new(runtime,NullLogger<CreditReservationRepository>.Instance);}
@@ -180,7 +210,7 @@ public sealed class PostgresBillingInvariantsTests
         {await using var cmd=_admin.CreateCommand("SELECT balance FROM billing.credit_wallets WHERE id=$1");cmd.Parameters.AddWithValue(Wallet);return (int)(await cmd.ExecuteScalarAsync())!;}
         public async Task<long> ReservationLedgerCountAsync(Guid reservationId)
         {await using var cmd=_admin.CreateCommand("SELECT count(*) FROM billing.credit_ledger_entries WHERE reservation_id=$1 AND entry_type IN ('RESERVE','CAPTURE')");cmd.Parameters.AddWithValue(reservationId);return (long)(await cmd.ExecuteScalarAsync())!;}
-        public Task<OrderRecord> NewOrderAsync()=>Orders.CreateOrderAsync(Guid.NewGuid(),Tenant,"ACCOUNT",Owner,_price,"TEST",Guid.NewGuid(),Guid.NewGuid().ToString(),default);
+        public Task<OrderRecord> NewOrderAsync(string ownerType="ACCOUNT",Guid? owner=null)=>Orders.CreateOrderAsync(Guid.NewGuid(),Tenant,ownerType,owner??Owner,_price,"TEST",Guid.NewGuid(),Guid.NewGuid().ToString(),default);
         public PaymentCallbackPayload Payload(OrderRecord order,string status)=>new(order.Id,Guid.NewGuid().ToString(),order.PriceAmountSnapshot,order.CurrencyCodeSnapshot,status,DateTimeOffset.UtcNow.ToUnixTimeSeconds(),"repository-boundary-fixture-signature");
         public async Task<ReservationResponse> ReserveAsync()
         {

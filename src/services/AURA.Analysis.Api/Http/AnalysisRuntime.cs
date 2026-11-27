@@ -35,6 +35,8 @@ public static class AnalysisRuntime
             if(!Uri.TryCreate(configuration[$"Services:{service}:BaseUrl"],UriKind.Absolute,out var uri)
                 ||uri.Scheme is not ("http" or "https")||uri.AbsolutePath!="/"||uri.UserInfo.Length>0||uri.Query.Length>0||uri.Fragment.Length>0)
                 throw new InvalidOperationException("Explicit dependency origins are required.");
+            if(service=="Billing"&&!environment.IsDevelopment()&&uri.Scheme!="https")
+                throw new InvalidOperationException("Billing user credentials require TLS outside Development.");
         }
         var options=configuration.GetSection("Analysis").Get<UploadOptions>()??new();
         if(options.MaxImageBytes is <1 or >10485760||options.MaxImagePixels is <1 or >16000000||options.MaxImagesPerRequest is <1 or >100
@@ -57,6 +59,7 @@ public static class AnalysisRuntime
             return ConnectionMultiplexer.Connect(options);
         });
         services.AddSingleton<IBatchRedisProgressService,BatchRedisProgressService>();
+        services.AddSingleton<IAnalyticsSummaryCache,RedisAnalyticsSummaryCache>();
         services.AddAnalysisServiceClients(configuration);services.AddAnalysisPrivateStorage(configuration,environment);
         services.AddTransient<IUploadRepository,PostgresUploadRepository>();services.AddTransient<IUploadRecoveryJournal,PostgresUploadRecoveryRepository>();
         services.AddTransient<IFileAccessRepository,PostgresFileAccessRepository>();services.AddTransient<IBatchStatusRepository,PostgresBatchStatusRepository>();

@@ -55,6 +55,13 @@ internal static class RepositoryChecks
             Require(Convert.ToInt64(await outboxCheck.ExecuteScalarAsync()) == 1,
                 "a persisted message and its offline notification obligation must commit together exactly once");
         }
+        await using (var messageCount = source.CreateCommand("SELECT count(*) FROM notification.consultation_messages WHERE conversation_id=@conversation_id AND client_message_id=@client_message_id;"))
+        {
+            messageCount.Parameters.AddWithValue("conversation_id", created.Conversation.ConversationId);
+            messageCount.Parameters.AddWithValue("client_message_id", clientId);
+            Require(Convert.ToInt64(await messageCount.ExecuteScalarAsync()) == 1,
+                "a lost acknowledgement followed by reconnect must not create a second message");
+        }
 
         var concurrentClientId = Guid.NewGuid();
         var concurrent = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => repository.PersistMessageAsync(
@@ -83,6 +90,20 @@ internal static class RepositoryChecks
                 backwards.Cursor!.LastReadMessageId == concurrent[0].Message!.MessageId,
             "read cursor should not move backwards");
         Require(foreign.Outcome == AdvanceConsultationReadOutcome.InvalidMessage, "non-participant read cursor should be rejected");
+
+        var historyPatient = Guid.NewGuid();
+        var history = await repository.CreateConversationAsync(NewCreate(historyPatient, historyPatient, Guid.NewGuid()), default);
+        for (var index = 0; index < 21; index++)
+            await repository.PersistMessageAsync(history.Conversation.ConversationId, historyPatient, Guid.NewGuid(),
+                $"history {index}", new string('c', 64), default);
+        var historyPage = await repository.GetMessagesAsync(history.Conversation.ConversationId, historyPatient, 20, null, default);
+        Require(historyPage.Items.Count == 20 && historyPage.NextBeforeId is not null,
+            "conversation history beyond twenty messages must provide a continuation cursor");
+        var historyRemainder = await repository.GetMessagesAsync(history.Conversation.ConversationId, historyPatient,
+            20, historyPage.NextBeforeId, default);
+        Require(historyRemainder.Items.Count == 1
+                && !historyPage.Items.Any(item => item.MessageId == historyRemainder.Items[0].MessageId),
+            "reconnect history cursor must return the remaining message without duplicates");
         var otherConversation = await repository.CreateConversationAsync(NewCreate(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid()), default);
         var otherPatient = otherConversation.Conversation.PatientAccountId;
         var foreignConversationMessage = await repository.PersistMessageAsync(otherConversation.Conversation.ConversationId, otherPatient,
@@ -110,9 +131,9 @@ internal static class RepositoryChecks
             otherConversation.Conversation.ConversationId,
             quotaConversation.Conversation.ConversationId
         });
-        cleanup.Parameters.AddWithValue("account_ids", new[] { patient, doctor, otherPatient, quotaPatient });
+        cleanup.Parameters.AddWithValue("account_ids", new[] { patient, doctor, otherPatient, quotaPatient, historyPatient });
         await cleanup.ExecuteNonQueryAsync();
-        Console.WriteLine("PASS: PostgreSQL consultation persistence, idempotency, pagination, read cursor, account boundary, and rate limit.");
+        Console.WriteLine("PASS: PostgreSQL consultation persistence, lost-ack replay, >20-message reconnect history, pagination, read cursor, account boundary, and rate limit.");
     }
 
     private static CreateConsultationCommand NewCreate(Guid actor, Guid patient, Guid doctor) => new(

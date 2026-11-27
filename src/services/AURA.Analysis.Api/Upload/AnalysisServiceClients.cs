@@ -32,6 +32,9 @@ public static class AnalysisServiceClients
         services.AddHttpClient<IAnalyticsAccessResolver, ProfileAnalyticsAccessClient>(client => Configure(client, "Profile"))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
             .RedactLoggedHeaders(new[] { "Authorization" });
+        services.AddHttpClient<IAnalyticsRevenueClient, BillingAnalyticsClient>(client => Configure(client, "Billing"))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            .RedactLoggedHeaders(new[] { "Authorization" });
         services.AddTransient<IAnalysisUserIdentityResolver, AnalysisUserIdentityResolver>();
         services.AddHttpClient("AnalysisIdentity", client => Configure(client, "Identity"))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })

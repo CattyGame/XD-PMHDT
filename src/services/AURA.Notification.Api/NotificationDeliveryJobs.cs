@@ -27,6 +27,7 @@ public sealed record ClaimedDeliveryJob(
     Guid Id,
     Guid InboxItemId,
     Guid AccountId,
+    Guid TenantId,
     Guid DeviceId,
     int Attempts,
     int MaxAttempts,
@@ -108,7 +109,7 @@ public sealed class NotificationDeliveryJobRepository(
             FROM candidate_jobs cj
             JOIN notification.inbox_items ii ON ii.id = (SELECT inbox_item_id FROM notification.delivery_jobs WHERE id = cj.id)
             WHERE dj.id = cj.id
-            RETURNING dj.id, dj.inbox_item_id, dj.account_id, dj.device_id, dj.attempts, dj.max_attempts, dj.lease_token,
+            RETURNING dj.id, dj.inbox_item_id, dj.account_id, ii.tenant_id, dj.device_id, dj.attempts, dj.max_attempts, dj.lease_token,
                       ii.type, ii.title,
                       CASE WHEN ii.type='PAYMENT_SUCCESS' AND ii.order_id IS NOT NULL
                            THEN '/billing/orders/' || ii.order_id::text ELSE ii.target_path END,
@@ -129,14 +130,15 @@ public sealed class NotificationDeliveryJobRepository(
                 Id: reader.GetGuid(0),
                 InboxItemId: reader.GetGuid(1),
                 AccountId: reader.GetGuid(2),
-                DeviceId: reader.GetGuid(3),
-                Attempts: reader.GetInt32(4),
-                MaxAttempts: reader.GetInt32(5),
-                LeaseToken: reader.GetGuid(6),
-                Type: reader.GetString(7),
-                Title: reader.GetString(8),
-                TargetPath: reader.GetString(9),
-                Metadata: reader.GetString(10)
+                TenantId: reader.GetGuid(3),
+                DeviceId: reader.GetGuid(4),
+                Attempts: reader.GetInt32(5),
+                MaxAttempts: reader.GetInt32(6),
+                LeaseToken: reader.GetGuid(7),
+                Type: reader.GetString(8),
+                Title: reader.GetString(9),
+                TargetPath: reader.GetString(10),
+                Metadata: reader.GetString(11)
             ));
         }
 

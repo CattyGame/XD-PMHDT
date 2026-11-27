@@ -1,14 +1,20 @@
 using AURA.Analysis.Api.Upload;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace AURA.Analysis.Api.Analytics;
 
 public sealed class AnalyticsService(
     IAnalyticsAccessResolver access,
     IAnalyticsRepository repository,
-    TimeProvider clock)
+    TimeProvider clock,
+    IAnalyticsRevenueClient? revenueClient = null,
+    IAnalyticsSummaryCache? cache = null)
 {
+    private static readonly TimeSpan SummaryCacheTtl = TimeSpan.FromSeconds(30);
+
     public Task<AnalyticsSummary> GetClinicSummaryAsync(Guid actorId, Guid clinicId,
-        AnalyticsWindow window, string? correlationId, CancellationToken ct)
+        AnalyticsWindow window, string? correlationId, CancellationToken ct, string? userBearer = null)
     {
         RequireActor(actorId);
         RequireId(clinicId, "clinicId");
@@ -17,11 +23,11 @@ public sealed class AnalyticsService(
             {
                 RequireMatchingClinic(grant, clinicId);
                 return new AnalyticsDataScope(grant.TenantId, clinicId, null);
-            }, window, ct);
+            }, window, ct, () => revenueClient?.GetClinicSummaryAsync(clinicId, window, userBearer, ct));
     }
 
     public Task<AnalyticsSummary> GetAdminSummaryAsync(Guid actorId, AnalyticsWindow window,
-        string? correlationId, CancellationToken ct)
+        string? correlationId, CancellationToken ct, string? userBearer = null)
     {
         RequireActor(actorId);
         return GetSummaryAsync(new(actorId, "ANALYTICS_READ", "PLATFORM", null, null, correlationId),
@@ -32,11 +38,11 @@ public sealed class AnalyticsService(
                     || grant.AuthorizedPatientIds is not null)
                     throw NotFound();
                 return new AnalyticsDataScope(null, null, null);
-            }, window, ct);
+            }, window, ct, () => revenueClient?.GetAdminSummaryAsync(window, userBearer, ct));
     }
 
     public Task<AnalyticsSummary> GetDoctorSummaryAsync(Guid actorId, Guid clinicId,
-        AnalyticsWindow window, string? correlationId, CancellationToken ct)
+        AnalyticsWindow window, string? correlationId, CancellationToken ct, string? userBearer = null)
     {
         RequireActor(actorId);
         RequireId(clinicId, "clinicContextId");
@@ -49,7 +55,7 @@ public sealed class AnalyticsService(
                     throw UploadFailure.Dependency("Profile analytics scope");
                 return new AnalyticsDataScope(grant.TenantId, clinicId, null,
                     grant.AuthorizedPatientIds.Distinct().ToArray(), actorId);
-            }, window, ct);
+            }, window, ct, () => revenueClient?.GetClinicSummaryAsync(clinicId, window, userBearer, ct));
     }
 
     public async Task<PatientAnalyticsTrends> GetPatientTrendsAsync(Guid actorId, Guid clinicId, Guid patientId,
@@ -78,17 +84,59 @@ public sealed class AnalyticsService(
     }
 
     private async Task<AnalyticsSummary> GetSummaryAsync(AnalyticsAccessRequest request,
-        Func<AnalyticsAccessGrant, AnalyticsDataScope> toScope, AnalyticsWindow window, CancellationToken ct)
+        Func<AnalyticsAccessGrant, AnalyticsDataScope> toScope, AnalyticsWindow window, CancellationToken ct,
+        Func<Task<AnalyticsRevenueSummary>?> getRevenue)
     {
         var grant = await access.ResolveAsync(request, ct);
         var scope = toScope(grant);
-        var row = await repository.ReadSummaryAsync(scope, window, ct);
+        var revisionBefore = await repository.ReadDataRevisionAsync(ct);
+        var key = BuildCacheKey(scope, window, grant.PermissionVersion, revisionBefore);
+        var row = cache is null ? null : await TryReadCacheAsync(cache, key, ct);
+        if (row is null)
+        {
+            row = await repository.ReadSummaryAsync(scope, window, ct);
+            var revisionAfter = await repository.ReadDataRevisionAsync(ct);
+            if (cache is not null && string.Equals(revisionBefore, revisionAfter, StringComparison.Ordinal))
+                await TryWriteCacheAsync(cache, key, row, ct);
+        }
+
+        var revenueTask = getRevenue();
+        var revenue = revenueTask is null
+            ? new AnalyticsRevenueSummary("UNAVAILABLE", [], "BILLING_API_UNAVAILABLE")
+            : await revenueTask;
         return new("UNIQUE_ANALYSIS", window.From, window.To, row.Total,
             new(row.Active, row.Completed, row.Failed, row.LowQuality, row.Rejected, row.Duplicate),
             "LATEST_CLINICIAN_REVIEW",
             new(row.RiskLow, row.RiskModerate, row.RiskHigh, row.RiskUnavailable, row.RiskUnreviewed),
-            row.MeasurementAvailable, row.MeasurementUnavailable, row.MeasurementUnknown, clock.GetUtcNow(),
-            new AnalyticsRevenueSummary("UNAVAILABLE", [], "BILLING_API_UNAVAILABLE"));
+            row.MeasurementAvailable, row.MeasurementUnavailable, row.MeasurementUnknown, clock.GetUtcNow(), revenue);
+    }
+
+    private static string BuildCacheKey(AnalyticsDataScope scope, AnalyticsWindow window, long permissionVersion,
+        string revision)
+    {
+        var patients = scope.AuthorizedPatientIds is null ? "*" : string.Join(',', scope.AuthorizedPatientIds
+            .Where(id => id != Guid.Empty).Distinct().OrderBy(id => id).Select(id => id.ToString("N")));
+        var material = string.Join('|', scope.TenantId?.ToString("N") ?? "*", scope.ClinicId?.ToString("N") ?? "*",
+            scope.PatientId?.ToString("N") ?? "*", scope.DoctorId?.ToString("N") ?? "*", patients,
+            permissionVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            window.From.ToString("O"), window.To.ToString("O"), revision);
+        return "analysis:analytics-summary:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant();
+    }
+
+    private static async Task<AnalyticsSummaryRow?> TryReadCacheAsync(IAnalyticsSummaryCache summaryCache,
+        string key, CancellationToken ct)
+    {
+        try { return await summaryCache.TryGetAsync(key, ct); }
+        catch (StackExchange.Redis.RedisException) { return null; }
+        catch (TimeoutException) { return null; }
+    }
+
+    private static async Task TryWriteCacheAsync(IAnalyticsSummaryCache summaryCache, string key,
+        AnalyticsSummaryRow value, CancellationToken ct)
+    {
+        try { await summaryCache.TrySetAsync(key, value, SummaryCacheTtl, ct); }
+        catch (StackExchange.Redis.RedisException) { }
+        catch (TimeoutException) { }
     }
 
     private static bool Compatible(AnalyticsTrendRow previous, AnalyticsTrendRow current) =>
