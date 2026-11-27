@@ -6,7 +6,7 @@ const uid = 'm5-synthetic-browser-fixture'
 const encoded = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
 const token = `${encoded({ alg: 'none' })}.${encoded({ sub: uid, iat: Math.floor(Date.now() / 1000),
   exp: Math.floor(Date.now() / 1000) + 3600, firebase: { sign_in_provider: 'password' } })}.fixture`
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgaGD4DwAChAGA+gVWHQAAAABJRU5ErkJggg==', 'base64')
 
 // Hermetic UI contract checks: every Firebase/API response is synthetic and intercepted.
 async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT'], research = false) {
@@ -135,7 +135,9 @@ async function openDoctor(page: Page) {
   await page.getByRole('button', { name: 'Tải worklist' }).click()
   await page.getByRole('button', { name: 'Mở chi tiết' }).click()
   await expect(page.getByRole('heading', { name: 'Kết luận của bác sĩ' })).toBeVisible()
-  await expect(page.getByRole('img', { name: 'Ảnh võng mạc gốc' }).first()).toHaveAttribute('src', /^blob:/)
+  const original = page.getByRole('img', { name: 'Ảnh võng mạc gốc' }).first()
+  await expect(original).toHaveAttribute('src', /^blob:/)
+  await expect.poll(() => original.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
 }
 
 test('MOCK: SCRUM-393 admin catalog binds the price version and reloads after conflict on mobile', async ({ page }) => {
