@@ -7,7 +7,7 @@ import { useBackendSession } from '../../auth/backendSession'
 import BackendSessionNotice from '../../auth/BackendSessionNotice'
 import styles from '../billing/billing.module.css'
 import PortalSection, { AnalyticsCards, DateRangeForm, PortalTable } from './PortalSection'
-import { defaultRange, formatCount, formatDate, formatRange } from './display'
+import { defaultRange, formatCount, formatDate, formatMoney, formatRange } from './display'
 
 type Mode = 'billing' | 'clinic' | 'doctor'
 
@@ -67,27 +67,26 @@ function BillingData({ context, owner, range }: {
   context: BackendContext; owner: PortalOwner; range: { from: string; to: string }
 }) {
   return <>
-    <PortalSection<Awaited<ReturnType<typeof ownerOrders>>> title="Lịch sử đơn hàng" cursor={data => data.nextCursor}
-      read={(signal, cursor) => ownerOrders(context, owner, cursor, signal)}>
-      {orders => <>
-        <p className={styles.muted}>Lịch sử theo chủ ví. Bộ lọc ngày áp dụng cho sổ sử dụng credit.</p>
-        <PortalTable columns={['Thời điểm', 'Đơn hàng', 'Trạng thái', 'Môi trường', 'Số tiền', 'Credit', 'Phiên bản giá']}>
-          {orders.items.map(order => <tr key={order.orderId}><td>{formatDate(order.createdAt)}</td>
-            <td><Link to={'/billing/orders/' + order.orderId}>{order.orderId}</Link></td>
-            <td>{order.status}</td><td>{order.environment}</td>
-            <td>{order.amount.toLocaleString('vi-VN', { style: 'currency', currency: order.currency })}</td>
-            <td>{formatCount(order.credits)}</td><td>{order.priceVersionId}</td></tr>)}
+    <PortalSection<Awaited<ReturnType<typeof ownerUsage>>> title="Sử dụng credit" cursor={data => data.nextCursor}
+      read={(signal, cursor) => ownerUsage(context, owner, range, signal, cursor)}>
+      {usage => <>
+        <p className={styles.muted}>{usage.environment} · {formatRange(range)}</p>
+        <PortalTable columns={['Thời điểm', 'Loại giao dịch', 'Thay đổi credit', 'Số dư sau giao dịch', 'Đơn vị giữ chỗ', 'Đơn hàng', 'Giữ chỗ']}>
+          {usage.items.map(entry => <tr key={entry.id}><td>{formatDate(entry.createdAt)}</td>
+            <td>{entry.entryType}</td><td>{formatCount(entry.balanceDelta)}</td><td>{formatCount(entry.balanceAfter)}</td>
+            <td>{formatCount(entry.reservationUnits)}</td><td>{entry.orderId ?? '—'}</td><td>{entry.reservationId ?? '—'}</td></tr>)}
         </PortalTable>
       </>}
     </PortalSection>
-    <PortalSection<Awaited<ReturnType<typeof ownerUsage>>> title="Sổ sử dụng credit" cursor={data => data.nextCursor}
-      read={(signal, cursor) => ownerUsage(context, owner, range, signal, cursor)}>
-      {usage => <>
-        <p className={styles.muted}>{usage.environment} · {formatRange(range)} · Các bút toán, không phải tổng toàn kỳ</p>
-        <PortalTable columns={['Thời điểm', 'Loại', 'Thay đổi credit', 'Số dư sau bút toán', 'Đơn vị đặt trước']}>
-          {usage.items.map(entry => <tr key={entry.id}><td>{formatDate(entry.createdAt)}</td>
-            <td>{entry.entryType}</td><td>{formatCount(entry.balanceDelta)}</td>
-            <td>{formatCount(entry.balanceAfter)}</td><td>{formatCount(entry.reservationUnits)}</td></tr>)}
+    <PortalSection<Awaited<ReturnType<typeof ownerOrders>>> title="Lịch sử đơn hàng" cursor={data => data.nextCursor}
+      read={(signal, cursor) => ownerOrders(context, owner, cursor, signal)}>
+      {orders => <>
+        <p className={styles.muted}>Lịch sử theo chủ ví. Bộ lọc ngày áp dụng cho sử dụng credit.</p>
+        <PortalTable columns={['Thời điểm', 'Đơn hàng', 'Gói', 'Trạng thái', 'Môi trường', 'Giá', 'Credit', 'Phiên bản giá']}>
+          {orders.items.map(order => <tr key={order.id}><td>{formatDate(order.createdAt)}</td>
+            <td><Link to={'/billing/orders/' + order.id}>{order.id}</Link></td><td>{order.packageName}</td>
+            <td>{order.status}</td><td>{order.environment}</td><td>{formatMoney(order.amount, order.currency)}</td>
+            <td>{formatCount(order.credits)}</td><td>{order.priceVersionId}</td></tr>)}
         </PortalTable>
       </>}
     </PortalSection>

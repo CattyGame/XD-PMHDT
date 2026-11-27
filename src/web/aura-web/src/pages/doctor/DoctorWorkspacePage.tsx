@@ -95,6 +95,7 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
     selection.current += 1
     clearImages()
     setDetail(null); setStale(false); setConflictOpen(null)
+    setDetailLoading(false); setDetailError(''); setSaveError('')
     setLoaded(false); setListLoading(true); setListError(''); setWorklist([])
     const controller = new AbortController()
     listAbort.current = controller
@@ -122,6 +123,12 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
       const blob = await getProtectedContent(access.url, imageContext, controller.signal)
       if (!['image/png', 'image/jpeg'].includes(blob.type.split(';')[0]))
         throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
+      controller.signal.throwIfAborted()
+      const bitmap = await createImageBitmap(blob).catch(() => {
+        throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
+      })
+      bitmap.close()
+      controller.signal.throwIfAborted()
       return { blob, expiry: Date.parse(access.expiresAt) }
     }
     try {

@@ -1,4 +1,5 @@
 export const formatCount = (value: number | null) => value === null ? 'Chưa có dữ liệu' : value.toLocaleString('vi-VN')
+export const formatMoney = (amount: number, currency: string) => amount.toLocaleString('vi-VN', { style: 'currency', currency })
 export const formatDate = (value: string) => new Date(value).toLocaleString('vi-VN')
 export const formatRange = (range: { from: string; to: string }) => formatDate(range.from) + ' – ' + formatDate(range.to)
 
