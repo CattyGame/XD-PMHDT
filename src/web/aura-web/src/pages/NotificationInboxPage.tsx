@@ -27,6 +27,7 @@ const notificationLabels: Record<InboxNotification['type'], string> = {
   ANALYSIS_COMPLETED: 'Phân tích hoàn tất',
   ANALYSIS_FAILED: 'Phân tích thất bại',
   PAYMENT_SUCCESS: 'Thanh toán thành công',
+  CONSULTATION_MESSAGE: 'Tin nhắn tư vấn mới',
 }
 
 /** Mỗi phiên có state riêng; không giữ thông báo khi đổi tài khoản. */
@@ -189,10 +190,11 @@ function InboxViewer({ context }: { context: BackendContext }) {
               </div>
               <p>{notificationLabels[notification.type]}</p>
               <p><small>{new Date(notification.createdAt).toLocaleString('vi-VN')}</small></p>
-              <p className="inbox-item-id">Analysis ID: <code>{notification.analysisId}</code></p>
+              {notification.analysisId && <p className="inbox-item-id">Analysis ID: <code>{notification.analysisId}</code></p>}
+              {notification.orderId && <p className="inbox-item-id">Order ID: <code>{notification.orderId}</code></p>}
             </div>
             <div className="inbox-item-actions">
-              <Link to={notification.targetPath}>{notification.type === 'PAYMENT_SUCCESS' ? 'Xem thanh toán' : 'Xem kết quả'}</Link>
+              <Link to={notification.targetPath}>{notification.type === 'PAYMENT_SUCCESS' ? 'Xem thanh toán' : notification.type === 'CONSULTATION_MESSAGE' ? 'Mở tư vấn' : 'Xem kết quả'}</Link>
               {!notification.isRead && <button type="button"
                 disabled={markingId !== null}
                 onClick={() => { void markRead(notification.notificationId) }}>

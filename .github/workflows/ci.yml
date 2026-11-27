@@ -73,6 +73,11 @@ jobs:
           dotnet run --project tests/AURA.Profile.MultiTenantChecks/AURA.Profile.MultiTenantChecks.csproj
           --configuration Release --no-launch-profile
 
+      - name: Check consultation rules and authority fail-closed behavior
+        run: >-
+          dotnet run --project tests/AURA.Notification.ConsultationChecks/AURA.Notification.ConsultationChecks.csproj
+          --configuration Release --no-launch-profile
+
       - name: Check development configuration scripts
         shell: pwsh
         run: ./tests/AURA.DevEnvironment.Checks/Run-Checks.ps1

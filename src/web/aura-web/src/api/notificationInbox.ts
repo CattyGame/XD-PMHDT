@@ -10,7 +10,7 @@ export type InboxNotification = Readonly<{
   eventId: string
   analysisId: string | null
   orderId?: string | null
-  type: 'ANALYSIS_COMPLETED' | 'ANALYSIS_FAILED' | 'PAYMENT_SUCCESS'
+  type: 'ANALYSIS_COMPLETED' | 'ANALYSIS_FAILED' | 'PAYMENT_SUCCESS' | 'CONSULTATION_MESSAGE'
   title: string
   isRead: boolean
   createdAt: string
@@ -54,7 +54,7 @@ function parseNotification(value: unknown): InboxNotification {
   if (!isRecord(value) ||
     typeof value.notificationId !== 'string' || !validBatchId(value.notificationId) ||
     typeof value.eventId !== 'string' || !validBatchId(value.eventId) ||
-    !['ANALYSIS_COMPLETED', 'ANALYSIS_FAILED', 'PAYMENT_SUCCESS'].includes(String(value.type)) ||
+    !['ANALYSIS_COMPLETED', 'ANALYSIS_FAILED', 'PAYMENT_SUCCESS', 'CONSULTATION_MESSAGE'].includes(String(value.type)) ||
     typeof value.title !== 'string' || value.title.length > 500 ||
     typeof value.isRead !== 'boolean' || !validDate(value.createdAt) ||
     (value.readAt !== null && !validDate(value.readAt)) ||
@@ -63,11 +63,15 @@ function parseNotification(value: unknown): InboxNotification {
   }
 
   const payment = value.type === 'PAYMENT_SUCCESS'
-  const target = safeNotificationPath(value.targetPath, payment ? undefined : value.analysisId)
+  const consultation = value.type === 'CONSULTATION_MESSAGE'
+  const target = safeNotificationPath(value.targetPath, payment || consultation ? undefined : value.analysisId)
   if (!target) invalidResponse()
   if (payment) {
     if (value.analysisId !== null || typeof value.orderId !== 'string' || !validBatchId(value.orderId) ||
         value.targetPath !== `/billing/orders/${value.orderId}`) invalidResponse()
+  } else if (consultation) {
+    if (value.analysisId !== null || (value.orderId !== undefined && value.orderId !== null) ||
+        !target.startsWith('/consultations/') || target !== value.targetPath.toLowerCase()) invalidResponse()
   } else if (typeof value.analysisId !== 'string' || !validBatchId(value.analysisId) ||
       (value.orderId !== undefined && value.orderId !== null) ||
       ![`/analyses/${value.analysisId}`, `/batches/${value.analysisId}`].includes(target.split('?')[0])) invalidResponse()

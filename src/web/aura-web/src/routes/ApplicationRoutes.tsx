@@ -80,6 +80,7 @@ export default function ApplicationRoutes() {
       <Route path="/analyses/:analysisId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><NotificationInboxPage /></ProtectedRoute>}/>
       <Route path="/consultations" element={<ProtectedRoute><ConsultationsPage /></ProtectedRoute>} />
+      <Route path="/consultations/:conversationId" element={<ProtectedRoute><ConsultationsPage /></ProtectedRoute>} />
       <Route path="/billing/orders/:orderId" element={<ProtectedRoute><BillingOrderPage /></ProtectedRoute>}/>
       <Route path="/billing/packages" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
       <Route path="/billing/history" element={<ProtectedRoute><OwnerViewsPage /></ProtectedRoute>} />

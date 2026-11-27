@@ -5,9 +5,9 @@ namespace AURA.Notification.ConsultationChecks;
 
 internal static class RepositoryChecks
 {
-    public static async Task RunAsync()
+    public static async Task RunAsync(string? connectionString = null)
     {
-        var raw = Environment.GetEnvironmentVariable("AURA_NOTIFICATION_TEST_CONNECTION");
+        var raw = connectionString ?? Environment.GetEnvironmentVariable("AURA_NOTIFICATION_TEST_CONNECTION");
         if (string.IsNullOrWhiteSpace(raw))
             throw new InvalidOperationException("Repository checks require AURA_NOTIFICATION_TEST_CONNECTION to name an isolated test database.");
 
