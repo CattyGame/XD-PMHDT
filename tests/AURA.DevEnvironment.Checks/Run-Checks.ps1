@@ -117,7 +117,7 @@ try {
     $global:AuraM1EnvironmentCheckState.emptyAt = -1
 
     $plan = @(& $initialize -PlanOnly)
-    Assert-Check ($plan.Count -eq 43) "Migration plan includes versioned catalog, push templates and forward-only audit hardening"
+    Assert-Check ($plan.Count -eq 44) "Migration plan includes versioned catalog, push templates and forward-only audit hardening"
     Assert-Check ($plan -contains "infra/postgres/migrations/020_notification_consultations.sql") "Integrated consultation persistence is provisioned before shared audit grants"
     Assert-Check ($plan[0] -eq "infra/postgres/migrations/001_notification_devices.sql") "Notification schema is bootstrapped first"
     Assert-Check ($plan[2] -eq "infra/postgres/migrations/002_identity_and_profile.sql") "Identity/Profile migration is included"

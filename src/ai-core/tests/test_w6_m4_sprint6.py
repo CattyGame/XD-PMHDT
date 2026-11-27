@@ -588,3 +588,177 @@ def test_w6_m4_06_corrupted_state_and_integrated_smoke_failure_fail_closed_503(m
         )
     assert err.value.status_code == 503
     assert good_reg.get_active_snapshot().version == 1
+
+
+def test_w6_m4_f1_integrated_smoke_and_ready_reject_corrupt_or_wrong_arch_artifacts(monkeypatch, tmp_path: Path):
+    keypair = generate_deterministic_rsa_keypair(seed=20261129, bits=2048)
+    avr_file = tmp_path / "avr.json"
+    dr_file = tmp_path / "dr.pt"
+    avr_file.write_bytes(b"not-a-valid-avr-model-json")
+    dr_file.write_bytes(b"not-a-valid-dr-pytorch-checkpoint")
+    monkeypatch.setenv("AURA_AI_ENGINE", "frangi")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "false")
+    monkeypatch.setenv("AURA_INTEGRATED_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("AURA_AVR_MODEL_PATH", str(avr_file))
+    monkeypatch.setenv("AURA_AVR_MODEL_SHA256", hashlib.sha256(avr_file.read_bytes()).hexdigest())
+    monkeypatch.setenv("AURA_DR_CNN_CHECKPOINT", str(dr_file))
+    monkeypatch.setenv("AURA_DR_CNN_SHA256", hashlib.sha256(dr_file.read_bytes()).hexdigest())
+    monkeypatch.setenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM", keypair.public_pem)
+    monkeypatch.delenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPath", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPem", raising=False)
+
+    reg = RuntimeManifestRegistry(state_path=tmp_path / "state.json")
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", reg)
+    client = TestClient(app)
+    cfg_headers = _config_headers(keypair, client_id="analysis-api", scope="ai:config")
+
+    # F1: Valid SHA-256 on non-model/unusable artifacts MUST fail closed 503 on both /ready and PUT
+    assert client.get("/ready").status_code == 503
+    bad_put = client.put(
+        "/internal/v1/ai/config",
+        json={
+            "expectedVersion": 1,
+            "artifactManifestId": "11111111-1111-4111-8111-111111110405",
+            "thresholdConfigSha256": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+            "reason": "f1 corrupt integrated artifacts",
+        },
+        headers=cfg_headers,
+    )
+    assert bad_put.status_code == 503
+    assert reg.get_active_snapshot().version == 1
+
+    # F1 partial failure: AVR passes but DR branch raises error -> still 503 preserving version=1
+    def _ok_then_dr_fail(*_args, **_kwargs):
+        raise integrated_inference.IntegratedModelUnavailable("Simulated DR wrong architecture")
+
+    monkeypatch.setattr(integrated_inference, "process_integrated_analysis", _ok_then_dr_fail)
+    assert client.get("/ready").status_code == 503
+    bad_dr_put = client.put(
+        "/internal/v1/ai/config",
+        json={
+            "expectedVersion": 1,
+            "artifactManifestId": "11111111-1111-4111-8111-111111110405",
+            "thresholdConfigSha256": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+            "reason": "f1 dr failure",
+        },
+        headers=cfg_headers,
+    )
+    assert bad_dr_put.status_code == 503
+    assert reg.get_active_snapshot().version == 1
+
+    # Positive control: when integrated inference runs and returns valid integrated output -> /ready 200 and PUT 200
+    def _ok_integrated(request, config):
+        payload = _base_response_payload()
+        payload.update(
+            {
+                "request_id": request.request_id,
+                "model_version": config.model_version,
+                "config_version": f"{config.config_version}-integrated-research-v1",
+                "threshold_version": config.threshold_version,
+                "risk_available": False,
+                "risk_assessment": None,
+                "metrics": {**payload["metrics"], "av_ratio": 0.67},
+                "segmentation": {
+                    **payload["segmentation"],
+                    "av_overlay_base64": "native-av-overlay",
+                    "gradcam_base64": "crop-overlay",
+                },
+                "research": {
+                    "avr": {
+                        "measurement_available": True,
+                        "avr": 0.67,
+                        "crae_px": 13.4,
+                        "crve_px": 20.0,
+                        "unavailable_reason": None,
+                        "model_version": "avr-v8",
+                        "model_sha256": hashlib.sha256(avr_file.read_bytes()).hexdigest(),
+                    },
+                    "dr": {
+                        "probability_dr": 0.42,
+                        "model_version": "resnet34-test",
+                        "checkpoint_sha256": hashlib.sha256(dr_file.read_bytes()).hexdigest(),
+                        "gradcam_method": "GRAD_CAM",
+                        "gradcam_geometry": "IMAGENET_CENTER_CROP_224",
+                    },
+                },
+            }
+        )
+        return AnalysisResponse.model_validate(payload)
+
+    monkeypatch.setattr(integrated_inference, "process_integrated_analysis", _ok_integrated)
+    assert client.get("/ready").status_code == 200
+    ok_put = client.put(
+        "/internal/v1/ai/config",
+        json={
+            "expectedVersion": 1,
+            "artifactManifestId": "11111111-1111-4111-8111-111111110405",
+            "thresholdConfigSha256": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+            "reason": "f1 positive integrated control",
+        },
+        headers=cfg_headers,
+    )
+    assert ok_put.status_code == 200
+    assert ok_put.json()["version"] == 2
+
+
+def test_w6_m4_f2_replay_old_command_returns_original_receipt_not_latest_active(monkeypatch, tmp_path: Path):
+    keypair = generate_deterministic_rsa_keypair(seed=20261130, bits=2048)
+    state_file = tmp_path / "f2-state.json"
+    monkeypatch.setenv("AURA_AI_ENGINE", "frangi")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "false")
+    monkeypatch.setenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false")
+    monkeypatch.setenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM", keypair.public_pem)
+    monkeypatch.delenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPath", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPem", raising=False)
+
+    reg = RuntimeManifestRegistry(state_path=state_file)
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", reg)
+    client = TestClient(app)
+    cfg_headers = _config_headers(keypair, client_id="analysis-api", scope="ai:config")
+
+    base_id = "11111111-1111-4111-8111-111111110301"
+    base_sha = "0b0451cad981b69471920b374c19042f169b991a26c49e2c3e29395db7c6a0ee"
+    v13_id = "11111111-1111-4111-8111-111111110405"
+    v13_sha = "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087"
+
+    cmd_a = {"expectedVersion": 1, "artifactManifestId": v13_id, "thresholdConfigSha256": v13_sha, "reason": "cmd A promote"}
+    resp_a = client.put("/internal/v1/ai/config", json=cmd_a, headers={**cfg_headers, "Idempotency-Key": "f2-key-A"})
+    assert resp_a.status_code == 200
+    receipt_a = resp_a.json()
+    assert receipt_a["version"] == 2
+    assert receipt_a["artifactManifestId"] == v13_id
+
+    # Intervening Command B promotes baseline at version 3
+    cmd_b = {"expectedVersion": 2, "artifactManifestId": base_id, "thresholdConfigSha256": base_sha, "reason": "cmd B switch back"}
+    resp_b = client.put("/internal/v1/ai/config", json=cmd_b, headers={**cfg_headers, "Idempotency-Key": "f2-key-B"})
+    assert resp_b.status_code == 200
+    assert resp_b.json()["version"] == 3
+    assert resp_b.json()["artifactManifestId"] == base_id
+
+    # Replaying Command A MUST return original receipt (version=2, v13_id, original activatedAt)
+    replay_a = client.put("/internal/v1/ai/config", json=cmd_a, headers={**cfg_headers, "Idempotency-Key": "f2-key-A"})
+    assert replay_a.status_code == 200
+    assert replay_a.json()["version"] == 2
+    assert replay_a.json()["artifactManifestId"] == v13_id
+    assert replay_a.json()["activatedAt"] == receipt_a["activatedAt"]
+
+    # Rollback to v4 -> then promote v1.3 at v5 -> replay rollback MUST still return v4
+    rb = client.post("/internal/v1/ai/config/rollback", json={"expectedVersion": 3, "reason": "f2 rb"}, headers={**cfg_headers, "Idempotency-Key": "f2-rb-1"})
+    assert rb.status_code == 200 and rb.json()["version"] == 4 and rb.json()["artifactManifestId"] == v13_id
+    cmd_c = {"expectedVersion": 4, "artifactManifestId": base_id, "thresholdConfigSha256": base_sha, "reason": "cmd C"}
+    resp_c = client.put("/internal/v1/ai/config", json=cmd_c, headers={**cfg_headers, "Idempotency-Key": "f2-key-C"})
+    assert resp_c.status_code == 200 and resp_c.json()["version"] == 5
+
+    replay_rb = client.post("/internal/v1/ai/config/rollback", json={"expectedVersion": 3, "reason": "f2 rb"}, headers={**cfg_headers, "Idempotency-Key": "f2-rb-1"})
+    assert replay_rb.status_code == 200 and replay_rb.json()["version"] == 4 and replay_rb.json()["artifactManifestId"] == v13_id
+
+    # Restart registry from persisted state file and replay Command A again -> still version=2, v13_id; active GET remains v5
+    restarted = RuntimeManifestRegistry(state_path=state_file)
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", restarted)
+    replay_after_restart = client.put("/internal/v1/ai/config", json=cmd_a, headers={**cfg_headers, "Idempotency-Key": "f2-key-A"})
+    assert replay_after_restart.status_code == 200
+    assert replay_after_restart.json()["version"] == 2
+    assert replay_after_restart.json()["artifactManifestId"] == v13_id
+    assert client.get("/internal/v1/ai/config", headers=cfg_headers).json()["version"] == 5

@@ -1,10 +1,14 @@
-"""Live E2E HTTP + subprocess-restart smoke verification for W6-M4 (SCRUM-387 / SCRUM-392).
+"""Live E2E AI Core HTTP + subprocess-restart smoke verification (SCRUM-392 & AI Core edge gates).
 
-Starts real `uvicorn app.main:app` subprocesses against a temporary volume-like state file,
-promotes a verified manifest over HTTP (`/internal/v1/ai/config`), verifies real `/api/v1/analyze`
-inference switches behavior, verifies lost-ACK idempotent replay, restarts the Uvicorn process to
-confirm persistence without env-var override, verifies rollback, verifies LOW_QUALITY / OCT /
-MODEL_BUSY error contracts, and confirms fail-closed 503 on corrupted state files.
+Scope note: Starts real `uvicorn app.main:app` subprocesses against a temporary volume-like
+state file in Frangi runtime mode. Does NOT start Analysis API, Worker, Postgres, Web, or PDF;
+full-stack V2 acceptance (API -> Worker -> DB -> Web/PDF + 429 MODEL_BUSY) runs in integrated
+staging with M5/M6. Verifies live over HTTP sockets:
+- RS256 Service JWT isolation (401/403/200 on `/internal/v1/ai/config`),
+- `/api/v1/analyze` baseline (`s3-frangi-1.0.0`) -> `PUT` promote (`v1.3`) -> live inference switch (`s45-frangi-1.3.0`),
+- F2 exact receipt preservation (`A -> B -> replay A` returns v2/v1.3 while GET active stays v3) and command lookup endpoint,
+- Real Uvicorn process restart preserving active version without `AURA_FRANGI_CONFIG_PATH` override,
+- Rollback verification, `LOW_QUALITY_IMAGE` (422), `UNSUPPORTED_MODALITY` (422), and corrupted state fail-closed `503`.
 """
 from __future__ import annotations
 
@@ -185,6 +189,36 @@ def main() -> int:
                 replay_resp = client.put("/internal/v1/ai/config", json=put_payload, headers=cfg_headers)
                 assert replay_resp.status_code == 200 and replay_resp.json()["version"] == 2
 
+                # Command lookup endpoint confirms committed receipt and 404 on unknown key
+                cmd_lookup = client.get("/internal/v1/ai/config/commands/e2e-idem-1", headers=cfg_headers)
+                assert cmd_lookup.status_code == 200 and cmd_lookup.json()["version"] == 2
+                assert client.get("/internal/v1/ai/config/commands/nonexistent-key", headers=cfg_headers).status_code == 404
+
+                # F2: intervening promotion B (v3), then replaying A (e2e-idem-1) must still return A's receipt (v2/v1.3)
+                put_b = {
+                    "expectedVersion": 2,
+                    "artifactManifestId": BASE_MANIFEST_ID,
+                    "thresholdConfigSha256": BASE_SHA,
+                    "reason": "e2e intervening switch back to base",
+                }
+                resp_b = client.put("/internal/v1/ai/config", json=put_b, headers={**cfg_headers, "Idempotency-Key": "e2e-idem-2"})
+                assert resp_b.status_code == 200 and resp_b.json()["version"] == 3
+                replay_a_after_b = client.put("/internal/v1/ai/config", json=put_payload, headers={**cfg_headers, "Idempotency-Key": "e2e-idem-1"})
+                assert replay_a_after_b.status_code == 200
+                assert replay_a_after_b.json()["version"] == 2
+                assert replay_a_after_b.json()["artifactManifestId"] == V13_MANIFEST_ID
+                assert client.get("/internal/v1/ai/config", headers=cfg_headers).json()["version"] == 3
+
+                # Restore v1.3 at version=4 before restart check so process2 verifies persisted v1.3 inference
+                put_v4 = {
+                    "expectedVersion": 3,
+                    "artifactManifestId": V13_MANIFEST_ID,
+                    "thresholdConfigSha256": V13_SHA,
+                    "reason": "e2e re-promote v1.3",
+                }
+                resp_v4 = client.put("/internal/v1/ai/config", json=put_v4, headers={**cfg_headers, "Idempotency-Key": "e2e-idem-4"})
+                assert resp_v4.status_code == 200 and resp_v4.json()["version"] == 4
+
                 # Real inference reflects promoted v1.3 immediately
                 infer2 = client.post(
                     "/api/v1/analyze",
@@ -246,7 +280,7 @@ def main() -> int:
             with httpx.Client(base_url=f"http://127.0.0.1:{port2}", timeout=10.0) as client:
                 cfg2 = client.get("/internal/v1/ai/config", headers=cfg_headers)
                 assert cfg2.status_code == 200
-                assert cfg2.json()["version"] == 2
+                assert cfg2.json()["version"] == 4
                 assert cfg2.json()["artifactManifestId"] == V13_MANIFEST_ID
 
                 infer_after_restart = client.post(
@@ -267,12 +301,12 @@ def main() -> int:
 
                 rb = client.post(
                     "/internal/v1/ai/config/rollback",
-                    json={"expectedVersion": 2, "reason": "e2e rollback verify"},
+                    json={"expectedVersion": 4, "reason": "e2e rollback verify"},
                     headers=cfg_headers,
                 )
-                assert rb.status_code == 200 and rb.json()["version"] == 3
+                assert rb.status_code == 200 and rb.json()["version"] == 5
                 assert rb.json()["artifactManifestId"] == BASE_MANIFEST_ID
-                summary["process2_restart"] = {"restored_version": 2, "rolled_back_version": 3}
+                summary["process2_restart"] = {"restored_version": 4, "rolled_back_version": 5}
         finally:
             _stop_uvicorn(proc2)
 
