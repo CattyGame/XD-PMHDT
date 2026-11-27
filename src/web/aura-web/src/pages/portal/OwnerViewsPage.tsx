@@ -6,7 +6,7 @@ import { analytics, ownerOrders, ownerUsage, portalError, type PortalOwner } fro
 import { useBackendSession } from '../../auth/backendSession'
 import BackendSessionNotice from '../../auth/BackendSessionNotice'
 import styles from '../billing/billing.module.css'
-import PortalSection, { AnalyticsCards, DateRangeForm, Metrics, PortalTable } from './PortalSection'
+import PortalSection, { AnalyticsCards, DateRangeForm, PortalTable } from './PortalSection'
 import { defaultRange, formatCount, formatDate, formatRange } from './display'
 
 type Mode = 'billing' | 'clinic' | 'doctor'
@@ -63,34 +63,35 @@ function OwnerWorkspace({ context, mode }: { context: BackendContext; mode: Mode
   </main>
 }
 
-type BillingSnapshot = {
-  orders: Awaited<ReturnType<typeof ownerOrders>>
-  usage: Awaited<ReturnType<typeof ownerUsage>>
-}
 function BillingData({ context, owner, range }: {
   context: BackendContext; owner: PortalOwner; range: { from: string; to: string }
 }) {
-  return <PortalSection<BillingSnapshot> title="Dữ liệu ví đã chọn" cursor={data => data.orders.nextCursor}
-    read={async (signal, cursor) => {
-      const [orders, usage] = await Promise.all([
-        ownerOrders(context, owner, cursor, signal), ownerUsage(context, owner, range, signal),
-      ])
-      return { orders, usage }
-    }}>
-    {({ orders, usage }) => <>
-      <h3>Sử dụng credit</h3><p className={styles.muted}>{usage.environment} · {formatRange(usage)}</p>
-      <Metrics entries={[[ 'Hiện có', usage.available ], ['Đang giữ', usage.reserved],
-        ['Đã sử dụng trong kỳ', usage.captured], ['Đã giải phóng trong kỳ', usage.released], ['Đã hoàn trong kỳ', usage.refunded]]} />
-      <h3>Lịch sử đơn hàng</h3>
-      <p className={styles.muted}>Lịch sử theo chủ ví. Bộ lọc ngày áp dụng cho số credit sử dụng.</p>
-      <PortalTable columns={['Thời điểm', 'Đơn hàng', 'Trạng thái', 'Môi trường', 'Giá (đơn vị nhỏ nhất)', 'Credit', 'Phiên bản giá']}>
-        {orders.items.map(order => <tr key={order.orderId}><td>{formatDate(order.createdAt)}</td>
-          <td><Link to={'/billing/orders/' + order.orderId}>{order.orderId}</Link></td>
-          <td>{order.status}</td><td>{order.environment}</td><td>{formatCount(order.amountMinor)} {order.currency}</td>
-          <td>{formatCount(order.credits)}</td><td>{order.priceVersionId}</td></tr>)}
-      </PortalTable>
-    </>}
-  </PortalSection>
+  return <>
+    <PortalSection<Awaited<ReturnType<typeof ownerOrders>>> title="Lịch sử đơn hàng" cursor={data => data.nextCursor}
+      read={(signal, cursor) => ownerOrders(context, owner, cursor, signal)}>
+      {orders => <>
+        <p className={styles.muted}>Lịch sử theo chủ ví. Bộ lọc ngày áp dụng cho sổ sử dụng credit.</p>
+        <PortalTable columns={['Thời điểm', 'Đơn hàng', 'Trạng thái', 'Môi trường', 'Số tiền', 'Credit', 'Phiên bản giá']}>
+          {orders.items.map(order => <tr key={order.orderId}><td>{formatDate(order.createdAt)}</td>
+            <td><Link to={'/billing/orders/' + order.orderId}>{order.orderId}</Link></td>
+            <td>{order.status}</td><td>{order.environment}</td>
+            <td>{order.amount.toLocaleString('vi-VN', { style: 'currency', currency: order.currency })}</td>
+            <td>{formatCount(order.credits)}</td><td>{order.priceVersionId}</td></tr>)}
+        </PortalTable>
+      </>}
+    </PortalSection>
+    <PortalSection<Awaited<ReturnType<typeof ownerUsage>>> title="Sổ sử dụng credit" cursor={data => data.nextCursor}
+      read={(signal, cursor) => ownerUsage(context, owner, range, signal, cursor)}>
+      {usage => <>
+        <p className={styles.muted}>{usage.environment} · {formatRange(range)} · Các bút toán, không phải tổng toàn kỳ</p>
+        <PortalTable columns={['Thời điểm', 'Loại', 'Thay đổi credit', 'Số dư sau bút toán', 'Đơn vị đặt trước']}>
+          {usage.items.map(entry => <tr key={entry.id}><td>{formatDate(entry.createdAt)}</td>
+            <td>{entry.entryType}</td><td>{formatCount(entry.balanceDelta)}</td>
+            <td>{formatCount(entry.balanceAfter)}</td><td>{formatCount(entry.reservationUnits)}</td></tr>)}
+        </PortalTable>
+      </>}
+    </PortalSection>
+  </>
 }
 
 export default function OwnerViewsPage({ mode = 'billing' }: { mode?: Mode }) {

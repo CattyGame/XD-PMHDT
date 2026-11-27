@@ -117,7 +117,7 @@ try {
     $global:AuraM1EnvironmentCheckState.emptyAt = -1
 
     $plan = @(& $initialize -PlanOnly)
-    Assert-Check ($plan.Count -eq 42) "Migration plan includes versioned catalog and push templates"
+    Assert-Check ($plan.Count -eq 43) "Migration plan includes versioned catalog, push templates and forward-only audit hardening"
     Assert-Check ($plan -contains "infra/postgres/migrations/020_notification_consultations.sql") "Integrated consultation persistence is provisioned before shared audit grants"
     Assert-Check ($plan[0] -eq "infra/postgres/migrations/001_notification_devices.sql") "Notification schema is bootstrapped first"
     Assert-Check ($plan[2] -eq "infra/postgres/migrations/002_identity_and_profile.sql") "Identity/Profile migration is included"
@@ -140,9 +140,10 @@ try {
     Assert-Check ($plan[28] -eq "infra/postgres/migrations/011_clinic_patients_and_assignments.sql") "Clinic patients and doctor assignments extension follow clinic lifecycle"
     Assert-Check ($plan[33] -eq "infra/postgres/migrations/002_service_database_roles.sql" -and $plan[34] -eq "infra/postgres/migrations/015_runtime_boundary_hardening.sql" -and $plan[35] -eq "infra/postgres/migrations/016_billing_event_compatibility.sql") "Final blanket grants are followed by ADR005 append-only and runtime boundary hardening"
     Assert-Check ($plan[36] -eq "infra/postgres/migrations/017_notification_payment_and_delivery_jobs.sql" -and $plan[37] -eq "infra/postgres/migrations/018_billing_payment_outbox.sql") "Durable notification delivery precedes the canonical payment outbox"
-    Assert-Check ($plan[-3] -eq "infra/postgres/migrations/019_shared_audit.sql" -and
-        $plan[-2] -eq "infra/postgres/migrations/020_camera_clinic_binding.sql" -and
-        $plan[-1] -eq "infra/postgres/migrations/021_versioned_catalog_and_push_templates.sql") "Audit, camera and catalog permissions follow all legacy blanket grants"
+    Assert-Check ($plan[-4] -eq "infra/postgres/migrations/019_shared_audit.sql" -and
+        $plan[-3] -eq "infra/postgres/migrations/020_camera_clinic_binding.sql" -and
+        $plan[-2] -eq "infra/postgres/migrations/021_versioned_catalog_and_push_templates.sql" -and
+        $plan[-1] -eq "infra/postgres/migrations/022_release_runtime_audit_hardening.sql") "Audit, camera, catalog and forward-only audit hardening follow all legacy blanket grants"
 
     $global:AuraM1EnvironmentCheckState.dockerCalls = New-Object System.Collections.Generic.List[string]
     $global:AuraM1EnvironmentCheckState.failOnCall = -1

@@ -31,6 +31,10 @@ function integer(value: unknown, min = 0) {
   return value
 }
 function count(value: unknown) { return value === null ? null : integer(value) }
+function money(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER / 100) invalid()
+  return value
+}
 function date(value: unknown) {
   const iso = string(value)
   if (!Number.isFinite(Date.parse(iso))) invalid()
@@ -54,15 +58,15 @@ function currency(value: unknown) {
 }
 
 async function request(context: BackendContext, path: string, signal: AbortSignal,
-  method: Method = 'GET', body?: object) {
-  const response = await authorizedApiResponse(path, context, signal, method, body && JSON.stringify(body))
+  method: Method = 'GET', body?: object, headers?: Record<string, string>) {
+  const response = await authorizedApiResponse(path, context, signal, method, body && JSON.stringify(body), undefined, headers)
   const payload: unknown = await response.json().catch(() => invalid())
   if (signal.aborted) throw signal.reason
   return payload
 }
-function admin(context: BackendContext, path: string, signal: AbortSignal, method?: Method, body?: object) {
+function admin(context: BackendContext, path: string, signal: AbortSignal, method?: Method, body?: object, headers?: Record<string, string>) {
   if (!context.roles.includes('SYSTEM_ADMIN')) throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
-  return request(context, '/api/v1/admin' + path, signal, method, body)
+  return request(context, '/api/v1/admin' + path, signal, method, body, headers)
 }
 function paging(cursor: string | null) {
   return { limit: '20', ...(cursor ? { cursor } : {}) }
@@ -70,29 +74,30 @@ function paging(cursor: string | null) {
 function ownerQuery(context: BackendContext, owner: PortalOwner) {
   if (!validBillingId(owner.id) || (owner.type === 'PERSONAL' && owner.id !== context.accountId))
     throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
-  return { ownerId: owner.id, ownerType: owner.type }
-}
-function checkedOwner(row: RecordValue, owner: PortalOwner) {
-  if (row.ownerType !== owner.type || row.ownerId !== owner.id) invalid()
+  return { ownerId: owner.id, ownerType: owner.type === 'PERSONAL' ? 'ACCOUNT' : 'CLINIC' }
 }
 
 export async function ownerOrders(context: BackendContext, owner: PortalOwner, cursor: string | null, signal: AbortSignal) {
   const query = new URLSearchParams({ ...ownerQuery(context, owner), ...paging(cursor) })
-  return page(await request(context, '/api/v1/billing/orders?' + query, signal), value => {
+  const payload = object(await request(context, '/api/v1/billing/orders?' + query, signal))
+  const environment = oneOf(payload.environment, environments)
+  return page(payload, value => {
     const row = object(value)
-    checkedOwner(row, owner)
-    return { orderId: identifier(row.orderId), status: string(row.status), environment: oneOf(row.environment, environments),
-      priceVersionId: identifier(row.priceVersionId), amountMinor: integer(row.amountMinor), currency: currency(row.currency),
+    return { orderId: identifier(row.id), status: string(row.status), environment,
+      priceVersionId: identifier(row.priceVersionId), amount: money(row.amount), currency: currency(row.currency),
       credits: integer(row.credits), createdAt: date(row.createdAt) }
   })
 }
-export async function ownerUsage(context: BackendContext, owner: PortalOwner, range: DateRange, signal: AbortSignal) {
-  const query = new URLSearchParams({ ...ownerQuery(context, owner), ...range })
+export async function ownerUsage(context: BackendContext, owner: PortalOwner, range: DateRange, signal: AbortSignal, cursor: string | null = null) {
+  const query = new URLSearchParams({ ...ownerQuery(context, owner), ...range, ...paging(cursor) })
   const row = object(await request(context, '/api/v1/billing/usage?' + query, signal))
-  checkedOwner(row, owner)
-  return { environment: oneOf(row.environment, environments), from: date(row.from), to: date(row.to),
-    available: count(row.availableCredits), reserved: count(row.reservedCredits), captured: count(row.capturedCreditsInPeriod),
-    released: count(row.releasedCreditsInPeriod), refunded: count(row.refundedCreditsInPeriod) }
+  return { environment: oneOf(row.environment, environments), ...page(row, value => {
+    const item = object(value)
+    return { id: identifier(item.id), entryType: string(item.entryType), balanceDelta: integer(item.balanceDelta, Number.MIN_SAFE_INTEGER),
+      balanceAfter: integer(item.balanceAfter), reservationUnits: count(item.reservationUnits),
+      orderId: item.orderId === null ? null : identifier(item.orderId),
+      reservationId: item.reservationId === null ? null : identifier(item.reservationId), createdAt: date(item.createdAt) }
+  }) }
 }
 
 export async function analytics(context: BackendContext, range: DateRange, signal: AbortSignal,
@@ -123,8 +128,7 @@ export async function financial(context: BackendContext, range: DateRange, signa
   return { from: date(row.from), to: date(row.to), groups: array(row.groups, value => {
     const item = object(value)
     return { currency: currency(item.currency), environment: oneOf(item.environment, environments),
-      orders: count(item.successfulOrders), gross: count(item.grossAmountMinor), refunds: count(item.refundAmountMinor),
-      net: item.netAmountMinor === null ? null : integer(item.netAmountMinor, Number.MIN_SAFE_INTEGER) }
+      orders: integer(item.paidOrders), paidAmount: money(item.paidAmount) }
   }) }
 }
 
@@ -173,16 +177,16 @@ export async function adminPackages(context: BackendContext, cursor: string | nu
 }
 export type PriceInput = { displayName: string; amountMinor: number; currency: string; credits: number; reason: string }
 export async function savePrice(context: BackendContext, input: PriceInput, signal: AbortSignal,
-  current?: { id: number; version: number }) {
+  current?: { id: number; version: number }, commandId: string = crypto.randomUUID()) {
   const root = '/billing/packages'
   const saved = price(await admin(context, current ? root + '/' + integer(current.id, 1) + '/price-versions' : root,
-    signal, 'POST', current ? { ...input, expectedVersion: current.version } : input))
+    signal, 'POST', { ...input, expectedVersion: current?.version ?? 0 }, { 'Idempotency-Key': identifier(commandId) }))
   if (current && (saved.id !== current.id || saved.version <= current.version)) invalid()
 }
-export async function retirePackage(context: BackendContext, id: number, change: VersionChange, signal: AbortSignal) {
+export async function retirePackage(context: BackendContext, id: number, change: VersionChange, signal: AbortSignal, commandId: string = crypto.randomUUID()) {
   const row = object(await admin(context, '/billing/packages/' + integer(id, 1) + '/status', signal, 'PATCH',
-    { ...change, status: 'RETIRED' }))
-  if (row.packageId !== id || row.status !== 'RETIRED' || integer(row.version, 1) <= change.expectedVersion) invalid()
+    { ...change, status: 'RETIRED' }, { 'Idempotency-Key': identifier(commandId) }))
+  if (row.packageId !== id || row.status !== 'RETIRED' || integer(row.version, 1) !== change.expectedVersion) invalid()
 }
 function config(value: unknown) {
   const row = object(value)
@@ -202,8 +206,8 @@ export async function saveAiConfig(context: BackendContext, data: VersionChange 
 function template(value: unknown) {
   const row = object(value)
   if (typeof row.enabled !== 'boolean') invalid()
-  return { id: identifier(row.templateId), event: oneOf(row.eventType, ['ANALYSIS_READY', 'CLINICIAN_REVIEW_HIGH',
-    'CREDIT_LOW', 'CHAT_MESSAGE']), title: string(row.title), body: string(row.body),
+  return { id: identifier(row.id), event: oneOf(row.eventType, ['ANALYSIS_COMPLETED', 'ANALYSIS_FAILED', 'PAYMENT_SUCCESS',
+    'HIGH_RISK_WARNING', 'CREDIT_LOW']), title: string(row.title), body: string(row.body),
   enabled: row.enabled, version: integer(row.version, 1) }
 }
 export async function templates(context: BackendContext, signal: AbortSignal) {

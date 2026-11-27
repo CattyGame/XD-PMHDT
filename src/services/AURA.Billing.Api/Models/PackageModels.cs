@@ -26,6 +26,12 @@ public sealed record PublishPriceRequest([property: JsonRequired] int ExpectedVe
 
 public sealed record PricePublication(PackagePriceVersionRecord? Price, bool Replayed = false, bool Conflict = false);
 
+public sealed record AdminPackageView(int PackageId, Guid PriceVersionId, string DisplayName, long AmountMinor,
+    string Currency, int Credits, string Status, int Version);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RetirePackageRequest([property: JsonRequired] int ExpectedVersion, string Status, string Reason);
+
 public sealed record UpdatePackageRequest(
     string Name,
     decimal Price,

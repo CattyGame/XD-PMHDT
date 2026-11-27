@@ -99,7 +99,9 @@ public sealed class CatalogVersionTests
         }
         using var published = await Publish();
         Assert.Equal(HttpStatusCode.Created, published.StatusCode);
-        var priceId = (await published.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("priceVersionId").GetGuid();
+        var publishedJson = await published.Content.ReadFromJsonAsync<JsonElement>();
+        var priceId = publishedJson.GetProperty("priceVersionId").GetGuid();
+        await RecordResponse("publication", "billing", "/api/v1/admin/billing/packages", "post", 201, publishedJson);
         using var replay = await Publish();
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
         Assert.Equal(priceId, (await replay.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("priceVersionId").GetGuid());
@@ -148,6 +150,10 @@ public sealed class CatalogVersionTests
 
         var templateList = await client.GetFromJsonAsync<JsonElement>("/api/v1/admin/notification-templates");
         var template = templateList.GetProperty("items")[0];
+        await RecordResponse("orders", "billing", "/api/v1/billing/orders", "get", 200, page);
+        await RecordResponse("usage", "billing", "/api/v1/billing/usage", "get", 200, usage);
+        await RecordResponse("summary", "billing", "/api/v1/admin/billing/summary", "get", 200, summary);
+        await RecordResponse("templates", "notification", "/api/v1/admin/notification-templates", "get", 200, templateList);
         var templatePath = "/api/v1/admin/notification-templates/" + template.GetProperty("id").GetGuid().ToString("D");
         var tweak = new PushTemplateChange(1, "Thông báo từ {{app_name}}", "{{event_label}}. Đăng nhập để xem chi tiết.", true, "Test");
         using var unsafeTemplate = await client.PutAsJsonAsync(templatePath, tweak with { Body = "https://outside.example" });
@@ -176,6 +182,146 @@ public sealed class CatalogVersionTests
         Assert.False(PushTemplates.IsAllowed("AURA", "https://outside.example"));
         Assert.False(PushTemplates.IsAllowed("Nguyễn Văn A", "Đăng nhập để xem chi tiết."));
         Assert.False(PushTemplates.IsAllowed("AURA", "Kết quả bệnh nhân: cao."));
+    }
+
+    [M1PostgresFact]
+    public async Task Admin_catalog_and_retirement_are_authorized_replay_safe_and_preserve_paid_snapshots()
+    {
+        await using var db = await Database.CreateAsync();
+        var actor = Guid.NewGuid(); var tenant = Guid.NewGuid();
+        using var authority = new IdentityFixture(actor, tenant);
+        await using var app = await CatalogHost(db, authority);
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-session");
+        using var anonymous = app.GetTestClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/v1/admin/billing/packages")).StatusCode);
+        var page = await client.GetFromJsonAsync<JsonElement>("/api/v1/admin/billing/packages?limit=1");
+        var item = Assert.Single(page.GetProperty("items").EnumerateArray());
+        await RecordResponse("admin-catalog", "billing", "/api/v1/admin/billing/packages", "get", 200, page);
+        if (page.GetProperty("nextCursor").ValueKind==JsonValueKind.String)
+        {
+            var next = await client.GetFromJsonAsync<JsonElement>("/api/v1/admin/billing/packages?limit=1&cursor="+page.GetProperty("nextCursor").GetString());
+            Assert.True(Assert.Single(next.GetProperty("items").EnumerateArray()).GetProperty("packageId").GetInt32()>
+                item.GetProperty("packageId").GetInt32());
+        }
+        var packageId = item.GetProperty("packageId").GetInt32();
+        var version = item.GetProperty("version").GetInt32();
+        var priceId = item.GetProperty("priceVersionId").GetGuid();
+        Assert.True(item.GetProperty("amountMinor").GetInt64() >= 0);
+        var packages = new PackageRepository(db.Billing);
+        var orders = new OrderRepository(db.Billing, NullLogger<OrderRepository>.Instance);
+        var price = await orders.GetActivePriceVersionAsync(packageId, priceId, default);
+        var order = await orders.CreateOrderAsync(Guid.NewGuid(), tenant, "ACCOUNT", actor, price!, "TEST", Guid.NewGuid(), "fixture", default);
+        var key = Guid.NewGuid();
+        async Task<HttpResponseMessage> Retire(int expected, Guid command, string reason="Retire fixture")
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Patch, $"/api/v1/admin/billing/packages/{packageId}/status")
+            { Content = JsonContent.Create(new { expectedVersion=expected, status="RETIRED", reason }) };
+            request.Headers.Add("Idempotency-Key", command.ToString("D"));
+            return await client.SendAsync(request);
+        }
+        Assert.Equal(HttpStatusCode.Conflict, (await Retire(version+1, Guid.NewGuid())).StatusCode);
+        using var retired = await Retire(version,key);
+        Assert.Equal(HttpStatusCode.OK, retired.StatusCode);
+        var retiredJson=await retired.Content.ReadFromJsonAsync<JsonElement>();
+        await RecordResponse("retirement", "billing", "/api/v1/admin/billing/packages/{packageId}/status", "patch", 200, retiredJson);
+        Assert.Equal("RETIRED", retiredJson.GetProperty("status").GetString());
+        var replayedRetirement = await packages.RetireAsync(packageId,new(version,"RETIRED","Retire fixture"),actor,key,null,default);
+        Assert.Equal("RETIRED",replayedRetirement.Price!.Status);
+        Assert.DoesNotContain(await packages.GetAllAsync(default), x=>x.Id==packageId);
+        await Assert.ThrowsAsync<PriceVersionUnavailableException>(()=>orders.CreateOrderAsync(Guid.NewGuid(),tenant,"ACCOUNT",actor,price!,"TEST",Guid.NewGuid(),"retired",default));
+        var payment = new PaymentCallbackPayload(order.Id,"retired-order",price!.PriceAmount,price.CurrencyCode,"SUCCESS",0,"fixture");
+        Assert.True((await orders.ProcessCallbackInTransactionAsync(payment,"SANDBOX_MOCK",default)).Success);
+        Assert.True((await orders.ProcessCallbackInTransactionAsync(payment,"SANDBOX_MOCK",default)).Replayed);
+        Assert.Equal(priceId,(await orders.GetOrderByIdAsync(order.Id,default))!.PackagePriceVersionId);
+        Assert.Equal(HttpStatusCode.OK,(await Retire(version,key)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict,(await Retire(version,key,"different")).StatusCode);
+        Assert.Equal(1L,await db.ScalarAsync<long>("SELECT count(*) FROM billing.audit_events WHERE payload->>'resourceId'=$1",packageId.ToString()));
+        var updated = await packages.PublishAsync(packageId,new(version,"New",700,"VND",5,"new"),actor,Guid.NewGuid(),null,default);
+        Assert.NotNull(updated.Price);
+        Assert.Equal(HttpStatusCode.Conflict,(await Retire(version,Guid.NewGuid())).StatusCode);
+        Assert.Equal(HttpStatusCode.OK,(await Retire(version,key)).StatusCode);
+        Assert.Contains(await packages.GetAllAsync(default),x=>x.Id==packageId && x.PriceVersionId==updated.Price.Id);
+        authority.Permitted=false;
+        Assert.Equal(HttpStatusCode.Forbidden,(await client.GetAsync("/api/v1/admin/billing/packages")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,(await Retire(updated.Price.VersionNumber,Guid.NewGuid())).StatusCode);
+    }
+
+    [M1PostgresFact]
+    public async Task Published_price_receipt_has_status_and_owner_summary_is_scoped_to_tenant_and_environment()
+    {
+        await using var db = await Database.CreateAsync();
+        var actor=Guid.NewGuid(); var tenant=Guid.NewGuid();
+        using var authority=new IdentityFixture(actor,tenant);
+        await using var app=await CatalogHost(db,authority);
+        using var client=app.GetTestClient(); client.DefaultRequestHeaders.Authorization=new("Bearer","synthetic-session");
+        using var request=new HttpRequestMessage(HttpMethod.Post,"/api/v1/admin/billing/packages")
+        {Content=JsonContent.Create(new PublishPriceRequest(0,"USD fixture",250,"USD",5,"test"))};
+        request.Headers.Add("Idempotency-Key",Guid.NewGuid().ToString("D"));
+        using var response=await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Created,response.StatusCode);
+        var quote=await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ACTIVE",quote.GetProperty("status").GetString());
+        var orders=new OrderRepository(db.Billing,NullLogger<OrderRepository>.Instance);
+        var price=await orders.GetActivePriceVersionAsync(quote.GetProperty("packageId").GetInt32(),quote.GetProperty("priceVersionId").GetGuid(),default);
+        foreach(var (owner,env,t) in new[]{(actor,"TEST",tenant),(actor,"LIVE",tenant),(Guid.NewGuid(),"TEST",tenant),(actor,"TEST",Guid.NewGuid())})
+        {
+            var order=await orders.CreateOrderAsync(Guid.NewGuid(),t,"CLINIC",owner,price!,env,Guid.NewGuid(),"fixture",default);
+            Assert.True((await orders.ProcessCallbackInTransactionAsync(new(order.Id,order.Id.ToString(),2.5m,"USD","SUCCESS",0,"fixture"),"SANDBOX_MOCK",default)).Success);
+        }
+        var path=$"/api/v1/billing/summary?ownerType=CLINIC&ownerId={actor:D}&from={DateTime.UtcNow.AddDays(-1):yyyy-MM-dd}T00:00:00Z&to={DateTime.UtcNow.AddDays(1):yyyy-MM-dd}T00:00:00Z";
+        var summary=await client.GetFromJsonAsync<JsonElement>(path);
+        await RecordResponse("owner-summary", "billing", "/api/v1/billing/summary", "get", 200, summary);
+        var group=Assert.Single(summary.GetProperty("groups").EnumerateArray());
+        Assert.Equal("TEST",group.GetProperty("environment").GetString());
+        Assert.Equal(1,group.GetProperty("paidOrders").GetInt64());
+        Assert.Equal(2.5m,group.GetProperty("paidAmount").GetDecimal());
+        Assert.Equal(HttpStatusCode.Forbidden,(await client.GetAsync(path.Replace(actor.ToString("D"),Guid.NewGuid().ToString("D")))).StatusCode);
+        authority.Permitted=false;
+        Assert.Equal(HttpStatusCode.Forbidden,(await client.GetAsync(path)).StatusCode);
+    }
+
+    [M1PostgresFact]
+    public async Task Retirement_rolls_back_when_audit_fails_and_races_share_the_publication_lock()
+    {
+        await using var db=await Database.CreateAsync();
+        var repo=new PackageRepository(db.Billing);var actor=Guid.NewGuid();
+        var first=await repo.PublishAsync(null,new(0,"Fixture",100,"VND",2,"new"),actor,Guid.NewGuid(),null,default);
+        var package=first.Price!;var retirement=new RetirePackageRequest(1,"RETIRED","Test");
+        var key=Guid.NewGuid();
+        await db.SqlAsync("REVOKE INSERT ON billing.audit_events FROM aura_billing_app");
+        await Assert.ThrowsAsync<Npgsql.PostgresException>(()=>repo.RetireAsync(package.PackageId,retirement,actor,key,null,default));
+        Assert.Contains(await repo.GetAllAsync(default),x=>x.Id==package.PackageId);
+        Assert.Equal(0L,await db.ScalarAsync<long>("SELECT count(*) FROM billing.catalog_publications WHERE idempotency_key=$1",key));
+        await db.SqlAsync("GRANT INSERT ON billing.audit_events TO aura_billing_app");
+        var results=await Task.WhenAll(
+            repo.RetireAsync(package.PackageId,retirement,actor,key,null,default),
+            repo.PublishAsync(package.PackageId,new(1,"New",200,"VND",3,"new"),actor,Guid.NewGuid(),null,default));
+        Assert.False(results[1].Conflict);
+        var latest=Assert.Single(await repo.ListAdminAsync(package.PackageId-1,1,default));
+        Assert.Equal(2,latest.Version);Assert.Equal("ACTIVE",latest.Status);
+        Assert.True(results[0].Conflict || results[0].Price?.Id==package.Id);
+        Assert.True((await repo.RetireAsync(package.PackageId,new(2,"RETIRED","cross operation"),actor,
+            await db.ScalarAsync<Guid>("SELECT idempotency_key FROM billing.catalog_publications WHERE price_version_id=$1",results[1].Price!.Id),null,default)).Conflict);
+    }
+
+    private static async Task<WebApplication> CatalogHost(Database db,IdentityFixture authority)
+    {
+        var builder=WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IHttpClientFactory>(authority);
+        builder.Services.AddSingleton(new PackageRepository(db.Billing));
+        builder.Services.AddSingleton(new BillingHistoryRepository(db.Billing));
+        builder.Services.AddSingleton(new BillingRuntimeOptions("TEST",false));
+        builder.Services.AddSingleton<BillingOwnerAuthorizer>();builder.Services.AddSingleton<SystemAdminAuthorizer>();
+        var app=builder.Build();app.MapBillingCatalog();await app.StartAsync();return app;
+    }
+
+    private static async Task RecordResponse(string name,string contract,string path,string method,int status,JsonElement value)
+    {
+        var directory=Environment.GetEnvironmentVariable("AURA_M1_ARTIFACTS");
+        if(string.IsNullOrWhiteSpace(directory)) return;
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(Path.Combine(directory,name+".json"),JsonSerializer.Serialize(new { name,contract,path,method,status,value }));
     }
 
     private sealed class IdentityFixture(Guid actor, Guid tenant) : HttpMessageHandler, IHttpClientFactory

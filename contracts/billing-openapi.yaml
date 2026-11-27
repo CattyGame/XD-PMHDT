@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: AURA Billing API
-  version: 0.4.0
+  version: 0.5.0
   description: Billing API with published price versions and PostgreSQL ledger reads.
     Internal endpoints are service-to-service only.
 servers:
@@ -9,6 +9,28 @@ servers:
   description: Local Development Billing API
 paths:
   /api/v1/admin/billing/packages:
+    get:
+      operationId: listAdminPackages
+      summary: Read the latest version of each active or retired package
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      - {in: query, name: cursor, schema: {type: string, maxLength: 32}}
+      responses:
+        '200':
+          description: Stable package ID pagination; money is in minor units.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/AdminPackage'}}
+                  nextCursor: {type: string, nullable: true}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
     post:
       operationId: createPackage
       summary: Publish the first version of a new package
@@ -44,6 +66,67 @@ paths:
       - $ref: '#/components/parameters/IdempotencyKey'
       requestBody: *priceRequest
       responses: *priceResponses
+  /api/v1/admin/billing/packages/{packageId}/status:
+    patch:
+      operationId: retirePackage
+      summary: Stop selling the latest price version without changing existing order snapshots
+      description: Same command key and payload replay the original receipt even after another price is published. Retirement keeps the price version number; a new publication increments it.
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - {in: path, name: packageId, required: true, schema: {type: integer, minimum: 1}}
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, status, reason]
+              properties:
+                expectedVersion: {type: integer, minimum: 1}
+                status: {type: string, enum: [RETIRED]}
+                reason: {type: string, minLength: 1, maxLength: 250}
+      responses:
+        '200':
+          description: Retirement receipt; an exact replay returns Idempotent-Replayed true.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [packageId, priceVersionId, version, status]
+                properties:
+                  packageId: {type: integer}
+                  priceVersionId: {type: string, format: uuid}
+                  version: {type: integer, minimum: 1}
+                  status: {type: string, enum: [RETIRED]}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/billing/summary:
+    get:
+      operationId: getOwnerBillingSummary
+      summary: Read settled payments for the current authorized wallet
+      description: Requires current BILLING_READ. Server filters tenant, owner and TEST or LIVE; groups retain separate currencies. Paid amount is a major-unit decimal, not credits or net revenue.
+      security: [{FirebaseBearer: []}]
+      parameters:
+      - {in: query, name: ownerType, required: true, schema: {type: string, enum: [ACCOUNT, CLINIC]}}
+      - {in: query, name: ownerId, required: true, schema: {type: string, format: uuid}}
+      - {in: query, name: from, required: true, schema: {type: string, format: date-time}}
+      - {in: query, name: to, required: true, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: Payments in inclusive from and exclusive to, at most 366 days.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OwnerMoneySummary'}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
   /api/v1/billing/orders:
     get:
       operationId: listOwnerOrders
@@ -580,6 +663,34 @@ components:
         type: string
         maxLength: 64
   schemas:
+    AdminPackage:
+      type: object
+      required: [packageId, priceVersionId, displayName, amountMinor, currency, credits, status, version]
+      properties:
+        packageId: {type: integer, minimum: 1}
+        priceVersionId: {type: string, format: uuid}
+        displayName: {type: string}
+        amountMinor: {type: integer, format: int64, minimum: 0}
+        currency: {type: string, enum: [VND, USD, EUR]}
+        credits: {type: integer, minimum: 1}
+        status: {type: string, enum: [ACTIVE, RETIRED]}
+        version: {type: integer, minimum: 1}
+    OwnerMoneySummary:
+      type: object
+      required: [from, to, groups]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        groups:
+          type: array
+          items:
+            type: object
+            required: [environment, currency, paidOrders, paidAmount]
+            properties:
+              environment: {type: string, enum: [TEST, LIVE]}
+              currency: {type: string}
+              paidOrders: {type: integer, minimum: 0}
+              paidAmount: {type: number, minimum: 0}
     PublishPrice:
       type: object
       required: [expectedVersion, displayName, amountMinor, currency, credits, reason]
@@ -769,12 +880,13 @@ components:
         application/json:
           schema:
             type: object
-            required: [packageId, priceVersionId, version, displayName, price, amountMinor, currency, credits]
+            required: [packageId, priceVersionId, version, displayName, price, amountMinor, currency, credits, status]
             properties:
               packageId: {type: integer}
               priceVersionId: {type: string, format: uuid}
               version: {type: integer}
               displayName: {type: string}
+              status: {type: string, enum: [ACTIVE]}
               price: {type: number}
               amountMinor: {type: integer, format: int64}
               currency: {type: string}
