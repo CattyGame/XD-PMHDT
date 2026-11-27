@@ -118,6 +118,23 @@ describe('SCRUM-333 — Notification Inbox client', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('accepts consultation inbox notifications and rejects mixed IDs or query parameters', () => {
+    const consultation = {
+      ...notification,
+      analysisId: null,
+      type: 'CONSULTATION_MESSAGE',
+      title: 'Có tin nhắn tư vấn mới',
+      targetPath: `/consultations/${eventId}`,
+    }
+    expect(parseInboxPage({ items: [{ ...consultation, orderId: null }], nextCursor: null }).items[0]).toMatchObject(consultation)
+    for (const invalid of [
+      { ...consultation, analysisId },
+      { ...consultation, orderId: analysisId },
+      { ...consultation, targetPath: `/consultations/${eventId}?clinicContextId=${context.accountId}` },
+      { ...consultation, targetPath: `/analyses/${analysisId}` },
+    ]) expect(() => parseInboxPage({ items: [invalid], nextCursor: null })).toThrow(InboxError)
+  })
+
   it('blocks mock mode and invalid parameters before network access', async () => {
     await expect(getInboxPage(context, { limit: 101 })).rejects.toMatchObject({ code: 'ERR_INVALID_PARAMS' })
     mocks.mock = true

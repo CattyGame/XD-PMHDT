@@ -7,6 +7,15 @@
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.15" />
     <ProjectReference Include="../../src/services/AURA.Notification.Api/AURA.Notification.Api.csproj" />
+    <ProjectReference Include="../../src/common/AURA.Common.Audit/AURA.Common.Audit.csproj" />
+    <Compile Include="../../src/services/AURA.Profile.Api/Models/ProfileModels.cs" Link="Profile/ProfileModels.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/AccountAuthority.cs" Link="Profile/AccountAuthority.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/AnalysisBindingAuthority.cs" Link="Profile/AnalysisBindingAuthority.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/ProfileRepository.cs" Link="Profile/ProfileRepository.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/ProfileRepository.Security.cs" Link="Profile/ProfileRepository.Security.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/UserIdentityResolver.cs" Link="Profile/UserIdentityResolver.cs" />
+    <Compile Include="../../src/services/AURA.Profile.Api/ProfilePublicMembershipEndpoints.cs" Link="Profile/ProfilePublicMembershipEndpoints.cs" />
   </ItemGroup>
 </Project>

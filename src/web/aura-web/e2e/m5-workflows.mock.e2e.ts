@@ -524,3 +524,43 @@ test('MOCK: SCRUM-394 starts consultation using the eligible doctor list and reu
   await expect(page.getByRole('region', { name: 'Nội dung tư vấn' })).toBeVisible()
   expect(keys).toHaveLength(2)
 })
+
+test('MOCK: TC-W6-M6-04 FCM consultation deep-link enforces current authorization and blocks revoked users', async ({ page }) => {
+  await fixture(page, ['DOCTOR'])
+  const conversationId = id(51)
+  let revoked = false
+  await page.routeWebSocket('**/hubs/consultations**', ws => {
+    ws.onMessage(raw => {
+      const text = typeof raw === 'string' ? raw : raw.toString()
+      for (const frame of text.split('\x1e').filter(Boolean)) {
+        const packet = JSON.parse(frame) as { invocationId?: string; target?: string; protocol?: string }
+        if (packet.protocol === 'json') ws.send('{}\x1e')
+        else if (packet.target === 'JoinConversation' && packet.invocationId) {
+          ws.send(JSON.stringify({ type: 3, invocationId: packet.invocationId, result: null }) + '\x1e')
+        }
+      }
+    })
+  })
+  await page.route(url => url.pathname === '/hubs/consultations/negotiate', route => route.fulfill({
+    json: { negotiateVersion: 1, connectionId: 'w6m604-conn', connectionToken: 'w6m604-tok',
+      availableTransports: [{ transport: 'WebSockets', transferFormats: ['Text'] }] }
+  }))
+  await page.route(url => url.pathname === '/api/v1/consultations', route => route.fulfill({
+    json: { items: revoked ? [] : [{ conversationId, analysisId: analysis, clinicContextId: clinic, unreadCount: 0, status: 'OPEN' }], nextCursor: null }
+  }))
+  await page.route(url => url.pathname === `/api/v1/consultations/${conversationId}/messages`, route => {
+    if (revoked) return route.fulfill({ status: 403, json: { error: { code: 'ERR_ACCESS_REVOKED' } } })
+    return route.fulfill({ json: { items: [{
+      messageId: id(52), conversationId, clientMessageId: id(53), senderAccountId: account,
+      text: 'Tin từ deep-link FCM', sentAt: '2026-11-27T10:00:00Z', deliveryState: 'PERSISTED',
+    }], nextBeforeId: null } })
+  })
+
+  await page.goto(`/consultations/${conversationId}`)
+  await expect(page.getByText('Tin từ deep-link FCM', { exact: true })).toBeVisible()
+
+  revoked = true
+  await page.goto(`/consultations/${conversationId}`)
+  await expect(page.getByText(/403 · Không tìm thấy cuộc trò chuyện/)).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Tin nhắn đã lưu' })).toHaveCount(0)
+})
