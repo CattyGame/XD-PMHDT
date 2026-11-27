@@ -762,3 +762,114 @@ def test_w6_m4_f2_replay_old_command_returns_original_receipt_not_latest_active(
     assert replay_after_restart.json()["version"] == 2
     assert replay_after_restart.json()["artifactManifestId"] == v13_id
     assert client.get("/internal/v1/ai/config", headers=cfg_headers).json()["version"] == 5
+
+
+def test_w6_m4_r2_readiness_respects_cnn_slot_and_caches_warm_by_snapshot(monkeypatch, tmp_path: Path):
+    keypair = generate_deterministic_rsa_keypair(seed=20261131, bits=2048)
+    avr_file = tmp_path / "avr.json"
+    dr_file = tmp_path / "dr.pt"
+    avr_file.write_bytes(b"avr-r2-fixture")
+    dr_file.write_bytes(b"dr-r2-fixture")
+    avr_sha = hashlib.sha256(avr_file.read_bytes()).hexdigest()
+    dr_sha = hashlib.sha256(dr_file.read_bytes()).hexdigest()
+
+    monkeypatch.setenv("AURA_AI_ENGINE", "frangi")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "false")
+    monkeypatch.setenv("AURA_INTEGRATED_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("AURA_AVR_MODEL_PATH", str(avr_file))
+    monkeypatch.setenv("AURA_AVR_MODEL_SHA256", avr_sha)
+    monkeypatch.setenv("AURA_DR_CNN_CHECKPOINT", str(dr_file))
+    monkeypatch.setenv("AURA_DR_CNN_SHA256", dr_sha)
+    monkeypatch.setenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM", keypair.public_pem)
+    monkeypatch.delenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPath", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPem", raising=False)
+
+    calls = 0
+
+    def _counting_integrated(request, config):
+        nonlocal calls
+        calls += 1
+        payload = _base_response_payload()
+        payload.update(
+            {
+                "request_id": request.request_id,
+                "model_version": config.model_version,
+                "config_version": f"{config.config_version}-integrated-research-v1",
+                "threshold_version": config.threshold_version,
+                "risk_available": False,
+                "risk_assessment": None,
+                "metrics": {**payload["metrics"], "av_ratio": 0.67},
+                "segmentation": {
+                    **payload["segmentation"],
+                    "av_overlay_base64": "native-av-overlay",
+                    "gradcam_base64": "crop-overlay",
+                },
+                "research": {
+                    "avr": {
+                        "measurement_available": True,
+                        "avr": 0.67,
+                        "crae_px": 13.4,
+                        "crve_px": 20.0,
+                        "unavailable_reason": None,
+                        "model_version": "avr-v8",
+                        "model_sha256": avr_sha,
+                    },
+                    "dr": {
+                        "probability_dr": 0.42,
+                        "model_version": "resnet34-test",
+                        "checkpoint_sha256": dr_sha,
+                        "gradcam_method": "GRAD_CAM",
+                        "gradcam_geometry": "IMAGENET_CENTER_CROP_224",
+                    },
+                },
+            }
+        )
+        return AnalysisResponse.model_validate(payload)
+
+    monkeypatch.setattr(integrated_inference, "process_integrated_analysis", _counting_integrated)
+    reg = RuntimeManifestRegistry(state_path=tmp_path / "r2-state.json")
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", reg)
+    main_module.reset_integrated_warm_cache()
+    client = TestClient(app)
+
+    # 1. While CNN_SLOT is busy, un-warmed /ready MUST NOT run heavy inference outside the slot (fail-closed 503)
+    assert main_module.CNN_SLOT.acquire(blocking=False)
+    try:
+        assert client.get("/ready").status_code == 503
+        assert client.get("/ready").status_code == 503
+        assert calls == 0
+    finally:
+        main_module.CNN_SLOT.release()
+
+    # 2. Once slot is free, /ready warms once and caches for repeated polls (even if slot is busy later)
+    assert client.get("/ready").status_code == 200
+    assert client.get("/ready").status_code == 200
+    assert calls == 1
+
+    assert main_module.CNN_SLOT.acquire(blocking=False)
+    try:
+        assert client.get("/ready").status_code == 200
+        assert calls == 1
+    finally:
+        main_module.CNN_SLOT.release()
+
+    # 3. Switching active snapshot invalidates warm cache; /ready re-warms once for v2
+    cfg_headers = _config_headers(keypair, client_id="analysis-api", scope="ai:config")
+    put_resp = client.put(
+        "/internal/v1/ai/config",
+        json={
+            "expectedVersion": 1,
+            "artifactManifestId": "11111111-1111-4111-8111-111111110405",
+            "thresholdConfigSha256": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+            "reason": "r2 promote v1.3",
+        },
+        headers=cfg_headers,
+    )
+    assert put_resp.status_code == 200
+    assert calls == 2
+
+    # Repeated /ready after promotion uses warm cache (or re-warms once) without extra calls
+    assert client.get("/ready").status_code == 200
+    assert client.get("/ready").status_code == 200
+    assert calls == 2

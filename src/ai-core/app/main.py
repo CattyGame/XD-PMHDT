@@ -14,8 +14,8 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from threading import BoundedSemaphore
-from typing import Optional
+from threading import BoundedSemaphore, Lock
+from typing import Optional, Tuple
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Security, status
 from fastapi.encoders import jsonable_encoder
@@ -71,6 +71,48 @@ API_VERSION = "1.3.0"
 HTTP_COUNTS = Counter()
 HTTP_SECONDS = Counter()
 CNN_SLOT = BoundedSemaphore(1)
+_WARM_LOCK = Lock()
+_WARM_CACHE: Optional[Tuple[int, str, str, str, str, str, str]] = None
+
+
+def reset_integrated_warm_cache() -> None:
+    """Clear cached integrated warm verification state."""
+    global _WARM_CACHE
+    with _WARM_LOCK:
+        _WARM_CACHE = None
+
+
+def _current_warm_key(frangi_config: FrangiRuntimeConfig, artifacts: Tuple[str, str, str, str]) -> Tuple[int, str, str, str, str, str, str]:
+    avr_path, avr_sha, dr_path, dr_sha = artifacts
+    if load_frangi_config is _ORIGINAL_LOAD_FRANGI_CONFIG:
+        snap = RUNTIME_REGISTRY.get_active_snapshot()
+        return (snap.version, snap.artifact_manifest_id, snap.threshold_config_sha256, avr_path, avr_sha, dr_path, dr_sha)
+    return (0, "override", frangi_config.config_version, avr_path, avr_sha, dr_path, dr_sha)
+
+
+def _mark_integrated_warm(frangi_config: FrangiRuntimeConfig) -> None:
+    global _WARM_CACHE
+    artifacts = configured_artifacts()
+    key = _current_warm_key(frangi_config, artifacts)
+    with _WARM_LOCK:
+        _WARM_CACHE = key
+
+
+def _ensure_integrated_warm(frangi_config: FrangiRuntimeConfig) -> None:
+    global _WARM_CACHE
+    artifacts = configured_artifacts()
+    key = _current_warm_key(frangi_config, artifacts)
+    with _WARM_LOCK:
+        if _WARM_CACHE == key:
+            return
+    if not CNN_SLOT.acquire(blocking=False):
+        raise IntegratedModelUnavailable("Integrated inference slot is busy; readiness warm deferred.")
+    try:
+        verify_integrated_runtime(frangi_config)
+        with _WARM_LOCK:
+            _WARM_CACHE = key
+    finally:
+        CNN_SLOT.release()
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +464,7 @@ def ready():
 
     if os.getenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false").strip().lower() == "true":
         try:
-            verify_integrated_runtime(frangi_config)
+            _ensure_integrated_warm(frangi_config)
         except IntegratedModelUnavailable as error:
             raise HTTPException(status_code=503, detail={"error_code": "SERVICE_NOT_READY",
                 "message": str(error), "details": None}) from error
@@ -834,11 +876,28 @@ async def put_internal_ai_config(
 ):
     """Validate candidate manifest, run real smoke check, and atomically switch active config."""
     payload = await _parse_json_object(request)
+    integrated = os.getenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false").strip().lower() == "true"
+    if integrated and not CNN_SLOT.acquire(blocking=False):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "ERR_SMOKE_CHECK_FAILED",
+                "message": "Integrated inference slot is busy; candidate smoke deferred.",
+                "details": None,
+            },
+        )
     try:
         snapshot = RUNTIME_REGISTRY.activate_manifest(payload, idempotency_key=idempotency_key)
+        if integrated:
+            _mark_integrated_warm(snapshot.config)
+        else:
+            reset_integrated_warm_cache()
         return RUNTIME_REGISTRY.snapshot_to_view(snapshot)
     except RuntimeManifestError as error:
         _raise_manifest_http_error(error)
+    finally:
+        if integrated:
+            CNN_SLOT.release()
 
 
 @app.post("/internal/v1/ai/config/rollback", tags=["InternalConfig"], include_in_schema=False)
@@ -859,15 +918,32 @@ async def rollback_internal_ai_config(
                 "details": None,
             },
         )
+    integrated = os.getenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false").strip().lower() == "true"
+    if integrated and not CNN_SLOT.acquire(blocking=False):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "ERR_SMOKE_CHECK_FAILED",
+                "message": "Integrated inference slot is busy; rollback smoke deferred.",
+                "details": None,
+            },
+        )
     try:
         snapshot = RUNTIME_REGISTRY.rollback_manifest(
             expected_version=payload.get("expectedVersion"),
             reason=str(payload.get("reason", "")),
             idempotency_key=idempotency_key,
         )
+        if integrated:
+            _mark_integrated_warm(snapshot.config)
+        else:
+            reset_integrated_warm_cache()
         return RUNTIME_REGISTRY.snapshot_to_view(snapshot)
     except RuntimeManifestError as error:
         _raise_manifest_http_error(error)
+    finally:
+        if integrated:
+            CNN_SLOT.release()
 
 
 @app.get("/internal/v1/ai/config/commands/{idempotency_key}", tags=["InternalConfig"], include_in_schema=False)
