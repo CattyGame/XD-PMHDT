@@ -1,50 +1,122 @@
-import { beforeEach, expect, it, vi } from 'vitest'
-import { financial, ownerOrders, ownerUsage, retirePackage, savePrice, templates } from './sprint6Portal'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendContext } from './backendContext'
-const api = vi.hoisted(() => vi.fn())
-vi.mock('./analysisResult', async original => ({ ...await original<typeof import('./analysisResult')>(), authorizedApiResponse: api }))
-const id='11111111-1111-4111-8111-111111111111'
-const context: BackendContext={accountId:id,patientId:id,personalTenantId:id,firebaseUid:'fixture',displayName:'Fixture',profileVersion:1,roles:['SYSTEM_ADMIN']}
-const range={from:'2026-11-01T00:00:00Z',to:'2026-11-27T00:00:00Z'}
-const signal=()=>new AbortController().signal
-const json=(x:unknown)=>new Response(JSON.stringify(x))
-beforeEach(()=>api.mockReset())
-it('reads real backend order DTOs and maps personal owner to ACCOUNT',async()=>{
- api.mockResolvedValue(json({items:[{id,priceVersionId:id,packageName:'USD',amount:2.5,currency:'USD',credits:5,status:'COMPLETED',createdAt:range.from,updatedAt:range.to}],nextCursor:null,environment:'TEST'}))
- const result=await ownerOrders(context,{type:'PERSONAL',id},null,signal())
- expect(result.items[0]).toMatchObject({orderId:id,amount:2.5,currency:'USD',environment:'TEST'})
- expect(api.mock.calls[0][0]).toContain('ownerType=ACCOUNT')
-})
-it('reads ledger usage page without inventing missing balance aggregates',async()=>{
- api.mockResolvedValue(json({items:[{id,entryType:'RESERVE',balanceDelta:-5,balanceAfter:10,reservationUnits:5,orderId:null,reservationId:id,createdAt:range.from}],nextCursor:'next',environment:'TEST'}))
- const result=await ownerUsage(context,{type:'CLINIC',id},range,signal(),'previous')
- expect(result.items[0]).toMatchObject({entryType:'RESERVE',balanceDelta:-5,balanceAfter:10})
- expect(result.nextCursor).toBe('next')
- expect(api.mock.calls[0][0]).toContain('cursor=previous')
-})
-it('shows paid major-unit amounts by currency and environment',async()=>{
- api.mockResolvedValue(json({...range,groups:[{environment:'TEST',currency:'USD',paidOrders:1,paidAmount:2.5}]}))
- expect((await financial(context,range,signal())).groups).toEqual([{environment:'TEST',currency:'USD',orders:1,paidAmount:2.5}])
-})
-it('reads production template identity and event names',async()=>{
- api.mockResolvedValue(json({items:[{id,eventType:'ANALYSIS_COMPLETED',title:'AURA',body:'Đăng nhập để xem chi tiết.',enabled:true,version:1}]}))
- expect((await templates(context,signal()))[0]).toMatchObject({id,event:'ANALYSIS_COMPLETED'})
-})
-it('creates price with version zero and explicit stable command key',async()=>{
- api.mockImplementation(async()=>json({packageId:1,priceVersionId:id,displayName:'USD',amountMinor:250,currency:'USD',credits:5,status:'ACTIVE',version:1}))
- const input={displayName:'USD',amountMinor:250,currency:'USD',credits:5,reason:'Test'}
- await savePrice(context,input,signal(),undefined,id)
- await savePrice(context,input,signal(),undefined,id)
- expect(JSON.parse(api.mock.calls[0][4]).expectedVersion).toBe(0)
- expect(api.mock.calls[0][6]).toEqual({'Idempotency-Key':id})
- expect(api.mock.calls[1][6]).toEqual(api.mock.calls[0][6])
-})
-it('accepts retirement receipt at unchanged price version and sends key',async()=>{
- api.mockResolvedValue(json({packageId:1,priceVersionId:id,status:'RETIRED',version:2}))
- await retirePackage(context,1,{expectedVersion:2,reason:'Test'},signal(),id)
- expect(api.mock.calls[0][6]).toEqual({'Idempotency-Key':id})
-})
-it('rejects malformed money and clears no errors into fabricated zero',async()=>{
- api.mockResolvedValue(json({...range,groups:[{environment:'TEST',currency:'USD',paidOrders:1,paidAmount:null}]}))
- await expect(financial(context,range,signal())).rejects.toMatchObject({code:'ERR_INVALID_RESPONSE'})
+import { financial, ownerOrders, ownerUsage, retirePackage, savePrice, saveTemplate, templates } from './sprint6Portal'
+
+const authorized = vi.hoisted(() => vi.fn())
+vi.mock('./analysisResult', async load => ({
+  ...await load<typeof import('./analysisResult')>(),
+  authorizedApiResponse: authorized,
+}))
+
+const uuid = (suffix: number) => `90000000-0000-4000-8000-${String(suffix).padStart(12, '0')}`
+const context: BackendContext = {
+  accountId: uuid(1), patientId: uuid(2), personalTenantId: uuid(3),
+  firebaseUid: 'portal-test', displayName: 'Test account', profileVersion: 1, roles: ['SYSTEM_ADMIN'],
+}
+const personal = { type: 'PERSONAL', id: context.accountId } as const
+const clinic = { type: 'CLINIC', id: uuid(4) } as const
+const range = { from: '2026-11-20T00:00:00Z', to: '2026-11-21T00:00:00Z' }
+const signal = new AbortController().signal
+const response = (data: unknown) => Response.json(data)
+
+// Synthetic values in the exact camelCase shapes written by BillingCatalogEndpoints,
+// BillingHistoryRepository and PushTemplateEndpoints.
+const order = {
+  id: uuid(5), priceVersionId: uuid(6), packageName: 'Gói TEST', amount: 25000,
+  currency: 'VND', credits: 3, status: 'COMPLETED', createdAt: range.from, updatedAt: range.to,
+}
+const ledger = {
+  id: uuid(7), entryType: 'CAPTURE', balanceDelta: -2, balanceAfter: 0,
+  reservationUnits: 2, orderId: null, reservationId: uuid(8), createdAt: range.from,
+}
+const template = {
+  id: uuid(9), eventType: 'PAYMENT_SUCCESS', title: 'AURA',
+  body: 'Có thông báo mới. Đăng nhập để xem chi tiết.', enabled: true, version: 1,
+}
+const price = { displayName: 'Gói TEST', amountMinor: 1250, currency: 'USD', credits: 3, reason: 'Kiểm thử' }
+
+beforeEach(() => authorized.mockReset())
+
+describe('SCRUM-393 backend response contracts', () => {
+  it('maps PERSONAL to ACCOUNT using the session account ID and keeps CLINIC unchanged', async () => {
+    authorized.mockImplementation(async () => response({ items: [], nextCursor: null, environment: 'TEST' }))
+    await ownerOrders(context, personal, null, signal)
+    await ownerOrders(context, clinic, null, signal)
+    expect(authorized.mock.calls[0][0]).toContain(`ownerId=${context.accountId}&ownerType=ACCOUNT`)
+    expect(authorized.mock.calls[1][0]).toContain(`ownerId=${clinic.id}&ownerType=CLINIC`)
+    await expect(ownerOrders(context, { ...personal, id: context.patientId }, null, signal)).rejects.toHaveProperty('status', 403)
+    expect(authorized).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads a real-shaped order, then follows an opaque cursor into an empty page', async () => {
+    authorized.mockResolvedValueOnce(response({ items: [order], nextCursor: 'cursor_A', environment: 'TEST' }))
+      .mockResolvedValueOnce(response({ items: [], nextCursor: null, environment: 'TEST' }))
+    const first = await ownerOrders(context, personal, null, signal)
+    expect(first.items).toEqual([{ ...order, owner: personal, environment: 'TEST' }])
+    expect(first.nextCursor).toBe('cursor_A')
+    expect(await ownerOrders(context, personal, first.nextCursor, signal)).toEqual({
+      items: [], nextCursor: null, environment: 'TEST',
+    })
+    expect(authorized.mock.calls[1][0]).toContain('cursor=cursor_A')
+    authorized.mockResolvedValueOnce(response({
+      items: [{ ...order, amount: '25000' }], nextCursor: null, environment: 'TEST',
+    }))
+    await expect(ownerOrders(context, personal, null, signal)).rejects.toHaveProperty('code', 'ERR_INVALID_RESPONSE')
+  })
+
+  it('reads a paged usage ledger with negative deltas, real zero and nullable references', async () => {
+    authorized.mockResolvedValueOnce(response({ items: [ledger], nextCursor: 'ledger_B', environment: 'TEST' }))
+    const result = await ownerUsage(context, clinic, range, signal, 'ledger_A')
+    expect(result).toEqual({ items: [ledger], nextCursor: 'ledger_B', environment: 'TEST' })
+    const query = new URL(authorized.mock.calls[0][0], 'https://aura.invalid').searchParams
+    expect([...query.entries()]).toEqual(expect.arrayContaining([
+      ['ownerType', 'CLINIC'], ['cursor', 'ledger_A'], ['from', range.from], ['to', range.to],
+    ]))
+  })
+
+  it('keeps paid totals in major units and separate by environment and currency', async () => {
+    const groups = [
+      { environment: 'TEST', currency: 'VND', paidOrders: 0, paidAmount: 0 },
+      { environment: 'LIVE', currency: 'USD', paidOrders: 2, paidAmount: 12.50 },
+      { environment: 'LIVE', currency: 'EUR', paidOrders: 3, paidAmount: 19.95 },
+    ]
+    authorized.mockResolvedValueOnce(response({ ...range, groups }))
+      .mockResolvedValueOnce(response({ ...range, groups: [{ ...groups[1], paidAmount: null }] }))
+    expect(await financial(context, range, signal)).toEqual({ ...range, groups })
+    await expect(financial(context, range, signal)).rejects.toHaveProperty('code', 'ERR_INVALID_RESPONSE')
+  })
+
+  it('reads a canonical template ID and checks the updated receipt', async () => {
+    authorized.mockResolvedValueOnce(response({ items: [template] }))
+      .mockResolvedValueOnce(response({ ...template, enabled: false, version: 2 }))
+    const received = await templates(context, signal)
+    expect(received[0]).toMatchObject({ id: template.id, event: 'PAYMENT_SUCCESS', enabled: true })
+    await saveTemplate(context, template.id, {
+      title: template.title, body: template.body, enabled: false, expectedVersion: 1, reason: 'Kiểm thử',
+    }, signal)
+    expect(authorized.mock.calls[1][0]).toBe(`/api/v1/admin/notification-templates/${template.id}`)
+  })
+
+  it('publishes with expectedVersion zero and the explicit key and validates the canonical ACTIVE receipt', async () => {
+    authorized.mockResolvedValueOnce(response({
+      packageId: 42, priceVersionId: uuid(6), version: 1, displayName: price.displayName,
+      price: 12.50, amountMinor: 1250, currency: 'USD', credits: 3, status: 'ACTIVE',
+    }))
+    await savePrice(context, price, signal, undefined, uuid(10))
+    expect(authorized).toHaveBeenCalledWith('/api/v1/admin/billing/packages', context, signal, 'POST',
+      expect.any(String), undefined, { 'Idempotency-Key': uuid(10) })
+    expect(JSON.parse(authorized.mock.calls[0][4])).toEqual({ ...price, expectedVersion: 0 })
+  })
+
+  it('pins retirement to the selected immutable price snapshot', async () => {
+    const current = { id: 42, priceVersionId: uuid(6), version: 7 }
+    const receipt = { packageId: current.id, priceVersionId: current.priceVersionId, version: 7, status: 'RETIRED' }
+    authorized.mockResolvedValueOnce(response(receipt))
+      .mockResolvedValueOnce(response({ ...receipt, priceVersionId: uuid(11), version: 8 }))
+    await retirePackage(context, current, 'Kiểm thử', signal, uuid(10))
+    expect(authorized).toHaveBeenCalledWith('/api/v1/admin/billing/packages/42/status', context, signal, 'PATCH',
+      expect.any(String), undefined, { 'Idempotency-Key': uuid(10) })
+    expect(JSON.parse(authorized.mock.calls[0][4])).toEqual({ expectedVersion: 7, reason: 'Kiểm thử', status: 'RETIRED' })
+    await expect(retirePackage(context, current, 'Kiểm thử', signal, uuid(12))).rejects.toHaveProperty('code', 'ERR_INVALID_RESPONSE')
+  })
 })

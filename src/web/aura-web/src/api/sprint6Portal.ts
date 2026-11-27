@@ -15,6 +15,10 @@ export const clinicStatuses = ['PENDING', 'ACTIVE', 'SUSPENDED', 'REJECTED'] as 
 const accountStatuses = ['ACTIVE', 'DISABLED'] as const
 const environments = ['TEST', 'LIVE'] as const
 const packageStatuses = ['ACTIVE', 'RETIRED'] as const
+const templateEvents = ['ANALYSIS_COMPLETED', 'ANALYSIS_FAILED', 'PAYMENT_SUCCESS', 'HIGH_RISK_WARNING', 'CREDIT_LOW'] as const
+export const pushTemplateTitles = ['AURA', '{{app_name}}', 'Thông báo từ {{app_name}}'] as const
+export const pushTemplateBodies = ['Có thông báo mới. Đăng nhập để xem chi tiết.', 'Đăng nhập để xem chi tiết.',
+  '{{event_label}}. Đăng nhập để xem chi tiết.'] as const
 
 function invalid(): never { throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE') }
 function object(value: unknown): RecordValue {
@@ -31,10 +35,11 @@ function integer(value: unknown, min = 0) {
   return value
 }
 function count(value: unknown) { return value === null ? null : integer(value) }
-function money(value: unknown) {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER / 100) invalid()
+function majorAmount(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) invalid()
   return value
 }
+function nullableIdentifier(value: unknown) { return value === null ? null : identifier(value) }
 function date(value: unknown) {
   const iso = string(value)
   if (!Number.isFinite(Date.parse(iso))) invalid()
@@ -64,7 +69,8 @@ async function request(context: BackendContext, path: string, signal: AbortSigna
   if (signal.aborted) throw signal.reason
   return payload
 }
-function admin(context: BackendContext, path: string, signal: AbortSignal, method?: Method, body?: object, headers?: Record<string, string>) {
+function admin(context: BackendContext, path: string, signal: AbortSignal, method?: Method, body?: object,
+  headers?: Record<string, string>) {
   if (!context.roles.includes('SYSTEM_ADMIN')) throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
   return request(context, '/api/v1/admin' + path, signal, method, body, headers)
 }
@@ -81,22 +87,24 @@ export async function ownerOrders(context: BackendContext, owner: PortalOwner, c
   const query = new URLSearchParams({ ...ownerQuery(context, owner), ...paging(cursor) })
   const payload = object(await request(context, '/api/v1/billing/orders?' + query, signal))
   const environment = oneOf(payload.environment, environments)
-  return page(payload, value => {
+  return { environment, ...page(payload, value => {
     const row = object(value)
-    return { orderId: identifier(row.id), status: string(row.status), environment,
-      priceVersionId: identifier(row.priceVersionId), amount: money(row.amount), currency: currency(row.currency),
-      credits: integer(row.credits), createdAt: date(row.createdAt) }
-  })
+    return { id: identifier(row.id), priceVersionId: identifier(row.priceVersionId), packageName: string(row.packageName),
+      amount: majorAmount(row.amount), currency: currency(row.currency), credits: integer(row.credits),
+      status: string(row.status), createdAt: date(row.createdAt), updatedAt: date(row.updatedAt),
+      owner: { ...owner }, environment }
+  }) }
 }
-export async function ownerUsage(context: BackendContext, owner: PortalOwner, range: DateRange, signal: AbortSignal, cursor: string | null = null) {
+export async function ownerUsage(context: BackendContext, owner: PortalOwner, range: DateRange, signal: AbortSignal,
+  cursor: string | null = null) {
   const query = new URLSearchParams({ ...ownerQuery(context, owner), ...range, ...paging(cursor) })
-  const row = object(await request(context, '/api/v1/billing/usage?' + query, signal))
-  return { environment: oneOf(row.environment, environments), ...page(row, value => {
-    const item = object(value)
-    return { id: identifier(item.id), entryType: string(item.entryType), balanceDelta: integer(item.balanceDelta, Number.MIN_SAFE_INTEGER),
-      balanceAfter: integer(item.balanceAfter), reservationUnits: count(item.reservationUnits),
-      orderId: item.orderId === null ? null : identifier(item.orderId),
-      reservationId: item.reservationId === null ? null : identifier(item.reservationId), createdAt: date(item.createdAt) }
+  const payload = object(await request(context, '/api/v1/billing/usage?' + query, signal))
+  return { environment: oneOf(payload.environment, environments), ...page(payload, value => {
+    const row = object(value)
+    return { id: identifier(row.id), entryType: string(row.entryType),
+      balanceDelta: integer(row.balanceDelta, Number.MIN_SAFE_INTEGER), balanceAfter: integer(row.balanceAfter),
+      reservationUnits: count(row.reservationUnits), orderId: nullableIdentifier(row.orderId),
+      reservationId: nullableIdentifier(row.reservationId), createdAt: date(row.createdAt) }
   }) }
 }
 
@@ -128,7 +136,7 @@ export async function financial(context: BackendContext, range: DateRange, signa
   return { from: date(row.from), to: date(row.to), groups: array(row.groups, value => {
     const item = object(value)
     return { currency: currency(item.currency), environment: oneOf(item.environment, environments),
-      orders: integer(item.paidOrders), paidAmount: money(item.paidAmount) }
+      paidOrders: integer(item.paidOrders), paidAmount: majorAmount(item.paidAmount) }
   }) }
 }
 
@@ -177,16 +185,24 @@ export async function adminPackages(context: BackendContext, cursor: string | nu
 }
 export type PriceInput = { displayName: string; amountMinor: number; currency: string; credits: number; reason: string }
 export async function savePrice(context: BackendContext, input: PriceInput, signal: AbortSignal,
-  current?: { id: number; version: number }, commandId: string = crypto.randomUUID()) {
+  current: { id: number; version: number } | undefined, idempotencyKey: string) {
   const root = '/billing/packages'
-  const saved = price(await admin(context, current ? root + '/' + integer(current.id, 1) + '/price-versions' : root,
-    signal, 'POST', { ...input, expectedVersion: current?.version ?? 0 }, { 'Idempotency-Key': identifier(commandId) }))
-  if (current && (saved.id !== current.id || saved.version <= current.version)) invalid()
+  const expectedVersion = current ? integer(current.version, 1) : 0
+  const saved = object(await admin(context, current ? root + '/' + integer(current.id, 1) + '/price-versions' : root,
+    signal, 'POST', { ...input, expectedVersion }, { 'Idempotency-Key': identifier(idempotencyKey) }))
+  const packageId = integer(saved.packageId, 1)
+  identifier(saved.priceVersionId)
+  majorAmount(saved.price)
+  if (saved.status !== 'ACTIVE' || (current && packageId !== current.id) || integer(saved.version, 1) <= expectedVersion ||
+    saved.displayName !== input.displayName.trim() || saved.amountMinor !== input.amountMinor ||
+    saved.currency !== input.currency || saved.credits !== input.credits) invalid()
 }
-export async function retirePackage(context: BackendContext, id: number, change: VersionChange, signal: AbortSignal, commandId: string = crypto.randomUUID()) {
-  const row = object(await admin(context, '/billing/packages/' + integer(id, 1) + '/status', signal, 'PATCH',
-    { ...change, status: 'RETIRED' }, { 'Idempotency-Key': identifier(commandId) }))
-  if (row.packageId !== id || row.status !== 'RETIRED' || integer(row.version, 1) !== change.expectedVersion) invalid()
+export async function retirePackage(context: BackendContext, current: { id: number; version: number; priceVersionId: string },
+  reason: string, signal: AbortSignal, commandId: string) {
+  const row = object(await admin(context, '/billing/packages/' + integer(current.id, 1) + '/status', signal, 'PATCH',
+    { expectedVersion: integer(current.version, 1), reason, status: 'RETIRED' }, { 'Idempotency-Key': identifier(commandId) }))
+  if (row.packageId !== current.id || row.status !== 'RETIRED' || integer(row.version, 1) !== current.version ||
+    identifier(row.priceVersionId) !== identifier(current.priceVersionId)) invalid()
 }
 function config(value: unknown) {
   const row = object(value)
@@ -206,17 +222,20 @@ export async function saveAiConfig(context: BackendContext, data: VersionChange 
 function template(value: unknown) {
   const row = object(value)
   if (typeof row.enabled !== 'boolean') invalid()
-  return { id: identifier(row.id), event: oneOf(row.eventType, ['ANALYSIS_COMPLETED', 'ANALYSIS_FAILED', 'PAYMENT_SUCCESS',
-    'HIGH_RISK_WARNING', 'CREDIT_LOW']), title: string(row.title), body: string(row.body),
-  enabled: row.enabled, version: integer(row.version, 1) }
+  return { id: identifier(row.id), event: oneOf(row.eventType, templateEvents),
+    title: oneOf(row.title, pushTemplateTitles), body: oneOf(row.body, pushTemplateBodies),
+    enabled: row.enabled, version: integer(row.version, 1) }
 }
 export async function templates(context: BackendContext, signal: AbortSignal) {
   return array(object(await admin(context, '/notification-templates', signal)).items, template)
 }
 export async function saveTemplate(context: BackendContext, id: string, data: VersionChange &
   { title: string; body: string; enabled: boolean }, signal: AbortSignal) {
+  if (!pushTemplateTitles.some(title => title === data.title) || !pushTemplateBodies.some(body => body === data.body))
+    throw new AnalysisResultError(400, 'ERR_INVALID_PUSH_TEMPLATE')
   const saved = template(await admin(context, '/notification-templates/' + identifier(id), signal, 'PUT', data))
-  if (saved.id !== id || saved.version <= data.expectedVersion) invalid()
+  if (saved.id !== id || saved.version <= data.expectedVersion || saved.title !== data.title ||
+    saved.body !== data.body || saved.enabled !== data.enabled) invalid()
 }
 export async function audit(context: BackendContext, range: DateRange, cursor: string | null, signal: AbortSignal) {
   ensureAdmin(context)
@@ -230,7 +249,7 @@ export function portalError(cause: unknown) {
   if (!(cause instanceof AnalysisResultError)) return 'Không kết nối được API. Vui lòng thử lại.'
   if (cause.status === 401) return 'Phiên đăng nhập đã thay đổi. Vui lòng đăng nhập lại.'
   if (cause.status === 403) return 'Tài khoản hiện không có quyền truy cập dữ liệu này.'
-  if (cause.status === 404) return 'Dữ liệu hoặc chức năng này chưa có trên môi trường hiện tại.'
+  if (cause.status === 404 || cause.status === 405) return 'Dữ liệu hoặc chức năng này chưa có trên môi trường hiện tại.'
   if (cause.status === 409) return 'Phiên bản đã thay đổi. Hãy tải lại dữ liệu trước khi thực hiện lại.'
   if (cause.status === 429) return 'Quá nhiều yêu cầu. Vui lòng thử lại sau.'
   if (cause.code === 'ERR_INVALID_RESPONSE') return 'Phản hồi API không đúng hợp đồng dữ liệu.'

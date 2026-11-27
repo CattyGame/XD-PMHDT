@@ -6,7 +6,7 @@ const uid = 'm5-synthetic-browser-fixture'
 const encoded = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
 const token = `${encoded({ alg: 'none' })}.${encoded({ sub: uid, iat: Math.floor(Date.now() / 1000),
   exp: Math.floor(Date.now() / 1000) + 3600, firebase: { sign_in_provider: 'password' } })}.fixture`
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgaGD4DwAChAGA+gVWHQAAAABJRU5ErkJggg==', 'base64')
 
 // Hermetic UI contract checks: every Firebase/API response is synthetic and intercepted.
 async function fixture(page: Page, roles = ['DOCTOR', 'PATIENT'], research = false) {
@@ -135,7 +135,9 @@ async function openDoctor(page: Page) {
   await page.getByRole('button', { name: 'Tải worklist' }).click()
   await page.getByRole('button', { name: 'Mở chi tiết' }).click()
   await expect(page.getByRole('heading', { name: 'Kết luận của bác sĩ' })).toBeVisible()
-  await expect(page.getByRole('img', { name: 'Ảnh võng mạc gốc' }).first()).toHaveAttribute('src', /^blob:/)
+  const original = page.getByRole('img', { name: 'Ảnh võng mạc gốc' }).first()
+  await expect(original).toHaveAttribute('src', /^blob:/)
+  await expect.poll(() => original.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
 }
 
 test('MOCK: SCRUM-393 admin catalog binds the price version and reloads after conflict on mobile', async ({ page }) => {
@@ -149,6 +151,7 @@ test('MOCK: SCRUM-393 admin catalog binds the price version and reloads after co
     return route.fulfill({ json: { items: [item], nextCursor: null } })
   })
   await page.route(packageRoot + '/42/price-versions', route => {
+    expect(route.request().headers()['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/i)
     expect(route.request().postDataJSON()).toEqual({ expectedVersion: 7, displayName: item.displayName, amountMinor: 30000,
       currency: 'VND', credits: 4, reason: 'Giá kiểm thử' })
     return route.fulfill({ status: 409, json: { error: { code: 'ERR_CONCURRENT_UPDATE' } } })
@@ -396,9 +399,9 @@ test('MOCK: SCRUM-394 resends the same message, catches up through pages, and cl
     messageId: id(100 + index), clientMessageId: id(200 + index), conversationId,
     senderAccountId, text, sentAt: new Date(start + index * 1000).toISOString(), deliveryState: 'PERSISTED',
   })
-  const messages = [knownMessage(0, 'Tin đã lưu từ bác sĩ')]
+  const messages: ReturnType<typeof knownMessage>[] = []
   const postIds: string[] = []
-  let unread = 1, revoked = false, joins = 0, nextPageReads = 0
+  let unread = 0, revoked = false, joins = 0, nextPageReads = 0
   let socket: WebSocketRoute | undefined
   const frame = (value: object) => JSON.stringify(value) + '\u001e'
   function broadcast(target: string, argument: object) {
@@ -446,7 +449,7 @@ test('MOCK: SCRUM-394 resends the same message, catches up through pages, and cl
         return route.abort('failed')
       }
       expect(body.clientMessageId).toBe(postIds[0])
-      const saved = messages[1]
+      const saved = messages.find(message => message.clientMessageId === body.clientMessageId)!
       broadcast('MessagePersisted', { ...saved, type: 'MessagePersisted' })
       broadcast('MessagePersisted', { ...saved, type: 'MessagePersisted' })
       return route.fulfill({ json: saved })
@@ -460,9 +463,17 @@ test('MOCK: SCRUM-394 resends the same message, catches up through pages, and cl
       nextBeforeId: offset + rows.length < sorted.length ? rows.at(-1)?.messageId : null } })
   })
   await page.goto('/consultations')
-  await page.getByRole('button', { name: /Ca .*1 chưa đọc/ }).click()
+  await page.getByRole('button', { name: /Ca / }).click()
   await expect(page.getByText('Đang nhận tin trực tiếp')).toBeVisible()
+  await expect(page.getByText('Chưa có tin nhắn.')).toBeVisible()
+  for (let index = -22; index < 0; index++) messages.push(knownMessage(index, 'Tin đầu tiên ' + index))
+  messages.push(knownMessage(0, 'Tin đã lưu từ bác sĩ'))
+  unread = 1
+  await socket?.close({ code: 1011 })
+  await expect.poll(() => joins).toBe(2)
+  await expect(page.getByText('Tin đầu tiên -22', { exact: true })).toBeAttached()
   await expect(page.getByText('Tin đã lưu từ bác sĩ')).toBeVisible()
+  await expect(page.getByText('1 chưa đọc')).toBeVisible()
   await page.getByRole('button', { name: 'Đánh dấu đã đọc' }).click()
   await expect(page.getByText('1 chưa đọc')).toHaveCount(0)
   const synthetic = '<img src=x onerror=alert(1)> Nội dung thử'
@@ -475,10 +486,10 @@ test('MOCK: SCRUM-394 resends the same message, catches up through pages, and cl
   await expect(page.getByRole('list', { name: 'Tin nhắn đã lưu' }).locator('img')).toHaveCount(0)
   for (let index = 2; index <= 24; index++) messages.push(knownMessage(index, 'Tin phục hồi ' + index))
   await socket?.close({ code: 1011 })
-  await expect.poll(() => joins).toBe(2)
+  await expect.poll(() => joins).toBe(3)
   await expect(page.getByText('Tin phục hồi 2', { exact: true })).toBeAttached()
   await expect(page.getByText('Tin phục hồi 24', { exact: true })).toBeAttached()
-  expect(nextPageReads).toBeGreaterThan(0)
+  expect(nextPageReads).toBeGreaterThanOrEqual(2)
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
   await composer.fill('Bản nháp riêng tư')
   await page.evaluate(() => window.dispatchEvent(new Event('offline')))

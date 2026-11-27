@@ -1,14 +1,15 @@
 import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, useParams } from 'react-router-dom'
 import type { BackendContext } from '../../api/backendContext'
+import { AnalysisResultError } from '../../api/analysisResult'
 import { accounts, accountRoles, adminPackages, aiConfig, analytics, audit, changeAccount, changeClinicStatus,
   changeDoctorCapability, clinics, clinicStatuses, financial, retirePackage, saveAiConfig, savePrice, saveTemplate,
-  templates, type DateRange, type PriceInput } from '../../api/sprint6Portal'
+  templates, pushTemplateTitles, pushTemplateBodies, type DateRange, type PriceInput } from '../../api/sprint6Portal'
 import { useBackendSession } from '../../auth/backendSession'
 import BackendSessionNotice from '../../auth/BackendSessionNotice'
 import styles from '../billing/billing.module.css'
 import PortalSection, { AnalyticsCards, DateRangeForm, PortalTable } from './PortalSection'
-import { defaultRange, formatCount, formatDate, formatRange } from './display'
+import { defaultRange, formatCount, formatDate, formatMoney, formatRange } from './display'
 import portal from './portal.module.css'
 
 const sections = {
@@ -19,23 +20,19 @@ type Section = keyof typeof sections
 const nextPage = (result: { nextCursor: string | null }) => result.nextCursor
 const value = (data: FormData, key: string) => String(data.get(key) ?? '').trim()
 
-function Editor({ title, busy, onSubmit, children, reasonMax = 1000 }: {
-  title: string; busy: boolean; onSubmit: (data: FormData, commandId: string) => void; children: ReactNode; reasonMax?: number
+function Editor({ title, busy, onSubmit, children, reasonMaxLength = 1000, initialReason }: {
+  title: string; busy: boolean; onSubmit: (data: FormData) => void; children: ReactNode; reasonMaxLength?: number
+  initialReason?: string
 }) {
-  const intent = useRef<{ fingerprint: string; key: string } | null>(null)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
-    if (!busy && value(data, 'reason')) {
-      const fingerprint = JSON.stringify(Array.from(data.entries()))
-      if (intent.current?.fingerprint !== fingerprint) intent.current = { fingerprint, key: crypto.randomUUID() }
-      onSubmit(data, intent.current.key)
-    }
+    if (!busy && value(data, 'reason')) onSubmit(data)
   }
   return <form onSubmit={submit}><fieldset className={portal.editor} disabled={busy}>
     <legend>{title}</legend>
     {children}
-    <label>Lý do <input name="reason" required maxLength={reasonMax} pattern=".*\S.*" /></label>
+    <label>Lý do <input name="reason" defaultValue={initialReason} required maxLength={reasonMaxLength} pattern=".*\S.*" /></label>
     <button type="submit">Lưu thay đổi</button>
   </fieldset></form>
 }
@@ -46,11 +43,11 @@ function Dashboard({ context, range }: { context: BackendContext; range: DateRan
       {data => <AnalyticsCards data={data} />}
     </PortalSection>
     <PortalSection title="Tổng hợp thanh toán" read={signal => financial(context, range, signal)}>
-      {data => <><p className={styles.muted}>{formatRange(data)} · Số tiền thanh toán theo từng tiền tệ; chưa trừ hoàn tiền</p>
-        <PortalTable columns={['Tiền tệ', 'Môi trường', 'Đơn thành công', 'Số tiền thanh toán']}>
+      {data => <><p className={styles.muted}>{formatRange(data)}</p>
+        <PortalTable columns={['Tiền tệ', 'Môi trường', 'Đơn đã thanh toán', 'Số tiền đã thanh toán']}>
           {data.groups.map(row => <tr key={row.currency + row.environment}>
-            <td>{row.currency}</td><td>{row.environment}</td><td>{formatCount(row.orders)}</td>
-            <td>{row.paidAmount.toLocaleString('vi-VN', { style: 'currency', currency: row.currency })}</td>
+            <td>{row.currency}</td><td>{row.environment}</td><td>{formatCount(row.paidOrders)}</td>
+            <td>{formatMoney(row.paidAmount, row.currency)}</td>
           </tr>)}</PortalTable></>}
     </PortalSection>
   </>
@@ -110,37 +107,72 @@ function Clinics({ context }: { context: BackendContext }) {
 }
 
 type Package = Awaited<ReturnType<typeof adminPackages>>['items'][number]
-function PriceEditor({ current, busy, save }: { current?: Package; busy: boolean; save: (price: PriceInput, commandId: string) => void }) {
-  return <Editor reasonMax={250} title={current ? 'Tạo phiên bản giá' : 'Tạo gói và giá ban đầu'} busy={busy} onSubmit={(data, key) => {
+function PriceEditor({ current, draft, busy, save }: {
+  current?: Package; draft?: PriceInput; busy: boolean; save: (price: PriceInput) => void
+}) {
+  return <Editor title={current ? 'Tạo phiên bản giá' : 'Tạo gói và giá ban đầu'} busy={busy}
+    reasonMaxLength={250} initialReason={draft?.reason} onSubmit={data => {
     const amountMinor = Number(value(data, 'amount')), credits = Number(value(data, 'credits'))
     const displayName = value(data, 'name')
     if (displayName && Number.isSafeInteger(amountMinor) && Number.isSafeInteger(credits))
-      save({ displayName, amountMinor, credits, currency: value(data, 'currency'), reason: value(data, 'reason') }, key)
+      save({ displayName, amountMinor, credits, currency: value(data, 'currency'), reason: value(data, 'reason') })
   }}>
     <div className={portal.editorRow}>
-      <label>Tên gói <input name="name" defaultValue={current?.name} required maxLength={100} pattern=".*\S.*" /></label>
+      <label>Tên gói <input name="name" defaultValue={draft?.displayName ?? current?.name} required maxLength={100} pattern=".*\S.*" /></label>
       <label>Giá theo đơn vị nhỏ nhất <input name="amount" type="number" step="1" min="0"
-        max={Number.MAX_SAFE_INTEGER} defaultValue={current?.amount} required /></label>
-      <label>Mã tiền tệ <input name="currency" defaultValue={current?.currency ?? 'VND'} required pattern="[A-Z]{3}" /></label>
+        max={Number.MAX_SAFE_INTEGER} defaultValue={draft?.amountMinor ?? current?.amount} required /></label>
+      <label>Mã tiền tệ <input name="currency" defaultValue={draft?.currency ?? current?.currency ?? 'VND'} required pattern="[A-Z]{3}" /></label>
       <label>Credit <input name="credits" type="number" step="1" min="1" max={Number.MAX_SAFE_INTEGER}
-        defaultValue={current?.credits} required /></label>
+        defaultValue={draft?.credits ?? current?.credits} required /></label>
     </div>
   </Editor>
 }
 
+function canRetryCatalogChange(cause: unknown) {
+  return cause instanceof AnalysisResultError &&
+    (cause.retryable || cause.status === 429 || cause.status >= 500 || cause.code === 'ERR_INVALID_RESPONSE')
+}
+
 function Catalog({ context }: { context: BackendContext }) {
+  const [conflictDraft, setConflictDraft] = useState<{ packageId: number | null; input: PriceInput } | null>(null)
+  const priceIntent = useRef<{ payload: string; key: string } | null>(null)
+  function writePrice(input: PriceInput, current?: Package) {
+    const target = current ? { id: current.id, version: current.version } : undefined
+    const payload = JSON.stringify({ target, input })
+    return async (signal: AbortSignal) => {
+      if (priceIntent.current?.payload !== payload) {
+        priceIntent.current = { payload, key: crypto.randomUUID() }
+      }
+      try {
+        await savePrice(context, input, signal, target, priceIntent.current.key)
+        priceIntent.current = null
+        if (!signal.aborted) setConflictDraft(null)
+      } catch (cause) {
+        if (!canRetryCatalogChange(cause)) priceIntent.current = null
+        if (!signal.aborted && cause instanceof AnalysisResultError && cause.status === 409)
+          setConflictDraft({ packageId: target?.id ?? null, input })
+        throw cause
+      }
+    }
+  }
   return <PortalSection title="Danh mục gói và phiên bản giá" cursor={nextPage}
     read={(signal, cursor) => adminPackages(context, cursor, signal)}>
     {(data, mutate, busy) => <>
-      <details><summary>Tạo gói khám</summary><PriceEditor busy={busy} save={(price, key) => void mutate(signal => savePrice(context, price, signal, undefined, key))} /></details>
+      <details open={conflictDraft?.packageId === null || undefined}><summary>Tạo gói khám</summary><PriceEditor busy={busy}
+        draft={conflictDraft?.packageId === null ? conflictDraft.input : undefined}
+        save={price => void mutate(writePrice(price), canRetryCatalogChange)} /></details>
       <PortalTable columns={['Gói khám', 'Giá (đơn vị nhỏ nhất)', 'Credit', 'Trạng thái', 'Phiên bản', 'Thao tác']}>
         {data.items.map(row => <tr key={row.priceVersionId}>
           <td>{row.name}</td><td>{formatCount(row.amount)} {row.currency}</td><td>{formatCount(row.credits)}</td>
           <td>{row.status}</td><td>{row.version}<br /><small>{row.priceVersionId}</small></td>
-          <td>{row.status === 'ACTIVE' && <details><summary>Quản lý giá</summary>
-            <PriceEditor current={row} busy={busy} save={(price, key) => void mutate(signal => savePrice(context, price, signal, row, key))} />
-            <Editor title="Ngừng bán gói" reasonMax={250} busy={busy} onSubmit={(data, key) => void mutate(signal => retirePackage(context,
-              row.id, { expectedVersion: row.version, reason: value(data, 'reason') }, signal, key))}>
+          <td>{row.status === 'ACTIVE' && <details open={conflictDraft?.packageId === row.id || undefined}><summary>Quản lý giá</summary>
+            <PriceEditor current={row} busy={busy} draft={conflictDraft?.packageId === row.id ? conflictDraft.input : undefined}
+              save={price => void mutate(writePrice(price, row), canRetryCatalogChange)} />
+            <Editor title="Ngừng bán gói" busy={busy} reasonMaxLength={250} onSubmit={data => {
+              const commandId = crypto.randomUUID()
+              const reason = value(data, 'reason')
+              void mutate(signal => retirePackage(context, row, reason, signal, commandId), canRetryCatalogChange)
+            }}>
               <p>Ngừng tạo đơn mới cho gói này.</p>
             </Editor>
           </details>}</td>
@@ -168,27 +200,16 @@ function Ai({ context }: { context: BackendContext }) {
 
 function TemplateEditor({ item, busy, save }: { item: Awaited<ReturnType<typeof templates>>[number]; busy: boolean;
   save: (data: { title: string; body: string; enabled: boolean; reason: string }) => void }) {
-  const [error, setError] = useState('')
-  return <Editor title={item.event} busy={busy} onSubmit={data => {
-    const title = value(data, 'title'), body = value(data, 'body')
-    const generic = (text: string) => !/[{}<>]|https?:\/\/|www\./i.test(text.replace(/\{\{(?:app_name|event_label)\}\}/g, ''))
-    if (!title || !body || !generic(title) || !generic(body)) {
-      setError('Chỉ dùng văn bản chung và biến {{app_name}}, {{event_label}}.')
-      return
-    }
-    setError('')
-    save({ title, body, enabled: data.has('enabled'), reason: value(data, 'reason') })
-  }}>
+  return <Editor title={item.event} busy={busy} reasonMaxLength={250} onSubmit={data =>
+    save({ title: value(data, 'title'), body: value(data, 'body'), enabled: data.has('enabled'), reason: value(data, 'reason') })}>
     <p className={styles.muted}>Phiên bản {item.version} · Biến hỗ trợ {'{{app_name}}'} và {'{{event_label}}'}</p>
     <label>Tiêu đề <select name="title" defaultValue={item.title}>
-      {['AURA', '{{app_name}}', 'Thông báo từ {{app_name}}'].map(text => <option key={text}>{text}</option>)}
+      {pushTemplateTitles.map(title => <option key={title}>{title}</option>)}
     </select></label>
     <label>Nội dung <select name="body" defaultValue={item.body}>
-      {['Có thông báo mới. Đăng nhập để xem chi tiết.', 'Đăng nhập để xem chi tiết.', '{{event_label}}. Đăng nhập để xem chi tiết.']
-        .map(text => <option key={text}>{text}</option>)}
+      {pushTemplateBodies.map(body => <option key={body}>{body}</option>)}
     </select></label>
     <label><input type="checkbox" name="enabled" defaultChecked={item.enabled} /> Bật mẫu thông báo</label>
-    {error && <p className={styles.error} role="alert">{error}</p>}
   </Editor>
 }
 

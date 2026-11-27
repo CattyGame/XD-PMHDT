@@ -94,6 +94,9 @@ test('MOCK: 100 uploads survive offline and a lost acknowledgement, then refresh
   let completed = 0
   let offline = false
   let lostItem: ManifestItem | undefined
+  let interruptedItem: ManifestItem | undefined
+  let interruptPending!: () => void
+  const pendingInterruption = new Promise<void>(resolve => { interruptPending = resolve })
   const puts: string[] = []
   const events: string[] = []
   const logs: string[] = []
@@ -150,12 +153,18 @@ test('MOCK: 100 uploads survive offline and a lost acknowledgement, then refresh
       active++
       peak = Math.max(peak, active)
       try {
+        // Keep one request in flight so each browser has a failed, unstaged file to retry.
+        if (!interruptedItem) {
+          interruptedItem = item
+          await pendingInterruption
+          return await route.abort('internetdisconnected')
+        }
         uploaded.add(item.itemId)
         item.uploadStatus = 'STAGED'
         if (uploaded.size === 5 && !lostItem) {
           lostItem = item
           offline = true
-          await context.setOffline(true)
+          try { await context.setOffline(true) } finally { interruptPending() }
           return await route.abort('internetdisconnected')
         }
         await route.fulfill({ json: item })
@@ -231,10 +240,11 @@ test('MOCK: 100 uploads survive offline and a lost acknowledgement, then refresh
 
   await context.setOffline(false)
   offline = false
-  // Select one failed file other than the one already staged on the server.
-  const retry = retryButtons.filter({ hasNotText: `Thử lại ${lostItem!.fileName}` }).first()
-  const retryName = (await retry.innerText()).trim().replace(/^Thử lại /, '')
-  const retryId = items.find(item => item.fileName === retryName)!.itemId
+  // Retry the interrupted file. The server already staged the file with the lost acknowledgement.
+  expect(interruptedItem).toBeDefined()
+  expect(interruptedItem!.itemId).not.toBe(lostItem!.itemId)
+  const retry = page.getByRole('button', { name: `Thử lại ${interruptedItem!.fileName}`, exact: true })
+  const retryId = interruptedItem!.itemId
   const retryStart = events.length
   await retry.click()
   await expect(page.getByRole('progressbar', { name: 'Tiến độ lưu ảnh lên máy chủ' })).toHaveAttribute('value', '6')
