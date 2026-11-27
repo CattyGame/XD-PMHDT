@@ -393,3 +393,198 @@ def test_w6_m4_03_docs_remove_stale_mock_claim_and_include_v2_sections():
     assert "16. Cập nhật Dataset Registry & Protocol Đo V2" in dataset_card
     assert "7. Model Card V2 Addendum" in model_card
     assert "OPEN_NOT_PASSED" in model_card and "OPEN_NOT_PASSED" in dataset_card
+
+
+def _config_headers(keypair, client_id: str = "analysis-api", scope: str = "ai:config") -> Dict[str, str]:
+    now = int(time.time())
+    token = sign_rs256_jwt(
+        keypair,
+        header={"alg": "RS256", "typ": "JWT", "kid": keypair.key_id},
+        payload={
+            "iss": DEFAULT_ISSUER,
+            "aud": DEFAULT_AUDIENCE,
+            "sub": VALID_SUB,
+            "client_id": client_id,
+            "scope": scope,
+            "iat": now,
+            "nbf": now,
+            "exp": now + 300,
+        },
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_w6_m4_04_internal_config_auth_enforces_401_403_and_allows_analysis_api_scope(monkeypatch, tmp_path: Path):
+    keypair = generate_deterministic_rsa_keypair(seed=20261126, bits=2048)
+    monkeypatch.setenv("AURA_AI_ENGINE", "frangi")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "false")
+    monkeypatch.setenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM", keypair.public_pem)
+    monkeypatch.delenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPath", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPem", raising=False)
+    registry = RuntimeManifestRegistry(state_path=tmp_path / "runtime-state.json")
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", registry)
+
+    client = TestClient(app)
+    assert client.get("/internal/v1/ai/config").status_code == 401
+    # Worker scope (ai:analyze) and worker client_id must both fail 403 on internal config endpoint
+    worker_headers = _config_headers(keypair, client_id=EXPECTED_CLIENT_ID, scope=DEFAULT_REQUIRED_SCOPE)
+    assert client.get("/internal/v1/ai/config", headers=worker_headers).status_code == 403
+    wrong_client_headers = _config_headers(keypair, client_id=EXPECTED_CLIENT_ID, scope="ai:config")
+    assert client.get("/internal/v1/ai/config", headers=wrong_client_headers).status_code == 403
+
+    admin_client_headers = _config_headers(keypair, client_id="analysis-api", scope="ai:config")
+    ok_resp = client.get("/internal/v1/ai/config", headers=admin_client_headers)
+    assert ok_resp.status_code == 200
+    assert ok_resp.json()["version"] == 1
+
+
+def test_w6_m4_05_put_changes_real_inference_even_with_env_override_and_persists_restart(monkeypatch, tmp_path: Path):
+    keypair = generate_deterministic_rsa_keypair(seed=20261127, bits=2048)
+    state_file = tmp_path / "runtime-state.json"
+    monkeypatch.setenv("AURA_AI_ENGINE", "frangi")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "false")
+    monkeypatch.setenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM", keypair.public_pem)
+    monkeypatch.delenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPath", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPem", raising=False)
+    # Simulate stale env var present on container: once admin promotes v1.3, env must NOT override active state
+    monkeypatch.setenv("AURA_FRANGI_CONFIG_PATH", str(AI_CORE_DIR / "config" / "ai-frangi.yaml"))
+
+    registry = RuntimeManifestRegistry(state_path=state_file)
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", registry)
+    client = TestClient(app)
+
+    cfg_headers = _config_headers(keypair, client_id="analysis-api", scope="ai:config")
+    analyze_headers = _config_headers(keypair, client_id=EXPECTED_CLIENT_ID, scope=DEFAULT_REQUIRED_SCOPE)
+
+    baseline_req = {
+        "request_id": str(uuid.uuid4()),
+        "patient_id": None,
+        "modality": "FUNDUS",
+        "mode": "retina_vessels",
+        "image_base64": make_synthetic_fundus_png_b64(),
+        "include_mask": True,
+        "include_overlay": True,
+    }
+    base_resp = client.post("/api/v1/analyze", json=baseline_req, headers=analyze_headers)
+    assert base_resp.status_code == 200
+    assert base_resp.json()["config_version"] == "s3-frangi-1.0.0"
+
+    v13_sha = "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087"
+    v13_id = "11111111-1111-4111-8111-111111110405"
+    inflight_snapshot = registry.get_active_snapshot()
+
+    put_resp = client.put(
+        "/internal/v1/ai/config",
+        json={
+            "expectedVersion": 1,
+            "artifactManifestId": v13_id,
+            "thresholdConfigSha256": v13_sha,
+            "reason": "live promote v1.3",
+        },
+        headers={**cfg_headers, "Idempotency-Key": "idem-promote-1"},
+    )
+    assert put_resp.status_code == 200
+    assert put_resp.json()["version"] == 2
+    assert put_resp.json()["artifactManifestId"] == v13_id
+
+    # In-flight pinned snapshot keeps baseline config while new inference uses promoted v1.3
+    assert inflight_snapshot.config.config_version == "s3-frangi-1.0.0"
+    v13_req = {**baseline_req, "request_id": str(uuid.uuid4())}
+    v13_resp = client.post("/api/v1/analyze", json=v13_req, headers=analyze_headers)
+    assert v13_resp.status_code == 200
+    assert v13_resp.json()["config_version"] == "s45-frangi-1.3.0"
+    assert v13_resp.json()["risk_available"] is True
+
+    # Lost-ACK replay with both Idempotency-Key and expectedVersion=1 (without key) returns version=2 without bumping
+    replay_with_key = client.put(
+        "/internal/v1/ai/config",
+        json={
+            "expectedVersion": 1,
+            "artifactManifestId": v13_id,
+            "thresholdConfigSha256": v13_sha,
+            "reason": "live promote v1.3",
+        },
+        headers={**cfg_headers, "Idempotency-Key": "idem-promote-1"},
+    )
+    assert replay_with_key.status_code == 200
+    assert replay_with_key.json()["version"] == 2
+
+    replay_no_key = client.put(
+        "/internal/v1/ai/config",
+        json={
+            "expectedVersion": 1,
+            "artifactManifestId": v13_id,
+            "thresholdConfigSha256": v13_sha,
+            "reason": "live promote v1.3",
+        },
+        headers=cfg_headers,
+    )
+    assert replay_no_key.status_code == 200
+    assert replay_no_key.json()["version"] == 2
+
+    # Different payload on stale expectedVersion=1 fails 409
+    stale_diff = client.put(
+        "/internal/v1/ai/config",
+        json={
+            "expectedVersion": 1,
+            "artifactManifestId": v13_id,
+            "thresholdConfigSha256": v13_sha,
+            "reason": "different command",
+        },
+        headers=cfg_headers,
+    )
+    assert stale_diff.status_code == 409
+
+    # Recreated registry instance (process restart simulation) preserves v2 and allows rollback to v3
+    restarted = RuntimeManifestRegistry(state_path=state_file)
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", restarted)
+    assert restarted.get_active_snapshot().version == 2
+    assert restarted.get_active_snapshot().config.config_version == "s45-frangi-1.3.0"
+
+    rb_resp = client.post(
+        "/internal/v1/ai/config/rollback",
+        json={"expectedVersion": 2, "reason": "rollback after restart"},
+        headers=cfg_headers,
+    )
+    assert rb_resp.status_code == 200
+    assert rb_resp.json()["version"] == 3
+    assert resolve_active_frangi_config().config_version == "s3-frangi-1.0.0"
+
+
+def test_w6_m4_06_corrupted_state_and_integrated_smoke_failure_fail_closed_503(monkeypatch, tmp_path: Path):
+    keypair = generate_deterministic_rsa_keypair(seed=20261128, bits=2048)
+    monkeypatch.setenv("AURA_AI_ENGINE", "frangi")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "false")
+    monkeypatch.setenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM", keypair.public_pem)
+    monkeypatch.delenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPath", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPem", raising=False)
+
+    corrupt_path = tmp_path / "corrupt-state.json"
+    corrupt_path.write_text('{"schemaVersion": "1.0", "current": {"version": -1}}', encoding="utf-8")
+    corrupt_reg = RuntimeManifestRegistry(state_path=corrupt_path)
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", corrupt_reg)
+
+    client = TestClient(app)
+    assert client.get("/ready").status_code == 503
+    assert client.get("/internal/v1/ai/config", headers=_config_headers(keypair)).status_code == 503
+
+    # Integrated mode smoke verification fails closed 503 when artifacts are missing/invalid
+    good_reg = RuntimeManifestRegistry(state_path=tmp_path / "good-state.json")
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", good_reg)
+    monkeypatch.setenv("AURA_INTEGRATED_RESEARCH_ENABLED", "true")
+    monkeypatch.delenv("AURA_AVR_MODEL_PATH", raising=False)
+    with pytest.raises(RuntimeManifestError) as err:
+        good_reg.activate_manifest(
+            {
+                "expectedVersion": 1,
+                "artifactManifestId": "11111111-1111-4111-8111-111111110405",
+                "thresholdConfigSha256": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+                "reason": "missing integrated artifacts",
+            },
+            smoke_runner=default_smoke_runner,
+        )
+    assert err.value.status_code == 503
+    assert good_reg.get_active_snapshot().version == 1

@@ -141,6 +141,7 @@ jobs:
         shell: bash
         env:
           AURA_M2_ARTIFACTS: ${{ runner.temp }}/adr005/m2-responses
+          AURA_M1_ARTIFACTS: ${{ runner.temp }}/adr005/m1-responses
         run: |
           status=0
           for component in analysis billing worker m1; do
@@ -174,6 +175,7 @@ jobs:
         run: |
           node scripts/validate_analysis_responses.cjs --self-test 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
           node scripts/validate_analysis_responses.cjs "${{ runner.temp }}/adr005/m2-responses/analysis-responses.json" 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
+          node scripts/validate_billing_responses.cjs "${{ runner.temp }}/adr005/m1-responses" 2>&1 | tee -a "$RUNNER_TEMP/adr005/contracts.log"
 
       - name: Reapply migrations against the populated candidate database
         id: upgrade
@@ -209,6 +211,14 @@ jobs:
           --configuration Release --no-launch-profile
           2>&1 | tee "$RUNNER_TEMP/adr005/notification-tests.log"
 
+      - name: Cross-service consultation socket, FCM and revoke checks
+        id: consultation_cross
+        shell: bash
+        run: >-
+          dotnet run --project tests/AURA.Notification.ConsultationChecks/AURA.Notification.ConsultationChecks.csproj
+          --configuration Release --no-build --no-launch-profile -- --database
+          2>&1 | tee "$RUNNER_TEMP/adr005/consultation-cross-checks.log"
+
       - name: Generate candidate artifact with honest remaining release blockers
         if: always()
         shell: bash
@@ -221,6 +231,7 @@ jobs:
           PROFILE_RESULT: ${{ steps.profile.outcome }}
           NOTIFICATION_RESULT: ${{ steps.notification.outcome }}
           CONSULTATION_RESULT: ${{ steps.consultation.outcome }}
+          CONSULTATION_CROSS_RESULT: ${{ steps.consultation_cross.outcome }}
         run: |
           check_status() { if [ "$1" = success ]; then printf PASS; else printf BLOCKED; fi; }
           if [ "$CONTRACT_RESPONSE_RESULT" != success ]; then CONTRACT_RESULT=failure; fi
@@ -237,7 +248,8 @@ jobs:
             --check "contract-tests=$(check_status "$CONTRACT_RESULT")" --evidence "contract-tests=$RUNNER_TEMP/adr005/contracts.log" \
             --check "profile-security=$(check_status "$PROFILE_RESULT")" --evidence "profile-security=$RUNNER_TEMP/adr005/profile-security.log" \
             --check "notification-tests=$(check_status "$NOTIFICATION_RESULT")" --evidence "notification-tests=$RUNNER_TEMP/adr005/notification-tests.log" \
-            --check "consultation-tests=$(check_status "$CONSULTATION_RESULT")" --evidence "consultation-tests=$RUNNER_TEMP/adr005/consultation-tests.log"
+            --check "consultation-tests=$(check_status "$CONSULTATION_RESULT")" --evidence "consultation-tests=$RUNNER_TEMP/adr005/consultation-tests.log" \
+            --check "consultation-cross-checks=$(check_status "$CONSULTATION_CROSS_RESULT")" --evidence "consultation-cross-checks=$RUNNER_TEMP/adr005/consultation-cross-checks.log"
 
       - name: Upload TRX, migration logs and candidate JSON
         if: always()

@@ -126,6 +126,7 @@ paths:
                           - ANALYSIS_COMPLETED
                           - ANALYSIS_FAILED
                           - PAYMENT_SUCCESS
+                          - CONSULTATION_MESSAGE
                         title:
                           type: string
                         isRead:
@@ -140,7 +141,7 @@ paths:
                           format: date-time
                         targetPath:
                           type: string
-                          pattern: '^/(?:(?:analyses|batches)/[0-9a-fA-F-]{36}(?:\?clinicContextId=[0-9a-fA-F-]{36})?|billing/orders/[0-9a-fA-F-]{36})$'
+                          pattern: '^/(?:(?:analyses|batches)/[0-9a-fA-F-]{36}(?:\?clinicContextId=[0-9a-fA-F-]{36})?|billing/orders/[0-9a-fA-F-]{36}|consultations/[0-9a-fA-F-]{36})$'
                         orderId:
                           type:
                           - string
@@ -160,7 +161,23 @@ paths:
                             orderId:
                               type: string
                               format: uuid
-                        else:
+                      - if:
+                          properties:
+                            type:
+                              const: CONSULTATION_MESSAGE
+                        then:
+                          properties:
+                            analysisId:
+                              type: 'null'
+                            orderId:
+                              type: 'null'
+                      - if:
+                          properties:
+                            type:
+                              enum:
+                              - ANALYSIS_COMPLETED
+                              - ANALYSIS_FAILED
+                        then:
                           properties:
                             analysisId:
                               type: string

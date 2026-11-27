@@ -19,27 +19,6 @@ public static class BillingCatalogEndpoints
             return Results.Ok(new PackageCatalogResponse(prices, "postgres", false, 0, repo.ReadCount));
         }).WithName("GetPackageCatalog").WithTags("Package Catalog").Produces<PackageCatalogResponse>();
 
-        // Public user-token route. Billing itself resolves current BILLING_READ authority for this exact clinic.
-        app.MapGet("/api/v1/billing/summary", async Task<IResult> (HttpContext context, string ownerType,
-            Guid ownerId, DateTimeOffset from, DateTimeOffset to, BillingOwnerAuthorizer auth,
-            BillingHistoryRepository repo, CancellationToken ct) =>
-        {
-            context.Response.Headers.CacheControl = "no-store";
-            ownerType = ownerType.ToUpperInvariant();
-            if (ownerType != "CLINIC" || ownerId == Guid.Empty || from.Offset != TimeSpan.Zero
-                || to.Offset != TimeSpan.Zero || !ValidRange(from, to)) return Invalid(context);
-            var rights = await auth.AuthorizeAsync(context.Request, ownerType, ownerId, false, ct);
-            if (!rights.Allowed)
-                return Error(context, rights.StatusCode, rights.Code, "Billing owner access denied.", rights.StatusCode == 503);
-            return Results.Ok(new
-            {
-                from,
-                to,
-                groups = await repo.OwnerSummaryAsync(ownerType, ownerId, rights.TenantId,
-                    from.UtcDateTime, to.UtcDateTime, ct)
-            });
-        }).WithName("GetClinicBillingSummary").WithTags("Billing Summary");
-
         var admin = app.MapGroup("/api/v1/admin/billing");
         admin.AddEndpointFilter(async (context, next) =>
         {
@@ -50,6 +29,42 @@ public static class BillingCatalogEndpoints
             SystemAdminAuthorizer auth, CancellationToken ct) => Publish(null, body, context, repo, auth, ct));
         admin.MapPost("/packages/{packageId:int}/price-versions", (int packageId, PublishPriceRequest body, HttpContext context,
             PackageRepository repo, SystemAdminAuthorizer auth, CancellationToken ct) => Publish(packageId, body, context, repo, auth, ct));
+        admin.MapGet("/packages", async Task<IResult> (HttpContext context, PackageRepository repo,
+            SystemAdminAuthorizer auth, int? limit, string? cursor, CancellationToken ct) =>
+        {
+            var rights = await auth.AuthorizeAsync(context.Request, ct);
+            if (!rights.Allowed) return Error(context, rights.StatusCode, rights.Code, rights.Message, rights.Retryable);
+            var take = limit ?? 20; var after = 0;
+            if (take is < 1 or > 100) return Invalid(context);
+            if (cursor is not null)
+            {
+                try
+                {
+                    if (cursor.Length>32 || !int.TryParse(Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(cursor)),
+                        NumberStyles.None,CultureInfo.InvariantCulture,out after) || after<1) return Invalid(context);
+                }
+                catch (FormatException) { return Invalid(context); }
+            }
+            var rows = await repo.ListAdminAsync(after,take+1,ct);
+            var items = rows.Take(take).ToArray();
+            var nextCursor = rows.Count>take ? WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(
+                items[^1].PackageId.ToString(CultureInfo.InvariantCulture))) : null;
+            return Results.Ok(new { items, nextCursor });
+        });
+        admin.MapPatch("/packages/{packageId:int}/status", async Task<IResult> (int packageId, RetirePackageRequest body,
+            HttpContext context, PackageRepository repo, SystemAdminAuthorizer auth, CancellationToken ct) =>
+        {
+            var rights = await auth.AuthorizeAsync(context.Request,ct);
+            if (!rights.Allowed) return Error(context,rights.StatusCode,rights.Code,rights.Message,rights.Retryable);
+            var keys = context.Request.Headers["Idempotency-Key"];
+            if (packageId<1 || body.ExpectedVersion<1 || body.Status!="RETIRED" || string.IsNullOrWhiteSpace(body.Reason)
+                || body.Reason.Length>250 || keys.Count!=1 || !Guid.TryParse(keys[0],out var key) || key==Guid.Empty) return Invalid(context);
+            var result = await repo.RetireAsync(packageId,body,rights.AccountId,key,context.TraceIdentifier,ct);
+            if (result.Conflict) return Error(context,409,"ERR_VERSION_CONFLICT","Package version or idempotency key changed.");
+            if (result.Price is not { } price) return Error(context,404,"ERR_PACKAGE_NOT_FOUND","Package not found.");
+            if (result.Replayed) context.Response.Headers["Idempotent-Replayed"]="true";
+            return Results.Ok(new { packageId, priceVersionId=price.Id, version=price.VersionNumber, status="RETIRED" });
+        });
         admin.MapGet("/summary", async Task<IResult> (HttpContext context, BillingHistoryRepository repo,
             SystemAdminAuthorizer auth, DateTimeOffset? from, DateTimeOffset? to, CancellationToken ct) =>
         {
@@ -62,6 +77,18 @@ public static class BillingCatalogEndpoints
             return Results.Ok(new { from = start, to = end, groups = await repo.SummaryAsync(start.UtcDateTime, end.UtcDateTime, ct) });
         });
 
+        app.MapGet("/api/v1/billing/summary", async Task<IResult> (HttpContext context, string ownerType, Guid ownerId,
+            DateTimeOffset from, DateTimeOffset to, BillingOwnerAuthorizer auth, BillingHistoryRepository repo,
+            BillingRuntimeOptions billing, CancellationToken ct) =>
+        {
+            context.Response.Headers.CacheControl="no-store";
+            if (ownerType != "CLINIC" || !ValidOwner(ownerType,ownerId) || from.Offset != TimeSpan.Zero
+                || to.Offset != TimeSpan.Zero || !ValidRange(from,to)) return Invalid(context);
+            var rights = await auth.AuthorizeAsync(context.Request,ownerType,ownerId,false,ct);
+            if (!rights.Allowed) return Error(context,rights.StatusCode,rights.Code,"Billing owner access denied.",rights.StatusCode==503);
+            return Results.Ok(new { from,to,groups=await repo.OwnerSummaryAsync(ownerType,ownerId,rights.TenantId,
+                billing.Environment,from.UtcDateTime,to.UtcDateTime,ct) });
+        });
         app.MapGet("/api/v1/billing/orders", async Task<IResult> (HttpContext context, string ownerType, Guid ownerId,
             int? limit, string? cursor, BillingOwnerAuthorizer auth, BillingHistoryRepository repo, BillingRuntimeOptions billing, CancellationToken ct) =>
         {
@@ -105,7 +132,7 @@ public static class BillingCatalogEndpoints
         if (publication.Conflict) return Error(context, 409, "ERR_VERSION_CONFLICT", "Package version or idempotency key changed.");
         if (publication.Price is not { } price) return Error(context, 404, "ERR_PACKAGE_NOT_FOUND", "Package not found.");
         var result = new { price.PackageId, priceVersionId = price.Id, version = price.VersionNumber, price.DisplayName,
-            price = price.PriceAmount, amountMinor = body.AmountMinor, currency = price.CurrencyCode, price.Credits };
+            price = price.PriceAmount, amountMinor = body.AmountMinor, currency = price.CurrencyCode, price.Credits, status = "ACTIVE" };
         if (publication.Replayed)
         {
             context.Response.Headers["Idempotent-Replayed"] = "true";

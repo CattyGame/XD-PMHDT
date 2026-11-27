@@ -48,6 +48,9 @@ public static class AnalysisServiceClients
         services.AddHttpClient<ICreditReservations, BillingReservationsClient>(client => Configure(client, "Billing"))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
             .RedactLoggedHeaders(new[] { "Authorization", "X-User-Authorization" });
+        services.AddHttpClient<IAiRuntimeConfigClient, HttpAiRuntimeConfigClient>(client => Configure(client, "Ai"))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            .RedactLoggedHeaders(new[] { "Authorization" });
         return services;
     }
 }

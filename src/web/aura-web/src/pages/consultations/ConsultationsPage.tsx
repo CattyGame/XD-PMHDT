@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react'
-import { Link, Navigate, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import type { BackendContext } from '../../api/backendContext'
 import { chatId, consultationError, createConsultation, eligibleDoctors, isChatDenied, listConsultations,
   validChatText, type Consultation } from '../../api/consultations'
@@ -125,15 +125,19 @@ function Thread({ context, conversation, changed, revoked }: {
   </section>
 }
 
-function Workspace({ context, scope }: { context: BackendContext; scope?: Scope }) {
+function Workspace({ context, scope, initialConversationId }: {
+  context: BackendContext; scope?: Scope; initialConversationId?: string
+}) {
   const [listing, setListing] = useState<Listing>()
   const [error, setError] = useState('')
+  const [deepLinkDenied, setDeepLinkDenied] = useState(false)
   const [revokedNotice, setRevokedNotice] = useState(false)
   const [revokedIds, setRevokedIds] = useState<ReadonlySet<string>>(new Set())
   const [listDenied, setListDenied] = useState(false)
   const [active, setActive] = useState<Consultation>()
   const [cursor, setCursor] = useState<string | null>(null)
   const [reload, setReload] = useState(0)
+  const userSelectedRef = useRef(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const update = useCallback(() => {
     if (timer.current) return
@@ -161,7 +165,22 @@ function Workspace({ context, scope }: { context: BackendContext; scope?: Scope 
       setListing(page)
       setError('')
       setListDenied(false)
-      setActive(previous => page.items.find(item => item.conversationId === previous?.conversationId) ?? previous)
+      const matchedTarget = initialConversationId
+        ? page.items.find(item => item.conversationId.toLowerCase() === initialConversationId)
+        : undefined
+      if (initialConversationId && !cursor && !matchedTarget && !userSelectedRef.current) {
+        setDeepLinkDenied(true)
+        setActive(undefined)
+        return
+      }
+      setDeepLinkDenied(false)
+      setActive(previous => {
+        if (previous) {
+          return page.items.find(item => item.conversationId === previous.conversationId) ?? previous
+        }
+        return !userSelectedRef.current && matchedTarget && !revokedIds.has(matchedTarget.conversationId)
+          ? matchedTarget : undefined
+      })
     }).catch(cause => {
       if (controller.signal.aborted) return
       setError(consultationError(cause))
@@ -172,7 +191,7 @@ function Workspace({ context, scope }: { context: BackendContext; scope?: Scope 
       }
     })
     return () => controller.abort()
-  }, [context, cursor, reload])
+  }, [context, cursor, reload, initialConversationId, revokedIds])
 
   const visible = listing?.items.filter(item => !revokedIds.has(item.conversationId) &&
     (!scope || item.clinicContextId === scope.clinicContextId)) ?? []
@@ -180,6 +199,8 @@ function Workspace({ context, scope }: { context: BackendContext; scope?: Scope 
     <nav aria-label="Điều hướng"><Link to="/">Trang chủ</Link> / Tư vấn</nav>
     <h1>Tư vấn</h1>
     {scope && !revokedNotice && !listDenied && <NewConsultation context={context} scope={scope} open={conversation => {
+      userSelectedRef.current = true
+      setDeepLinkDenied(false)
       setRevokedIds(previous => {
         const next = new Set(previous)
         next.delete(conversation.conversationId)
@@ -188,6 +209,7 @@ function Workspace({ context, scope }: { context: BackendContext; scope?: Scope 
       setActive(conversation); setRevokedNotice(false); update()
     }} />}
     {revokedNotice && <p role="alert" className={surfaces.error}>403 · Quyền truy cập cuộc trò chuyện đã thay đổi.</p>}
+    {deepLinkDenied && !revokedNotice && <p role="alert" className={surfaces.error}>403 · Không tìm thấy cuộc trò chuyện hoặc bạn không còn quyền truy cập.</p>}
     <div className={styles.workspace}>
       <section className={surfaces.panel} aria-label="Danh sách cuộc trò chuyện">
         <h2>Cuộc trò chuyện</h2>
@@ -197,7 +219,7 @@ function Workspace({ context, scope }: { context: BackendContext; scope?: Scope 
         <ul className={styles.conversations}>{visible.map(conversation => <li key={conversation.conversationId}>
           <button type="button" className={active?.conversationId === conversation.conversationId ? '' : surfaces.secondary}
             aria-pressed={active?.conversationId === conversation.conversationId}
-            onClick={() => { setRevokedNotice(false); setActive(conversation) }}>
+            onClick={() => { userSelectedRef.current = true; setDeepLinkDenied(false); setRevokedNotice(false); setActive(conversation) }}>
             <span>Ca {conversation.analysisId.slice(0, 8)}</span>
             {conversation.unreadCount > 0 && <span className={styles.badge}>{conversation.unreadCount} chưa đọc</span>}
             {conversation.status === 'CLOSED' && <small>Đã đóng</small>}
@@ -225,12 +247,15 @@ function Workspace({ context, scope }: { context: BackendContext; scope?: Scope 
 export default function ConsultationsPage() {
   const { state } = useBackendSession()
   const [query] = useSearchParams()
+  const { conversationId: rawConversationId } = useParams<{ conversationId?: string }>()
   if (state.status !== 'ready') return <BackendSessionNotice />
   const context = state.context
   if (!context.roles.includes('PATIENT') && !context.roles.includes('DOCTOR')) return <Navigate to="/403" replace />
+  if (rawConversationId !== undefined && !chatId(rawConversationId)) return <Navigate to="/403" replace />
+  const initialConversationId = rawConversationId ? rawConversationId.toLowerCase() : undefined
   const analysisId = query.get('analysisId'), clinicId = query.get('clinicContextId')
   const scope = chatId(analysisId) && chatId(clinicId)
     ? { analysisId: analysisId.toLowerCase(), clinicContextId: clinicId.toLowerCase() } : undefined
-  return <Workspace key={[context.firebaseUid, context.accountId, context.profileVersion, scope?.clinicContextId, scope?.analysisId].join(':')}
-    context={context} scope={scope} />
+  return <Workspace key={[context.firebaseUid, context.accountId, context.profileVersion, scope?.clinicContextId, scope?.analysisId, initialConversationId].join(':')}
+    context={context} scope={scope} initialConversationId={initialConversationId} />
 }

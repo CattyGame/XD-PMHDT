@@ -12,8 +12,21 @@ describe('SCRUM-355 — FCM điều hướng và quyền riêng tư', () => {
   it('preserves payment and batch targets without accepting tokens or external routes', () => {
     expect(safeNotificationPath(`/billing/orders/${id}`)).toBe(`/billing/orders/${id}`)
     expect(safeNotificationPath(`/batches/${id}`)).toBe(`/batches/${id}`)
+    expect(safeNotificationPath(`/consultations/${id}`)).toBe(`/consultations/${id}`)
+    expect(safeNotificationPath(`/consultations/${id}?clinicContextId=${id}`)).toBeNull()
+    expect(safeNotificationPath(`/consultations/${id}?token=secret`)).toBeNull()
     expect(safeNotificationPath(`/batches/${id}?token=secret`)).toBeNull()
     expect(safeNotificationPath(`https://example.com/batches/${id}`)).toBeNull()
+  })
+  it('strips leaked chat PHI in foreground toast while keeping consultation targetPath', () => {
+    const item = safeForegroundToast({
+      messageId: 'm-chat',
+      notification: { title: 'Bác sĩ Nguyễn A', body: 'Bệnh nhân bị xuất huyết võng mạc nặng' },
+      data: { targetPath: `/consultations/${id}` },
+    })
+    expect(item.title).toBe('AURA - Có thông báo mới')
+    expect(item.body).toBe('Mở AURA để xem chi tiết.')
+    expect(item.targetPath).toBe(`/consultations/${id}`)
   })
   it('AC3: chỉ nhận route phân tích hợp lệ, cùng analysisId', () => {
     expect(safeAnalysisPath(`/analyses/${id}`, id)).toBe(`/analyses/${id}`)

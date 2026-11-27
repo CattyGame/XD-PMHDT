@@ -172,15 +172,15 @@ public sealed class PostgresBillingInvariantsTests
 
         var from=DateTime.UtcNow.AddMinutes(-5);
         var to=DateTime.UtcNow.AddMinutes(5);
-        var totals=await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",f.Owner,f.Tenant,from,to,default);
+        var totals=await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",f.Owner,f.Tenant,"TEST",from,to,default);
         var total=Assert.Single(totals);
         Assert.Equal("TEST",total.Environment);
         Assert.Equal("VND",total.Currency);
         Assert.Equal(1,total.PaidOrders);
         Assert.Equal(100000m,total.PaidAmount);
-        Assert.Empty(await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",f.Owner,Guid.NewGuid(),from,to,default));
-        Assert.Empty(await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",Guid.NewGuid(),f.Tenant,from,to,default));
-        Assert.Empty(await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",f.Owner,f.Tenant,to.AddMinutes(1),to.AddMinutes(2),default));
+        Assert.Empty(await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",f.Owner,Guid.NewGuid(),"TEST",from,to,default));
+        Assert.Empty(await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",Guid.NewGuid(),f.Tenant,"TEST",from,to,default));
+        Assert.Empty(await new BillingHistoryRepository(f.Runtime).OwnerSummaryAsync("CLINIC",f.Owner,f.Tenant,"TEST",to.AddMinutes(1),to.AddMinutes(2),default));
     }
 
     private sealed class Fixture : IAsyncDisposable

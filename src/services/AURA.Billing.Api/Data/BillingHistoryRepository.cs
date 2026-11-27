@@ -48,19 +48,19 @@ public sealed class BillingHistoryRepository(NpgsqlDataSource source)
             GROUP BY o.environment,o.currency_code_snapshot ORDER BY o.environment,o.currency_code_snapshot
             """, r => new BillingMoneyTotal(r.GetString(0), r.GetString(1), r.GetInt64(2), r.GetDecimal(3)), ct, from, to);
 
-    public Task<List<BillingMoneyTotal>> OwnerSummaryAsync(string ownerType, Guid ownerId, Guid tenantId,
+    public Task<List<BillingMoneyTotal>> OwnerSummaryAsync(string ownerType, Guid ownerId, Guid tenant, string environment,
         DateTime from, DateTime to, CancellationToken ct) =>
         ReadAsync("""
             SELECT o.environment,o.currency_code_snapshot,count(*),sum(o.price_amount_snapshot)
             FROM billing.orders o
-            WHERE o.tenant_id=$1 AND o.billing_owner_type=$2 AND o.billing_owner_id=$3
+            WHERE o.tenant_id=$1 AND o.billing_owner_type=$2 AND o.billing_owner_id=$3 AND o.environment=$4
               AND o.status='COMPLETED' AND EXISTS (
-                  SELECT 1 FROM billing.payments p WHERE p.order_id=o.id AND p.status='SUCCESS'
-                      AND p.amount=o.price_amount_snapshot AND p.currency=o.currency_code_snapshot
-                      AND p.updated_at >= $4 AND p.updated_at < $5)
+                SELECT 1 FROM billing.payments p WHERE p.order_id=o.id AND p.status='SUCCESS'
+                    AND p.amount=o.price_amount_snapshot AND p.currency=o.currency_code_snapshot
+                    AND p.updated_at >= $5 AND p.updated_at < $6)
             GROUP BY o.environment,o.currency_code_snapshot ORDER BY o.environment,o.currency_code_snapshot
-            """, r => new BillingMoneyTotal(r.GetString(0), r.GetString(1), r.GetInt64(2), r.GetDecimal(3)), ct,
-            tenantId, ownerType, ownerId, from, to);
+            """, r => new BillingMoneyTotal(r.GetString(0),r.GetString(1),r.GetInt64(2),r.GetDecimal(3)),ct,
+            tenant,ownerType,ownerId,environment,from,to);
 
     private async Task<List<T>> ReadAsync<T>(string sql, Func<NpgsqlDataReader, T> read, CancellationToken ct, params object[] args)
     {

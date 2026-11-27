@@ -92,9 +92,9 @@
       "code": "W6-M6-04",
       "jira": "SCRUM-396",
       "owner": "M6",
-      "status": "OPEN",
-      "evidence": "Blocked on W6-M2-04 (SCRUM-391), W6-M5-02 (SCRUM-394), W6-M2-02 (SCRUM-385)",
-      "scopeReductionPlan": "If consultation hub / FCM cross-test prerequisites miss freeze 2026-11-20 18:00 UTC+7, keep W6-M6-04 as explicit Sprint 7 entry defect and verify socket-revoke + generic push before Sprint 7 QA gate."
+      "status": "VERIFIED",
+      "evidence": "Verified W6-M6-04 cross-service Chat/FCM/Alert & open-socket revocation: ConsultationChecks 17/17 checks (6 TC-W6-M6-04 cross-service + 11 baseline, --database, 0 skipped; socket close assign=428ms, member=846ms, account=836ms <= 5000ms), Profile MultiTenantChecks 47/47 (--database) + 21/21 HTTP, Notification InboxChecks 27/27, Analysis Alert tests 10/10, M1 NotificationTests 11/11, Vitest 569/569 (58 files), Playwright mock E2E 16/16; fixed CONSULTATION_MESSAGE /consultations/{id} deep-link & re-auth.",
+      "scopeReductionPlan": "N/A - verified"
     },
     {
       "code": "W6-M1-01/02/04",

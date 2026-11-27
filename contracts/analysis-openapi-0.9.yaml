@@ -1467,6 +1467,12 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          description: AI Core runtime config authority unavailable; fail closed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     put:
       tags:
       - Analyses
@@ -1474,6 +1480,12 @@ paths:
       summary: Validate and atomically activate a verified server-side AI artifact manifest (SYSTEM_ADMIN only)
       security:
       - bearerAuth: []
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema: { type: string, minLength: 1, maxLength: 128 }
+        description: Optional idempotency token preventing double increment on lost-ACK retries.
       requestBody:
         required: true
         content:

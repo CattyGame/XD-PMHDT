@@ -1,7 +1,7 @@
 import type { MessagePayload } from 'firebase/messaging'
 
 const analysisRoute = /^\/analyses\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
-const notificationRoute = /^\/(?:analyses|batches|billing\/orders)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const notificationRoute = /^\/(?:analyses|batches|billing\/orders|consultations)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const allowedTitles = new Set([
   'Phân tích ảnh đáy mắt hoàn tất',
   'Phân tích ảnh đáy mắt không thành công',
@@ -33,7 +33,7 @@ export function safeNotificationPath(path: unknown, analysisId?: unknown): strin
   if (!target || query === undefined) return target
   const params = new URLSearchParams(query)
   const clinics = params.getAll('clinicContextId')
-  if (target.startsWith('/billing/') || clinics.length !== 1 ||
+  if (target.startsWith('/billing/') || target.startsWith('/consultations/') || clinics.length !== 1 ||
     [...params.keys()].some(key => key !== 'clinicContextId') || !analysisRoute.test('/analyses/' + clinics[0]) ||
     clinics[0] === '00000000-0000-0000-0000-000000000000') return null
   return `${target}?clinicContextId=${clinics[0].toLowerCase()}`
