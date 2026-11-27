@@ -67,6 +67,8 @@ Fixture riêng, loopback, dữ liệu tổng hợp: PostgreSQL 17, RabbitMQ 4, A
 
 Workflow bắt buộc `adr005-postgres.yml` đã thêm xuất `AURA_M1_ARTIFACTS` và chạy response validator. Thiếu sample/schema hoặc sai DTO phải fail, không dùng file response tự điền để làm CI xanh.
 
+Kiểm tra trước merge còn phát hiện `Run-Checks.ps1` trên nền develop chờ 42 migration và kết thúc ở 021, trong khi initializer đã có migration 022 siết quyền audit. Đã tái hiện lỗi và cập nhật assertion kiểm đúng 43 bước, bắt buộc 022 chạy cuối sau audit/camera/catalog; không bỏ kiểm tra hoặc thay migration runtime.
+
 Billing OpenAPI v0.5.0 SHA-256: `f3d40ee424ff05653333edabcf6c157abeb9350d574614728132b417200db5e3`.
 
 Các log local nằm trong `.superpowers/m1-sprint6-fix-20261127/` (ignored), gồm RED/GREEN và kết quả cuối; không commit cấu hình fixture chứa mật khẩu. Bốn tài liệu đang có thay đổi của người dùng đã kiểm SHA-256 không đổi, không đưa vào bản sửa M1.
