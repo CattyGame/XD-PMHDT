@@ -39,6 +39,30 @@ beforeEach(() => { request.mockReset() })
 afterEach(cleanup)
 
 describe('SCRUM-393 protected portal', () => {
+  it('keeps the price intent and idempotency key after a lost acknowledgement', async () => {
+    let attempts = 0
+    request.mockImplementation(async (_path, _context, _signal, method) => {
+      if (method === 'POST') {
+        if (++attempts === 1) throw new AnalysisResultError(503, 'ERR_DEPENDENCY_UNAVAILABLE')
+        return json({ ...price, version: 8 })
+      }
+      return json({ nextCursor: null, items: [price] })
+    })
+    open('/admin/catalog')
+    fireEvent.click(await screen.findByText('Quản lý giá'))
+    const editor = screen.getByRole('group', { name: 'Tạo phiên bản giá' })
+    fireEvent.change(within(editor).getByLabelText('Lý do'), { target: { value: 'Retry same intent' } })
+    fireEvent.click(within(editor).getByRole('button', { name: 'Lưu thay đổi' }))
+    await screen.findByRole('alert')
+    expect(within(editor).getByLabelText('Lý do')).toHaveProperty('value', 'Retry same intent')
+    fireEvent.click(within(editor).getByRole('button', { name: 'Lưu thay đổi' }))
+    await screen.findByText('Đã lưu thay đổi.')
+    const writes = request.mock.calls.filter(([, , , method]) => method === 'POST')
+    expect(writes).toHaveLength(2)
+    expect(writes[0][6]['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/)
+    expect(writes[1][6]).toEqual(writes[0][6])
+    expect(writes[1][4]).toBe(writes[0][4])
+  })
   it('blocks non-admin accounts before reading an admin endpoint', async () => {
     open('/admin/catalog', ['PATIENT'])
     expect(await screen.findByText('403 fixture')).toBeTruthy()
@@ -105,18 +129,16 @@ describe('SCRUM-393 protected portal', () => {
       if (path === '/api/v1/clinics') return json({ items: [{ clinicId, clinicName: 'Phòng khám thử',
         role: 'CLINIC_ADMIN', status: 'ACTIVE' }] })
       if (path.includes('ownerType=CLINIC')) throw new AnalysisResultError(403, 'ERR_FORBIDDEN')
-      if (path.includes('/orders?')) return json({ nextCursor: null, items: [{ orderId, ownerId: accountId,
-        ownerType: 'PERSONAL', environment: 'TEST', status: 'COMPLETED', priceVersionId: id(8),
-        amountMinor: 200, currency: 'VND', credits: 2, createdAt: time }] })
-      return json({ ...range, ownerId: accountId, ownerType: 'PERSONAL', environment: 'TEST', availableCredits: 8,
-        reservedCredits: 0, capturedCreditsInPeriod: 2, releasedCreditsInPeriod: 0, refundedCreditsInPeriod: 0 })
+      if (path.includes('/orders?')) return json({ nextCursor: null, environment: 'TEST', items: [{ id: orderId, status: 'COMPLETED', priceVersionId: id(8),
+        amount: 200, currency: 'VND', credits: 2, createdAt: time }] })
+      return json({items: [], nextCursor: null, environment: 'TEST'})
     })
     open('/billing/history', ['PATIENT'])
     expect(await screen.findByRole('link', { name: orderId })).toBeTruthy()
     await screen.findByRole('option', { name: 'Phòng khám thử' })
     fireEvent.change(screen.getByLabelText('Chủ ví'), { target: { value: clinicId } })
     expect(screen.queryByText(orderId)).toBeNull()
-    expect((await screen.findByRole('alert')).textContent).toMatch(/không có quyền/)
+    expect((await screen.findAllByRole('alert'))[0].textContent).toMatch(/không có quyền/)
     await waitFor(() => expect(request.mock.calls.some(([path]) => path.includes('ownerId=' + clinicId))).toBe(true))
   })
 
@@ -181,6 +203,6 @@ it('uses canonical account roles and clears current account data after revoked a
   const editor = screen.getByRole('group', { name: 'Trạng thái tài khoản' })
   fireEvent.change(within(editor).getByLabelText('Lý do'), { target: { value: 'Synthetic status test' } })
   fireEvent.click(within(editor).getByRole('button', { name: 'Lưu thay đổi' }))
-  expect((await screen.findByRole('alert')).textContent).toMatch(/không có quyền/)
+  expect((await screen.findAllByRole('alert'))[0].textContent).toMatch(/không có quyền/)
   expect(screen.queryByText('Account fixture')).toBeNull()
 })

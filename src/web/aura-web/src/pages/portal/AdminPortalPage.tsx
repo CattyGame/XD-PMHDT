@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, useParams } from 'react-router-dom'
 import type { BackendContext } from '../../api/backendContext'
 import { accounts, accountRoles, adminPackages, aiConfig, analytics, audit, changeAccount, changeClinicStatus,
@@ -19,18 +19,23 @@ type Section = keyof typeof sections
 const nextPage = (result: { nextCursor: string | null }) => result.nextCursor
 const value = (data: FormData, key: string) => String(data.get(key) ?? '').trim()
 
-function Editor({ title, busy, onSubmit, children }: {
-  title: string; busy: boolean; onSubmit: (data: FormData) => void; children: ReactNode
+function Editor({ title, busy, onSubmit, children, reasonMax = 1000 }: {
+  title: string; busy: boolean; onSubmit: (data: FormData, commandId: string) => void; children: ReactNode; reasonMax?: number
 }) {
+  const intent = useRef<{ fingerprint: string; key: string } | null>(null)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
-    if (!busy && value(data, 'reason')) onSubmit(data)
+    if (!busy && value(data, 'reason')) {
+      const fingerprint = JSON.stringify(Array.from(data.entries()))
+      if (intent.current?.fingerprint !== fingerprint) intent.current = { fingerprint, key: crypto.randomUUID() }
+      onSubmit(data, intent.current.key)
+    }
   }
   return <form onSubmit={submit}><fieldset className={portal.editor} disabled={busy}>
     <legend>{title}</legend>
     {children}
-    <label>Lý do <input name="reason" required maxLength={1000} pattern=".*\S.*" /></label>
+    <label>Lý do <input name="reason" required maxLength={reasonMax} pattern=".*\S.*" /></label>
     <button type="submit">Lưu thay đổi</button>
   </fieldset></form>
 }
@@ -41,11 +46,11 @@ function Dashboard({ context, range }: { context: BackendContext; range: DateRan
       {data => <AnalyticsCards data={data} />}
     </PortalSection>
     <PortalSection title="Tổng hợp thanh toán" read={signal => financial(context, range, signal)}>
-      {data => <><p className={styles.muted}>{formatRange(data)} · Số tiền ở đơn vị nhỏ nhất của từng tiền tệ</p>
-        <PortalTable columns={['Tiền tệ', 'Môi trường', 'Đơn thành công', 'Tổng tiền', 'Hoàn tiền', 'Thực thu']}>
+      {data => <><p className={styles.muted}>{formatRange(data)} · Số tiền thanh toán theo từng tiền tệ; chưa trừ hoàn tiền</p>
+        <PortalTable columns={['Tiền tệ', 'Môi trường', 'Đơn thành công', 'Số tiền thanh toán']}>
           {data.groups.map(row => <tr key={row.currency + row.environment}>
             <td>{row.currency}</td><td>{row.environment}</td><td>{formatCount(row.orders)}</td>
-            <td>{formatCount(row.gross)}</td><td>{formatCount(row.refunds)}</td><td>{formatCount(row.net)}</td>
+            <td>{row.paidAmount.toLocaleString('vi-VN', { style: 'currency', currency: row.currency })}</td>
           </tr>)}</PortalTable></>}
     </PortalSection>
   </>
@@ -105,15 +110,15 @@ function Clinics({ context }: { context: BackendContext }) {
 }
 
 type Package = Awaited<ReturnType<typeof adminPackages>>['items'][number]
-function PriceEditor({ current, busy, save }: { current?: Package; busy: boolean; save: (price: PriceInput) => void }) {
-  return <Editor title={current ? 'Tạo phiên bản giá' : 'Tạo gói và giá ban đầu'} busy={busy} onSubmit={data => {
+function PriceEditor({ current, busy, save }: { current?: Package; busy: boolean; save: (price: PriceInput, commandId: string) => void }) {
+  return <Editor reasonMax={250} title={current ? 'Tạo phiên bản giá' : 'Tạo gói và giá ban đầu'} busy={busy} onSubmit={(data, key) => {
     const amountMinor = Number(value(data, 'amount')), credits = Number(value(data, 'credits'))
     const displayName = value(data, 'name')
     if (displayName && Number.isSafeInteger(amountMinor) && Number.isSafeInteger(credits))
-      save({ displayName, amountMinor, credits, currency: value(data, 'currency'), reason: value(data, 'reason') })
+      save({ displayName, amountMinor, credits, currency: value(data, 'currency'), reason: value(data, 'reason') }, key)
   }}>
     <div className={portal.editorRow}>
-      <label>Tên gói <input name="name" defaultValue={current?.name} required maxLength={160} pattern=".*\S.*" /></label>
+      <label>Tên gói <input name="name" defaultValue={current?.name} required maxLength={100} pattern=".*\S.*" /></label>
       <label>Giá theo đơn vị nhỏ nhất <input name="amount" type="number" step="1" min="0"
         max={Number.MAX_SAFE_INTEGER} defaultValue={current?.amount} required /></label>
       <label>Mã tiền tệ <input name="currency" defaultValue={current?.currency ?? 'VND'} required pattern="[A-Z]{3}" /></label>
@@ -127,15 +132,15 @@ function Catalog({ context }: { context: BackendContext }) {
   return <PortalSection title="Danh mục gói và phiên bản giá" cursor={nextPage}
     read={(signal, cursor) => adminPackages(context, cursor, signal)}>
     {(data, mutate, busy) => <>
-      <details><summary>Tạo gói khám</summary><PriceEditor busy={busy} save={price => void mutate(signal => savePrice(context, price, signal))} /></details>
+      <details><summary>Tạo gói khám</summary><PriceEditor busy={busy} save={(price, key) => void mutate(signal => savePrice(context, price, signal, undefined, key))} /></details>
       <PortalTable columns={['Gói khám', 'Giá (đơn vị nhỏ nhất)', 'Credit', 'Trạng thái', 'Phiên bản', 'Thao tác']}>
         {data.items.map(row => <tr key={row.priceVersionId}>
           <td>{row.name}</td><td>{formatCount(row.amount)} {row.currency}</td><td>{formatCount(row.credits)}</td>
           <td>{row.status}</td><td>{row.version}<br /><small>{row.priceVersionId}</small></td>
           <td>{row.status === 'ACTIVE' && <details><summary>Quản lý giá</summary>
-            <PriceEditor current={row} busy={busy} save={price => void mutate(signal => savePrice(context, price, signal, row))} />
-            <Editor title="Ngừng bán gói" busy={busy} onSubmit={data => void mutate(signal => retirePackage(context,
-              row.id, { expectedVersion: row.version, reason: value(data, 'reason') }, signal))}>
+            <PriceEditor current={row} busy={busy} save={(price, key) => void mutate(signal => savePrice(context, price, signal, row, key))} />
+            <Editor title="Ngừng bán gói" reasonMax={250} busy={busy} onSubmit={(data, key) => void mutate(signal => retirePackage(context,
+              row.id, { expectedVersion: row.version, reason: value(data, 'reason') }, signal, key))}>
               <p>Ngừng tạo đơn mới cho gói này.</p>
             </Editor>
           </details>}</td>
@@ -175,8 +180,13 @@ function TemplateEditor({ item, busy, save }: { item: Awaited<ReturnType<typeof 
     save({ title, body, enabled: data.has('enabled'), reason: value(data, 'reason') })
   }}>
     <p className={styles.muted}>Phiên bản {item.version} · Biến hỗ trợ {'{{app_name}}'} và {'{{event_label}}'}</p>
-    <label>Tiêu đề <input name="title" required maxLength={100} defaultValue={item.title} /></label>
-    <label>Nội dung <textarea name="body" required maxLength={250} defaultValue={item.body} rows={3} /></label>
+    <label>Tiêu đề <select name="title" defaultValue={item.title}>
+      {['AURA', '{{app_name}}', 'Thông báo từ {{app_name}}'].map(text => <option key={text}>{text}</option>)}
+    </select></label>
+    <label>Nội dung <select name="body" defaultValue={item.body}>
+      {['Có thông báo mới. Đăng nhập để xem chi tiết.', 'Đăng nhập để xem chi tiết.', '{{event_label}}. Đăng nhập để xem chi tiết.']
+        .map(text => <option key={text}>{text}</option>)}
+    </select></label>
     <label><input type="checkbox" name="enabled" defaultChecked={item.enabled} /> Bật mẫu thông báo</label>
     {error && <p className={styles.error} role="alert">{error}</p>}
   </Editor>

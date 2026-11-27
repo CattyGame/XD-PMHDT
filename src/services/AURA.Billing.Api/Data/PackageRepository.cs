@@ -11,6 +11,76 @@ public sealed class PackageRepository(NpgsqlDataSource dataSource)
 
     public long ReadCount => Interlocked.Read(ref _readCount);
 
+    public async Task<List<AdminPackageView>> ListAdminAsync(int afterPackageId, int take, CancellationToken ct)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT DISTINCT ON (package_id) package_id,id,display_name,price_amount,currency_code,credits,status,version_number
+            FROM billing.package_price_versions WHERE package_id>$1
+            ORDER BY package_id,version_number DESC LIMIT $2
+            """);
+        command.Parameters.AddWithValue(afterPackageId); command.Parameters.AddWithValue(take);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<AdminPackageView>();
+        while (await reader.ReadAsync(ct))
+        {
+            var amount = reader.GetDecimal(3); var currency = reader.GetString(4);
+            var minor = currency is "USD" or "EUR" ? amount * 100m : amount;
+            if (currency is not ("VND" or "USD" or "EUR") || minor != decimal.Truncate(minor))
+                throw new InvalidOperationException("Catalog currency or amount is unsupported.");
+            rows.Add(new(reader.GetInt32(0),reader.GetGuid(1),reader.GetString(2),checked((long)minor),currency,
+                reader.GetInt32(5),reader.GetString(6),reader.GetInt32(7)));
+        }
+        return rows;
+    }
+
+    public async Task<PricePublication> RetireAsync(int packageId, RetirePackageRequest request, Guid actor,
+        Guid key, string? correlationId, CancellationToken ct)
+    {
+        var fingerprint = AuditEvent.Correlation(JsonSerializer.Serialize(new { operation = "RETIRE", packageId, request }));
+        await using var connection = await dataSource.OpenConnectionAsync(ct);
+        await using var tx = await connection.BeginTransactionAsync(ct);
+        await using (var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock(383, 1)",connection,tx))
+            await gate.ExecuteNonQueryAsync(ct);
+        // The shared command key namespace also prevents reuse of a publication key for retirement.
+        await using (var replay = new NpgsqlCommand("""
+            SELECT p.id,p.package_id,p.version_number,p.display_name,p.price_amount,p.currency_code,p.credits,c.request_hash
+            FROM billing.catalog_publications c JOIN billing.package_price_versions p ON p.id=c.price_version_id
+            WHERE c.actor_account_id=$1 AND c.idempotency_key=$2
+            """,connection,tx))
+        {
+            replay.Parameters.AddWithValue(actor); replay.Parameters.AddWithValue(key);
+            await using var row = await replay.ExecuteReaderAsync(ct);
+            if (await row.ReadAsync(ct)) return row.GetString(7)==fingerprint
+                ? new(ReadPublished(row) with { Status="RETIRED" },Replayed:true) : new(null,Conflict:true);
+        }
+        PackagePriceVersionRecord price;
+        string status;
+        await using (var latest = new NpgsqlCommand("""
+            SELECT id,package_id,version_number,display_name,price_amount,currency_code,credits,status
+            FROM billing.package_price_versions WHERE package_id=$1 ORDER BY version_number DESC LIMIT 1 FOR UPDATE
+            """,connection,tx))
+        {
+            latest.Parameters.AddWithValue(packageId);
+            await using var row = await latest.ExecuteReaderAsync(ct);
+            if (!await row.ReadAsync(ct)) return new(null);
+            price = ReadPublished(row); status = row.GetString(7);
+        }
+        if (price.VersionNumber!=request.ExpectedVersion || status!="ACTIVE") return new(null,Conflict:true);
+        await using (var update = new NpgsqlCommand("UPDATE billing.package_price_versions SET status='RETIRED',effective_to=clock_timestamp() WHERE id=$1",connection,tx))
+        {
+            update.Parameters.AddWithValue(price.Id); await update.ExecuteNonQueryAsync(ct);
+        }
+        await using (var save = new NpgsqlCommand("INSERT INTO billing.catalog_publications(actor_account_id,idempotency_key,request_hash,price_version_id) VALUES($1,$2,$3,$4)",connection,tx))
+        {
+            save.Parameters.AddWithValue(actor);save.Parameters.AddWithValue(key);save.Parameters.AddWithValue(fingerprint);save.Parameters.AddWithValue(price.Id);
+            await save.ExecuteNonQueryAsync(ct);
+        }
+        await AuditStore.AppendAsync(connection,tx,AuditEvent.Create(AuditSource.Billing,actor,AuditAction.PriceChanged,
+            AuditResource.Package,packageId.ToString(System.Globalization.CultureInfo.InvariantCulture),correlationId,resourceVersion:price.VersionNumber),ct);
+        await tx.CommitAsync(ct);
+        return new(price with { Status="RETIRED" });
+    }
+
     public async Task VerifyDatabaseAsync(
         CancellationToken cancellationToken)
     {
