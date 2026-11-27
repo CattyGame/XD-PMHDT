@@ -16,7 +16,7 @@ const data = {
     disclaimer: 'Chỉ hỗ trợ' },
 }
 const mocks = vi.hoisted(() => ({
-  worklist: vi.fn(), detail: vi.fn(), save: vi.fn(), file: vi.fn(), content: vi.fn(),
+  worklist: vi.fn(), detail: vi.fn(), save: vi.fn(), file: vi.fn(), content: vi.fn(), decode: vi.fn(), closeBitmap: vi.fn(),
   context: { accountId: '70000000-0000-4000-8000-000000000007',
     firebaseUid: 'doctor', patientId: '80000000-0000-4000-8000-000000000008',
     personalTenantId: '90000000-0000-4000-8000-000000000009',
@@ -62,6 +62,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:private-doctor-fixture')
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  vi.stubGlobal('createImageBitmap', mocks.decode)
+  mocks.decode.mockResolvedValue({ close: mocks.closeBitmap })
   mocks.content.mockResolvedValue(new Blob(['synthetic image'], { type: 'image/png' }))
   mocks.worklist.mockResolvedValue([data])
   mocks.detail.mockResolvedValue(data)
@@ -70,7 +72,7 @@ beforeEach(() => {
   mocks.save.mockResolvedValue({ reviewId: 'a0000000-0000-4000-8000-00000000000a', analysisId,
     version: 2, isApproved: true })
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('SCRUM-354: Doctor workspace', () => {
   it('mở worklist qua clinicContextId, xác nhận kết quả và cập nhật ngay trạng thái', async () => {
@@ -141,6 +143,22 @@ it('fetches protected bytes and revokes object URLs when the selected case chang
     { ...mocks.context, clinicContextId: clinicId }, expect.any(AbortSignal))
   fireEvent.click(screen.getByRole('button', { name: 'Làm mới chi tiết' }))
   expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
+})
+
+it('checks decoding before exposing an original or overlay through an object URL', async () => {
+  const original = new Blob(['original fixture'], { type: 'image/png' })
+  const corrupt = new Blob(['corrupt layer fixture'], { type: 'image/png' })
+  mocks.content.mockResolvedValueOnce(original).mockResolvedValueOnce(corrupt)
+  mocks.decode.mockImplementation(async (blob: Blob) => {
+    if (blob === corrupt) throw new DOMException('Image cannot be decoded', 'InvalidStateError')
+    return { close: mocks.closeBitmap }
+  })
+  start(); await openDetail()
+  expect((await screen.findByRole('alert')).textContent).toContain('Chưa tải được lớp ảnh')
+  expect(mocks.decode).toHaveBeenCalledWith(corrupt)
+  expect(mocks.closeBitmap).toHaveBeenCalledOnce()
+  expect(URL.createObjectURL).toHaveBeenCalledExactlyOnceWith(original)
+  expect(mocks.closeBitmap.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(URL.createObjectURL).mock.invocationCallOrder[0])
 })
 
 it('clears the detail loading state when a new worklist aborts the detail request', async () => {

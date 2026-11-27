@@ -123,6 +123,12 @@ function ClinicWorkspace({ context }: { context: BackendContext }) {
       const blob = await getProtectedContent(access.url, imageContext, controller.signal)
       if (!['image/png', 'image/jpeg'].includes(blob.type.split(';')[0]))
         throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
+      controller.signal.throwIfAborted()
+      const bitmap = await createImageBitmap(blob).catch(() => {
+        throw new AnalysisResultError(0, 'ERR_INVALID_RESPONSE')
+      })
+      bitmap.close()
+      controller.signal.throwIfAborted()
       return { blob, expiry: Date.parse(access.expiresAt) }
     }
     try {
