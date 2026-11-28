@@ -881,16 +881,17 @@ async def put_internal_ai_config(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "error_code": "ERR_SMOKE_CHECK_FAILED",
+                "error_code": "ERR_INFERENCE_SLOT_BUSY",
                 "message": "Integrated inference slot is busy; candidate smoke deferred.",
                 "details": None,
             },
         )
     try:
+        prev_version = RUNTIME_REGISTRY.get_active_snapshot().version
         snapshot = RUNTIME_REGISTRY.activate_manifest(payload, idempotency_key=idempotency_key)
-        if integrated:
+        if integrated and snapshot.version > prev_version:
             _mark_integrated_warm(snapshot.config)
-        else:
+        elif not integrated:
             reset_integrated_warm_cache()
         return RUNTIME_REGISTRY.snapshot_to_view(snapshot)
     except RuntimeManifestError as error:
@@ -923,20 +924,21 @@ async def rollback_internal_ai_config(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "error_code": "ERR_SMOKE_CHECK_FAILED",
+                "error_code": "ERR_INFERENCE_SLOT_BUSY",
                 "message": "Integrated inference slot is busy; rollback smoke deferred.",
                 "details": None,
             },
         )
     try:
+        prev_version = RUNTIME_REGISTRY.get_active_snapshot().version
         snapshot = RUNTIME_REGISTRY.rollback_manifest(
             expected_version=payload.get("expectedVersion"),
             reason=str(payload.get("reason", "")),
             idempotency_key=idempotency_key,
         )
-        if integrated:
+        if integrated and snapshot.version > prev_version:
             _mark_integrated_warm(snapshot.config)
-        else:
+        elif not integrated:
             reset_integrated_warm_cache()
         return RUNTIME_REGISTRY.snapshot_to_view(snapshot)
     except RuntimeManifestError as error:
