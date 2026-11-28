@@ -873,3 +873,92 @@ def test_w6_m4_r2_readiness_respects_cnn_slot_and_caches_warm_by_snapshot(monkey
     assert client.get("/ready").status_code == 200
     assert client.get("/ready").status_code == 200
     assert calls == 2
+
+
+def test_w6_m4_r3_01_replay_does_not_mark_warm_cache_for_unverified_artifacts(monkeypatch, tmp_path: Path):
+    keypair = generate_deterministic_rsa_keypair(seed=20261132, bits=2048)
+    state_file = tmp_path / "r3-01-state.json"
+    monkeypatch.setenv("AURA_AI_ENGINE", "frangi")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "false")
+    monkeypatch.setenv("AURA_INTEGRATED_RESEARCH_ENABLED", "false")
+    monkeypatch.setenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM", keypair.public_pem)
+    monkeypatch.delenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPath", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPem", raising=False)
+
+    reg1 = RuntimeManifestRegistry(state_path=state_file)
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", reg1)
+    main_module.reset_integrated_warm_cache()
+    client = TestClient(app)
+    cfg_headers = _config_headers(keypair, client_id="analysis-api", scope="ai:config")
+
+    cmd_a = {
+        "expectedVersion": 1,
+        "artifactManifestId": "11111111-1111-4111-8111-111111110405",
+        "thresholdConfigSha256": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+        "reason": "r3-01 initial commit",
+    }
+    assert client.put("/internal/v1/ai/config", json=cmd_a, headers={**cfg_headers, "Idempotency-Key": "r3-key-A"}).status_code == 200
+
+    # Switch to integrated mode with corrupt/non-model artifacts having valid SHA-256
+    avr_file = tmp_path / "bad_avr.json"
+    dr_file = tmp_path / "bad_dr.pt"
+    avr_file.write_bytes(b"corrupt-avr-bytes")
+    dr_file.write_bytes(b"corrupt-dr-bytes")
+    monkeypatch.setenv("AURA_INTEGRATED_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("AURA_AVR_MODEL_PATH", str(avr_file))
+    monkeypatch.setenv("AURA_AVR_MODEL_SHA256", hashlib.sha256(avr_file.read_bytes()).hexdigest())
+    monkeypatch.setenv("AURA_DR_CNN_CHECKPOINT", str(dr_file))
+    monkeypatch.setenv("AURA_DR_CNN_SHA256", hashlib.sha256(dr_file.read_bytes()).hexdigest())
+
+    reg2 = RuntimeManifestRegistry(state_path=state_file)
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", reg2)
+    main_module.reset_integrated_warm_cache()
+
+    assert client.get("/ready").status_code == 503
+    replay = client.put("/internal/v1/ai/config", json=cmd_a, headers={**cfg_headers, "Idempotency-Key": "r3-key-A"})
+    assert replay.status_code == 200 and replay.json()["version"] == 2
+    # Replay MUST NOT mark warm cache for unverified artifacts
+    assert client.get("/ready").status_code == 503
+
+
+def test_w6_m4_r3_02_busy_slot_returns_transient_code_not_smoke_failure(monkeypatch, tmp_path: Path):
+    keypair = generate_deterministic_rsa_keypair(seed=20261133, bits=2048)
+    monkeypatch.setenv("AURA_AI_ENGINE", "frangi")
+    monkeypatch.setenv("AURA_ALLOW_MOCK", "false")
+    monkeypatch.setenv("AURA_INTEGRATED_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PEM", keypair.public_pem)
+    monkeypatch.delenv("AURA_SERVICE_AUTH_PUBLIC_KEY_PATH", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPath", raising=False)
+    monkeypatch.delenv("ServiceAuth__PublicKeyPem", raising=False)
+
+    reg = RuntimeManifestRegistry(state_path=tmp_path / "r3-02-state.json")
+    monkeypatch.setattr(main_module, "RUNTIME_REGISTRY", reg)
+    main_module.reset_integrated_warm_cache()
+    client = TestClient(app)
+    cfg_headers = _config_headers(keypair, client_id="analysis-api", scope="ai:config")
+
+    assert main_module.CNN_SLOT.acquire(blocking=False)
+    try:
+        busy_put = client.put(
+            "/internal/v1/ai/config",
+            json={
+                "expectedVersion": 1,
+                "artifactManifestId": "11111111-1111-4111-8111-111111110405",
+                "thresholdConfigSha256": "dd444ce85afdcda830cdc825ace92d34d13e476739bdd2575890be13e8305087",
+                "reason": "busy put",
+            },
+            headers={**cfg_headers, "Idempotency-Key": "r3-busy-1"},
+        )
+        assert busy_put.status_code == 503
+        assert busy_put.json()["error_code"] == "ERR_INFERENCE_SLOT_BUSY"
+
+        busy_rb = client.post(
+            "/internal/v1/ai/config/rollback",
+            json={"expectedVersion": 1, "reason": "busy rb"},
+            headers={**cfg_headers, "Idempotency-Key": "r3-busy-rb"},
+        )
+        assert busy_rb.status_code == 503
+        assert busy_rb.json()["error_code"] == "ERR_INFERENCE_SLOT_BUSY"
+    finally:
+        main_module.CNN_SLOT.release()

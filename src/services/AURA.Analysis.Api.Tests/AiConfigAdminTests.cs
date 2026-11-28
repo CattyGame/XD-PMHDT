@@ -415,6 +415,51 @@ public sealed class AiConfigAdminTests
         }
     }
 
+    [Fact]
+    public async Task Lost_ack_then_busy_retry_keeps_pending_and_reconciles_single_audit()
+    {
+        var stateFile = Path.Combine(Path.GetTempPath(), $"aura-r3-02-{Guid.NewGuid():N}.json");
+        var sharedAudit = new RecordingAuditWriter();
+        try
+        {
+            var admin = Guid.NewGuid();
+            var (app1, client1, _, aiCore1, _, _) = await StartHostAsync(stateFile, sharedAudit);
+            await using (app1)
+            using (client1)
+            {
+                aiCore1.DropNextAckAfterCommit = true;
+                using var failedAck = await client1.SendAsync(WithActor(HttpMethod.Put, "/api/v1/admin/ai/config", admin, "SYSTEM_ADMIN",
+                    new { expectedVersion = 1, artifactManifestId = V13ManifestId, thresholdConfigSha256 = V13Sha, reason = "r3-02 busy retry" },
+                    idempotencyKey: "r3-02-key-1"));
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, failedAck.StatusCode);
+                Assert.Equal(2, aiCore1.ActiveVersion);
+
+                // Retry while AI Core slot is busy (503 ERR_INFERENCE_SLOT_BUSY) MUST keep command PENDING
+                aiCore1.SimulateSlotBusy = true;
+                using var busyRetry = await client1.SendAsync(WithActor(HttpMethod.Put, "/api/v1/admin/ai/config", admin, "SYSTEM_ADMIN",
+                    new { expectedVersion = 1, artifactManifestId = V13ManifestId, thresholdConfigSha256 = V13Sha, reason = "r3-02 busy retry" },
+                    idempotencyKey: "r3-02-key-1"));
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, busyRetry.StatusCode);
+                Assert.Empty(sharedAudit.Events);
+                aiCore1.SimulateSlotBusy = false;
+            }
+
+            // Restart without manual retry -> reconcile MUST recover exact 1 audit row
+            var (app2, _, service2, _, _, _) = await StartHostAsync(stateFile, sharedAudit);
+            await using (app2)
+            {
+                Assert.Equal(1, await service2.ReconcilePendingAsync());
+                Assert.Single(sharedAudit.Events);
+                Assert.Equal(2, sharedAudit.Events[0].ResourceVersion);
+                Assert.Equal(admin, sharedAudit.Events[0].ActorAccountId);
+            }
+        }
+        finally
+        {
+            CleanupTempFiles(stateFile);
+        }
+    }
+
     private static void CleanupTempFiles(string stateFile)
     {
         if (File.Exists(stateFile)) File.Delete(stateFile);
@@ -586,6 +631,7 @@ public sealed class AiConfigAdminTests
             Dictionary<string, StoredReceipt> Idempotency);
 
         public bool FailSmoke { get; set; }
+        public bool SimulateSlotBusy { get; set; }
         public bool DropNextAckAfterCommit { get; set; }
         public int InternalPutCount { get; private set; }
         public string? LastAuthorizationHeader { get; private set; }
@@ -627,6 +673,8 @@ public sealed class AiConfigAdminTests
 
             if (request.Method == HttpMethod.Put && path == "/internal/v1/ai/config")
             {
+                if (SimulateSlotBusy)
+                    return JsonErr(503, "ERR_INFERENCE_SLOT_BUSY", "Inference slot is busy.");
                 InternalPutCount++;
                 var body = await request.Content!.ReadAsStringAsync(cancellationToken);
                 using var doc = JsonDocument.Parse(body);
